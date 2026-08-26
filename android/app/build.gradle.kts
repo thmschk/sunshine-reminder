@@ -1,19 +1,20 @@
 plugins {
+    // AGP 9 bringt Kotlin-Unterstuetzung selbst mit; ein zusaetzliches
+    // kotlin("android") wuerde die 'kotlin'-Extension doppelt registrieren.
     id("com.android.application") version "9.3.2"
-    kotlin("android") version "2.2.0"
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.0"
 }
 
 android {
     namespace = "io.github.thmschk.ibswatch"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.github.thmschk.ibswatch"
         // Android 8.0. Darunter gibt es keine Notification Channels und
         // WorkManager wird deutlich unzuverlaessiger.
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
     }
@@ -30,17 +31,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    kotlin {
+        jvmToolchain(17)
+    }
+
     buildFeatures {
         compose = true
     }
 
-    sourceSets["main"].java.srcDirs("src/main/kotlin")
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
+    sourceSets["main"].java.directories.add("src/main/kotlin")
 }
 
 dependencies {

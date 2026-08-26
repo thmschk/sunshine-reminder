@@ -4,16 +4,12 @@ plugins {
     kotlin("jvm") version "2.2.0"
 }
 
-// Java-17-Bytecode, weil dieses Modul spaeter unveraendert in die Android-App
-// wandert — dort ist 17 das Maximum, das AGP ohne Desugaring akzeptiert.
-// Kein jvmToolchain(17): das wuerde eine zweite JDK-Installation erzwingen,
-// obwohl JDK 21 problemlos fuer 17 uebersetzt.
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
-}
-
+// Java 17, weil dieses Modul unveraendert in die Android-App wandert.
+// Das JDK dafuer holt sich Gradle notfalls selbst (foojay-Resolver in
+// settings.gradle.kts) — der Build laeuft damit auch auf einer Maschine,
+// auf der nur eine JRE installiert ist.
 kotlin {
+    jvmToolchain(17)
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }

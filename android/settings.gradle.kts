@@ -5,6 +5,14 @@ pluginManagement {
         gradlePluginPortal()
     }
 }
+
+// Laedt bei Bedarf ein passendes JDK herunter (nach ~/.gradle/jdks). Ohne das
+// braucht der Build ein vorinstalliertes JDK: eine JRE reicht nicht, weil der
+// Android-Teil javac benoetigt.
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
+
 dependencyResolutionManagement {
     repositories {
         google()
