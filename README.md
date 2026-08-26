@@ -3,9 +3,17 @@
 Erinnert per E-Mail, wenn im Bestellsystem **IBS5** (`ibs.sunshine-catering.de`)
 für die kommenden Tage **kein Essen bestellt** ist.
 
-Status: **Proof of Concept, gegen das echte System verifiziert** (26.08.2026):
-Login, alle benutzten Endpunkte und der Wochenplan-Parser laufen end-to-end.
-Was noch fehlt, steht unter *Offene Punkte*.
+Zwei Umsetzungen aus einer gemeinsamen Erkenntnis:
+
+* **`android/`** — die Android-App. Prüft auf dem Gerät, meldet lokal.
+  Keine Zugangsdaten auf fremden Servern, kein Betrieb, keine laufenden Kosten.
+* **`ibswatch/`** — Referenzimplementierung in Python für die Kommandozeile.
+  Sie hat das Protokoll erschlossen und dient als Selfhosting-Variante
+  (Cron/systemd-Timer, Benachrichtigung per Mail).
+
+Status: **gegen das echte System verifiziert** (26.08.2026). Login, Endpunkte
+und Parser laufen end-to-end — in beiden Umsetzungen. Die Android-Oberfläche
+selbst ist noch nicht auf einem Gerät gelaufen, siehe *Offene Punkte*.
 
 ## Wie es funktioniert
 
@@ -68,7 +76,57 @@ zu ist. Die Prüfung muss deshalb auf einer Maschine laufen, die ohnehin läuft
 (Cron/systemd-Timer). Die Web-App ist perspektivisch die *Oberfläche* dazu
 (Status ansehen, Zeiten und Wochentage einstellen), nicht der Auslöser.
 
-## Installation
+## Die Android-App
+
+### Warum überhaupt auf dem Gerät
+
+Ein Link auf dem Homescreen kann nicht abends nachsehen: Browser führen keinen
+geplanten Hintergrundcode aus. Eine echte App kann es — Android weckt sie über
+WorkManager auch dann, wenn sie geschlossen ist. Das heißt: **kein Server, keine
+fremden Passwörter, keine DSGVO-Rolle, keine Betriebskosten.** Die Zugangsdaten
+bleiben in der App-Sandbox und gehen ausschließlich an IBS5 selbst.
+
+Der Preis dafür ist Ehrlichkeit an einer Stelle: Auf **iOS ist das nicht
+machbar**. Dort entscheidet das System, ob eine App im Hintergrund laufen darf,
+orientiert an den Nutzungsgewohnheiten — für eine Erinnerung mit Frist ist das
+keine Grundlage. Diese App ist deshalb Android-only. iOS-Nutzer können die
+Python-Variante auf einem eigenen Rechner betreiben.
+
+### Aufbau
+
+| Modul | Inhalt | Testbar ohne Android-SDK |
+|---|---|---|
+| `:core` | Protokoll, Parser, Auswertungslogik — reines Kotlin/JVM | **ja** |
+| `:app` | Compose-Oberfläche, WorkManager, Benachrichtigungen | nein |
+
+Die Trennung ist Absicht: die ganze Logik, bei der man sich irren kann, liegt in
+`:core` und wird mit `./gradlew :core:test` auf jeder Maschine mit einem JDK
+geprüft — ohne Emulator, ohne SDK, in Sekunden.
+
+```bash
+cd android
+./gradlew :core:test          # Logik prüfen, braucht nur ein JDK 17+
+./gradlew :app:assembleDebug  # APK bauen, braucht das Android-SDK
+```
+
+Ohne installiertes Android-SDK bindet `settings.gradle.kts` das Modul `:app`
+gar nicht erst ein — `:core:test` läuft trotzdem durch.
+
+### Wann die App prüft
+
+Werktags gegen 17:00 Ortszeit. Umgesetzt als `OneTimeWorkRequest`, die sich am
+Ende jedes Laufs selbst neu einplant — eine `PeriodicWorkRequest` kennt nur
+Intervalle und kann keine Tageszeit treffen. Auf exakte Alarme wird bewusst
+verzichtet: sie bräuchten eine zusätzliche Berechtigung, und da der
+Bestellschluss einen ganzen Tag vor der Mahlzeit liegt, ist das Zeitfenster
+großzügig genug.
+
+Dieselben Tage werden nicht wiederholt gemeldet. Ein Wächter, den man nach zwei
+Tagen reflexhaft wegwischt, ist kein Wächter mehr.
+
+## Die Python-Variante (Selfhosting)
+
+### Installation
 
 ```bash
 git clone <repo> && cd ibs-order-watch
