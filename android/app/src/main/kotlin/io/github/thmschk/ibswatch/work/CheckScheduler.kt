@@ -26,6 +26,9 @@ object CheckScheduler {
 
     const val WORK_NAME = "ibs-order-check"
 
+    /** Eigener Name fuer den Knopf "Jetzt pruefen" — beobachtbar von der Oberflaeche. */
+    const val WORK_NAME_NOW = "ibs-order-check-now"
+
     /** Ortszeit, zu der geprueft wird — frueh genug, um abends noch zu handeln. */
     val CHECK_TIME: LocalTime = LocalTime.of(17, 0)
 
@@ -56,7 +59,7 @@ object CheckScheduler {
             )
             .build()
         WorkManager.getInstance(context)
-            .enqueueUniqueWork("$WORK_NAME-now", ExistingWorkPolicy.REPLACE, request)
+            .enqueueUniqueWork(WORK_NAME_NOW, ExistingWorkPolicy.REPLACE, request)
     }
 
     fun cancel(context: Context) {

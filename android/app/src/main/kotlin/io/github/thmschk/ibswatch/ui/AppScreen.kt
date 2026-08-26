@@ -10,11 +10,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,6 +26,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
@@ -55,7 +59,15 @@ fun AppScreen() {
                 },
             )
         } else {
-            StatusCard(results)
+            // Der Worker laeuft in einem anderen Prozesskontext; ohne diese
+            // Beobachtung erfaehrt die Oberflaeche nie, dass er fertig ist,
+            // und bleibt auf "Noch nicht geprueft" stehen.
+            val workInfos by WorkManager.getInstance(context)
+                .getWorkInfosForUniqueWorkFlow(CheckScheduler.WORK_NAME_NOW)
+                .collectAsState(initial = emptyList())
+            val running = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+
+            StatusCard(results, running = running, refreshKey = workInfos)
             Button(
                 onClick = { CheckScheduler.runNow(context) },
                 modifier = Modifier.fillMaxWidth(),
@@ -114,18 +126,23 @@ private fun LoginCard(onSave: (String, String) -> Unit) {
 }
 
 @Composable
-private fun StatusCard(results: ResultStore) {
+private fun StatusCard(results: ResultStore, running: Boolean, refreshKey: Any) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val summary = results.lastSummary
+            if (running) {
+                Text("Prüfe …", style = MaterialTheme.typography.bodyLarge)
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            // refreshKey erzwingt das Neulesen, sobald sich der Work-Zustand aendert.
+            val summary = remember(refreshKey) { results.lastSummary }
+            val lastRun = remember(refreshKey) { results.lastRunEpochMillis }
             Text(
                 text = summary.ifBlank { "Noch nicht geprüft." },
                 style = MaterialTheme.typography.bodyLarge,
             )
-            val lastRun = results.lastRunEpochMillis
             if (lastRun > 0) {
                 Text(
                     "Zuletzt geprüft: " +

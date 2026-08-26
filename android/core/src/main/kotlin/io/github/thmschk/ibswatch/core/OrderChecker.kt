@@ -31,7 +31,16 @@ sealed interface CheckResult {
         val days: List<DayStatus>,
     ) : CheckResult
 
-    data class Failed(val reason: String, val cause: Throwable? = null) : CheckResult
+    data class Failed(
+        val reason: String,
+        val cause: Throwable? = null,
+        /**
+         * true = Zugangsdaten abgelehnt. Solche Fehlschlaege duerfen NICHT
+         * wiederholt werden: das Passwort wird von allein nicht richtig, und
+         * wiederholte Fehlversuche koennen das Konto sperren.
+         */
+        val isAuthProblem: Boolean = false,
+    ) : CheckResult
 }
 
 class OrderChecker(
@@ -54,7 +63,11 @@ class OrderChecker(
             client.login(customerNo, password)
             collect(dates)
         } catch (exc: IbsException) {
-            return CheckResult.Failed(exc.message ?: exc.toString(), exc)
+            return CheckResult.Failed(
+                reason = exc.message ?: exc.toString(),
+                cause = exc,
+                isAuthProblem = exc is IbsAuthException,
+            )
         }
 
         if (days.any { it.state == OrderState.UNKNOWN }) {

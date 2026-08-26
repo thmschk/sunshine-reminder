@@ -25,6 +25,12 @@ import kotlinx.coroutines.withContext
  */
 class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
+    private companion object {
+        /** So oft wird ein Netzfehler still wiederholt, bevor er gemeldet wird. */
+        const val MAX_ATTEMPTS = 3
+    }
+
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val credentials = CredentialStore(applicationContext)
         val results = ResultStore(applicationContext)
@@ -60,11 +66,32 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             }
 
             is CheckResult.Failed -> {
-                results.lastSummary = "Pruefung fehlgeschlagen: ${outcome.reason}"
-                // Ein einzelner Fehlschlag ist meist ein Funkloch. Erst wenn der
-                // naechste Lauf ebenfalls scheitert, ist es eine Meldung wert —
-                // WorkManager wiederholt den Job dafuer von selbst.
-                return@withContext Result.retry()
+                results.lastSummary = "Prüfung fehlgeschlagen: ${outcome.reason}"
+
+                if (outcome.isAuthProblem) {
+                    // Zugangsdaten stimmen nicht — das heilt kein Wiederholen,
+                    // und Fehlversuche koennten das Konto sperren.
+                    Notifier.problem(
+                        applicationContext,
+                        "Anmeldung fehlgeschlagen",
+                        "${outcome.reason}\n\nZugangsdaten in der App prüfen.",
+                    )
+                    CheckScheduler.scheduleNext(applicationContext)
+                    return@withContext Result.success()
+                }
+
+                // Sonst meist ein Funkloch: ein paar Mal still wiederholen und
+                // erst dann melden — sonst piept die App bei jedem U-Bahn-Tunnel.
+                if (runAttemptCount < MAX_ATTEMPTS) {
+                    return@withContext Result.retry()
+                }
+                Notifier.problem(
+                    applicationContext,
+                    "Bestellstand unbekannt",
+                    "Der Bestellstand konnte nicht geprüft werden:\n${outcome.reason}",
+                )
+                CheckScheduler.scheduleNext(applicationContext)
+                return@withContext Result.failure()
             }
         }
 
