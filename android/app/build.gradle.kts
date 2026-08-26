@@ -5,6 +5,26 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.0"
 }
 
+/**
+ * Release-Signierung.
+ *
+ * Der Schluessel liegt NIE im Repo. Erwartet werden vier Werte, entweder in
+ * ~/.gradle/gradle.properties (lokal) oder als Umgebungsvariablen (CI):
+ *
+ *   SUNSHINE_KEYSTORE, SUNSHINE_KEYSTORE_PASSWORD,
+ *   SUNSHINE_KEY_ALIAS, SUNSHINE_KEY_PASSWORD
+ *
+ * Fehlen sie, faellt der Release-Build auf den Debug-Schluessel zurueck —
+ * so laesst sich das Projekt auch ohne Schluessel bauen und pruefen. Nur die
+ * so entstandene APK darf nicht verteilt werden, weil den Debug-Schluessel
+ * jeder hat.
+ */
+fun secret(name: String): String? =
+    (project.findProperty(name) as String?)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
+
+val keystorePath = secret("SUNSHINE_KEYSTORE")
+
 android {
     namespace = "io.github.thmschk.ibswatch"
     compileSdk = 37
@@ -15,13 +35,34 @@ android {
         // WorkManager wird deutlich unzuverlaessiger.
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // Beide Werte stehen in gradle.properties, damit eine Version an
+        // genau einer Stelle hochgezaehlt wird.
+        versionCode = (project.property("appVersionCode") as String).toInt()
+        versionName = project.property("appVersionName") as String
+    }
+
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = secret("SUNSHINE_KEYSTORE_PASSWORD")
+                keyAlias = secret("SUNSHINE_KEY_ALIAS")
+                keyPassword = secret("SUNSHINE_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
+
+            // Bewusst aus: R8 wuerde OkHttp, Jsoup und Compose umbauen, und das
+            // laesst sich nur auf einem echten Geraet pruefen. Solange die App
+            // nicht laenger im Alltag gelaufen ist, ist ein 13-MB-Paket der
+            // bessere Tausch gegen eine Klasse von Fehlern, die erst beim
+            // Nutzer auftritt.
+            isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

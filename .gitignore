@@ -20,3 +20,8 @@ android/local.properties
 *.apk
 *.keystore
 *.jks
+
+# Signierschluessel — gehoeren NIE ins Repo
+*.jks
+*.keystore
+keystore.properties
