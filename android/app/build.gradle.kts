@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "de.ibswatch.app"
+    namespace = "io.github.thmschk.ibswatch"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "de.ibswatch.app"
+        applicationId = "io.github.thmschk.ibswatch"
         // Android 8.0. Darunter gibt es keine Notification Channels und
         // WorkManager wird deutlich unzuverlaessiger.
         minSdk = 26

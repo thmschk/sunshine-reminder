@@ -1,4 +1,4 @@
-package de.ibswatch.app
+package io.github.thmschk.ibswatch
 
 import android.Manifest
 import android.os.Build
@@ -12,7 +12,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
-import de.ibswatch.app.ui.AppScreen
+import io.github.thmschk.ibswatch.ui.AppScreen
 
 class MainActivity : ComponentActivity() {
 

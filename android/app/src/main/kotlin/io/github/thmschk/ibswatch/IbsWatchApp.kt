@@ -1,9 +1,9 @@
-package de.ibswatch.app
+package io.github.thmschk.ibswatch
 
 import android.app.Application
-import de.ibswatch.app.data.CredentialStore
-import de.ibswatch.app.notify.Notifier
-import de.ibswatch.app.work.CheckScheduler
+import io.github.thmschk.ibswatch.data.CredentialStore
+import io.github.thmschk.ibswatch.notify.Notifier
+import io.github.thmschk.ibswatch.work.CheckScheduler
 
 class IbsWatchApp : Application() {
     override fun onCreate() {

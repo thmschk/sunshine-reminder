@@ -1,4 +1,4 @@
-package de.ibswatch.app.work
+package io.github.thmschk.ibswatch.work
 
 import android.content.Context
 import androidx.work.BackoffPolicy

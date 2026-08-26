@@ -129,7 +129,7 @@ Tagen reflexhaft wegwischt, ist kein Wächter mehr.
 ### Installation
 
 ```bash
-git clone <repo> && cd ibs-order-watch
+git clone https://github.com/thmschk/ibs-order-watch && cd ibs-order-watch
 python3 -m pip install -r requirements.txt      # requests, beautifulsoup4
 cp config.example.toml config.toml              # anpassen
 ```

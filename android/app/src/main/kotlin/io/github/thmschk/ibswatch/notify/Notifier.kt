@@ -1,4 +1,4 @@
-package de.ibswatch.app.notify
+package io.github.thmschk.ibswatch.notify
 
 import android.Manifest
 import android.app.NotificationChannel
@@ -12,8 +12,8 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import de.ibswatch.app.R
-import de.ibswatch.core.IbsClient
+import io.github.thmschk.ibswatch.R
+import io.github.thmschk.ibswatch.core.IbsClient
 
 /** Lokale Benachrichtigungen — kein Server, kein Push-Dienst, kein Konto. */
 object Notifier {

@@ -19,9 +19,7 @@ import requests
 
 DEFAULT_BASE_URL = "https://ibs.sunshine-catering.de/ibs5"
 
-_USER_AGENT = (
-    "ibs-order-watch/0.1 (+https://github.com/  ; python-requests)"
-)
+_USER_AGENT = "ibs-order-watch/0.1 (+https://github.com/thmschk/ibs-order-watch; python-requests)"
 
 
 class IbsError(RuntimeError):

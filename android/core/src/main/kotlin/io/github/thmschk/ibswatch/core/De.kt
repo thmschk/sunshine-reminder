@@ -1,4 +1,4 @@
-package de.ibswatch.core
+package io.github.thmschk.ibswatch.core
 
 import java.time.LocalDate
 

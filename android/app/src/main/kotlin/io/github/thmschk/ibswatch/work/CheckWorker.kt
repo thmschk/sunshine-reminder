@@ -1,17 +1,17 @@
-package de.ibswatch.app.work
+package io.github.thmschk.ibswatch.work
 
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import de.ibswatch.app.data.CredentialStore
-import de.ibswatch.app.data.ResultStore
-import de.ibswatch.app.notify.Notifier
-import de.ibswatch.core.AlarmText
-import de.ibswatch.core.CheckConfig
-import de.ibswatch.core.CheckResult
-import de.ibswatch.core.De
-import de.ibswatch.core.IbsClient
-import de.ibswatch.core.OrderChecker
+import io.github.thmschk.ibswatch.data.CredentialStore
+import io.github.thmschk.ibswatch.data.ResultStore
+import io.github.thmschk.ibswatch.notify.Notifier
+import io.github.thmschk.ibswatch.core.AlarmText
+import io.github.thmschk.ibswatch.core.CheckConfig
+import io.github.thmschk.ibswatch.core.CheckResult
+import io.github.thmschk.ibswatch.core.De
+import io.github.thmschk.ibswatch.core.IbsClient
+import io.github.thmschk.ibswatch.core.OrderChecker
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

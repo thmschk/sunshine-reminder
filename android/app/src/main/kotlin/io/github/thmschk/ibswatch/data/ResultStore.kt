@@ -1,4 +1,4 @@
-package de.ibswatch.app.data
+package io.github.thmschk.ibswatch.data
 
 import android.content.Context
 

@@ -1,4 +1,4 @@
-package de.ibswatch.core
+package io.github.thmschk.ibswatch.core
 
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -132,7 +132,7 @@ class IbsClient(
         /** Adresse fuer Menschen — die steht in Benachrichtigungen. */
         const val WEB_URL = "https://ibs.sunshine-catering.de/IBS5"
 
-        const val USER_AGENT = "ibs-order-watch (+https://github.com/)"
+        const val USER_AGENT = "ibs-order-watch (+https://github.com/thmschk/ibs-order-watch)"
         const val ACCEPT_LANGUAGE = "de-DE,de;q=0.9"
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()

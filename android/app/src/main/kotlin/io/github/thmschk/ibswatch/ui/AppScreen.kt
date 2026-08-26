@@ -1,4 +1,4 @@
-package de.ibswatch.app.ui
+package io.github.thmschk.ibswatch.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,9 +24,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import de.ibswatch.app.data.CredentialStore
-import de.ibswatch.app.data.ResultStore
-import de.ibswatch.app.work.CheckScheduler
+import io.github.thmschk.ibswatch.data.CredentialStore
+import io.github.thmschk.ibswatch.data.ResultStore
+import io.github.thmschk.ibswatch.work.CheckScheduler
 import java.text.DateFormat
 import java.util.Date
 
