@@ -147,8 +147,15 @@ unbekannt).
   nächste Schritt — eine Bestellerinnerung ist zeitkritisch und geht im Postfach unter.
 * **Wiederholungen unterdrücken:** aktuell meldet jeder Lauf denselben Tag erneut.
   Braucht einen kleinen Zustand (SQLite), sobald mehrmals täglich geprüft wird.
-* **Ungeklärt:** welche Bedeutung `data-order-status="1"` hat (bisher nie gesehen),
-  und wie lange ein Token gültig ist.
+* **Ungeklärt / nie beobachtet:**
+  * Bedeutung von `data-order-status="1"`.
+  * Wie lange ein Token gültig ist.
+  * Noch nicht veröffentlichte Wochen (Ferien) liefern einen leeren Wochenplan →
+    alle Tage `NO_OFFER` → stiller OK-Lauf. Das ist gewollt (nichts veröffentlicht
+    = nichts bestellbar); liefert der Server stattdessen die aktuelle Woche, greift
+    die KW-Gegenprobe in `collect_status`.
+  * Die Linie „Kaltverpflegung" ist immer `readonly`. Ein Tag, an dem *nur* sie
+    angeboten wird, käme als `DEADLINE_PASSED` heraus, nicht als `NO_OFFER`.
 * **Bestellschluss** berücksichtigen — sinnvoll ist die Erinnerung nur *vor*
   der Deadline. Diese steht vermutlich in der Wochenplan-Antwort.
 * **Web-App (PWA):** kleine Statusseite + Einstellungen, per Manifest auf den
