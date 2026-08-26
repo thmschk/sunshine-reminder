@@ -43,6 +43,7 @@ import io.github.thmschk.ibswatch.core.De
 import io.github.thmschk.ibswatch.core.OrderState
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
+import io.github.thmschk.ibswatch.data.DayFilter
 import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
@@ -83,8 +84,7 @@ fun AppScreen() {
                 .collectAsState(initial = emptyList())
             val running = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
 
-            StatusCard(results, running = running, refreshKey = workInfos)
-            LookaheadCard(settings)
+            StatusCard(results, settings, running = running, refreshKey = workInfos)
             Button(
                 onClick = { CheckScheduler.runNow(context) },
                 modifier = Modifier.fillMaxWidth(),
@@ -160,7 +160,15 @@ private fun LoginCard(onSave: (String, String) -> Unit) {
 }
 
 @Composable
-private fun StatusCard(results: ResultStore, running: Boolean, refreshKey: Any) {
+private fun StatusCard(
+    results: ResultStore,
+    settings: SettingsStore,
+    running: Boolean,
+    refreshKey: Any,
+) {
+    var filter by remember { mutableStateOf(settings.dayFilter) }
+    var daysAhead by remember { mutableStateOf(settings.daysAhead) }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -180,10 +188,33 @@ private fun StatusCard(results: ResultStore, running: Boolean, refreshKey: Any) 
                 style = MaterialTheme.typography.bodyLarge,
             )
 
-            if (days.isNotEmpty()) {
+            ChipRow(
+                title = "Angezeigte Tage",
+                options = DayFilter.entries.map { it to it.label },
+                selected = filter,
+                onSelect = { filter = it; settings.dayFilter = it },
+            )
+
+            ChipRow(
+                title = "Vorwarnzeit",
+                options = SettingsStore.CHOICES.map { it to if (it == 1) "1 Tag" else "$it Tage" },
+                selected = daysAhead,
+                onSelect = { daysAhead = it; settings.daysAhead = it },
+            )
+
+            val shown = when (filter) {
+                DayFilter.ALL -> days
+                DayFilter.PENDING -> days.filter {
+                    it.state != OrderState.ORDERED && it.state != OrderState.NO_OFFER
+                }
+                DayFilter.NONE -> emptyList()
+            }
+            if (shown.isNotEmpty()) {
                 HorizontalDivider()
-                days.forEach { DayRow(it) }
+                shown.forEach { DayRow(it) }
                 HorizontalDivider()
+            } else if (filter == DayFilter.PENDING && days.isNotEmpty()) {
+                Text("Nichts offen.", style = MaterialTheme.typography.bodySmall)
             }
             if (lastRun > 0) {
                 Text(
@@ -212,7 +243,7 @@ private fun DayRow(day: DayLine) {
             .padding(vertical = 6.dp),
     ) {
         Text(
-            text = De.short(day.date) + when (day.state) {
+            text = (if (expanded) "▾ " else "▸ ") + De.short(day.date) + when (day.state) {
                 OrderState.ORDERED -> ""
                 OrderState.NOT_ORDERED -> " — nicht bestellt"
                 OrderState.IN_CART -> " — nur im Warenkorb!"
@@ -244,32 +275,21 @@ private fun DayRow(day: DayLine) {
 }
 
 @Composable
-private fun LookaheadCard(settings: SettingsStore) {
-    var daysAhead by remember { mutableStateOf(settings.daysAhead) }
-
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Vorwarnzeit", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "Erinnert wird an jeden Tag in diesem Fenster, der noch bestellbar " +
-                    "und nicht bestellt ist. Ein grosses Fenster meldet auch Tage, " +
-                    "deren Bestellschluss noch weit weg ist.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SettingsStore.CHOICES.forEach { choice ->
-                    FilterChip(
-                        selected = daysAhead == choice,
-                        onClick = {
-                            daysAhead = choice
-                            settings.daysAhead = choice
-                        },
-                        label = { Text(if (choice == 1) "1 Tag" else "$choice Tage") },
-                    )
-                }
+private fun <T> ChipRow(
+    title: String,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.labelMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { (value, label) ->
+                FilterChip(
+                    selected = selected == value,
+                    onClick = { onSelect(value) },
+                    label = { Text(label) },
+                )
             }
         }
     }
