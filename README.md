@@ -63,6 +63,26 @@ benutzen und dieses Repository als Quelle eintragen.
 
 **Voraussetzung:** Android 8.0 oder neuer.
 
+### Echtheit prüfen
+
+Alle veröffentlichten Dateien sind mit demselben Schlüssel signiert. Wer mag,
+kann das nachrechnen — die Datei stammt nur dann aus diesem Projekt, wenn
+Folgendes herauskommt:
+
+```
+Signer #1 certificate DN: CN=sunshine reminder, O=thmschk
+Signer #1 certificate SHA-256 digest:
+  75a7fcffc768d867821673c722fb71b93b4a50e85ff86cc2183ca8c5ca078894
+```
+
+```bash
+apksigner verify --print-certs sunshine-reminder-0.1.0.apk
+```
+
+Ein Wechsel dieses Fingerabdrucks wäre ein Grund, misstrauisch zu werden:
+Android verweigert dann ohnehin das Update, und eine Neuinstallation von
+fremder Hand sollte niemand blind durchwinken.
+
 ### Warum es die App für iPhone nicht gibt
 
 Nicht aus Faulheit: iOS entscheidet selbst, ob eine App im Hintergrund laufen
