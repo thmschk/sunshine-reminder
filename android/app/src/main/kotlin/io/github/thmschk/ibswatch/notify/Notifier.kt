@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.github.thmschk.ibswatch.R
+import io.github.thmschk.ibswatch.core.AlarmText
 import io.github.thmschk.ibswatch.core.IbsClient
 
 /** Lokale Benachrichtigungen — kein Server, kein Push-Dienst, kein Konto. */
@@ -45,12 +46,19 @@ object Notifier {
     }
 
     fun reminder(context: Context, title: String, body: String) =
-        show(context, CHANNEL_REMINDER, ID_REMINDER, title, body)
+        show(context, CHANNEL_REMINDER, ID_REMINDER, title, body, AlarmText.CALL_TO_ACTION)
 
     fun problem(context: Context, title: String, body: String) =
         show(context, CHANNEL_PROBLEM, ID_PROBLEM, title, body)
 
-    private fun show(context: Context, channel: String, id: Int, title: String, body: String) {
+    private fun show(
+        context: Context,
+        channel: String,
+        id: Int,
+        title: String,
+        body: String,
+        shortLine: String? = null,
+    ) {
         // Ohne Berechtigung wuerde notify() still verpuffen — dann lieber nichts
         // tun, als so zu wirken, als sei benachrichtigt worden.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -70,7 +78,9 @@ object Notifier {
         val notification = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
-            .setContentText(body.lineSequence().first())
+            // Eingeklappt zeigt Android nur diese Zeile: dort gehoert hin, was
+            // zu tun ist — die Tage stehen im aufgeklappten Text darunter.
+            .setContentText(shortLine ?: body.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(openPortal)
             .setAutoCancel(true)

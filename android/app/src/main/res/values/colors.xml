@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Warmes Orange, passend zum Namen. -->
+    <color name="ic_launcher_background">#C26A00</color>
+    <!-- Fensterhintergrund: wird beim Start gezeigt, bevor Compose zeichnet.
+         Ohne das blitzt kurz Weiss oder Schwarz auf. -->
+    <color name="app_background">#FFFBF5</color>
+</resources>

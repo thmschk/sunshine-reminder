@@ -93,4 +93,18 @@ data class WeekPlan(
 data class Profile(
     val name: String,
     val institution: String,
-)
+) {
+    /**
+     * Der Vorname, fuer die Anrede in Benachrichtigungen.
+     *
+     * IBS5 liefert "Nachname, Vorname". Ohne Komma nehmen wir das letzte Wort —
+     * und wenn gar nichts Brauchbares dasteht, lieber leer als falsch: eine
+     * Meldung ohne Namen ist besser als eine mit dem falschen.
+     */
+    val firstName: String
+        get() = when {
+            "," in name -> name.substringAfter(",").trim()
+            name.isBlank() -> ""
+            else -> name.trim().substringAfterLast(" ")
+        }
+}

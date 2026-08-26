@@ -17,11 +17,10 @@ class SettingsStore(context: Context) {
     /**
      * Wie viele Tage im Voraus geprueft wird.
      *
-     * Kurz ist hier besser als lang: erinnert wird an jeden noch bestellbaren
-     * Tag im Fenster. Wer wochenweise bestellt, bekaeme bei einem grossen
-     * Fenster taeglich Meldungen ueber die noch leere Folgewoche — und
-     * gewoehnt sich an, sie wegzuwischen. Der Bestellschluss liegt am Vortag,
-     * mehr als drei Tage Vorlauf bringen deshalb nichts.
+     * Erinnert wird an jeden noch bestellbaren, nicht bestellten Tag im
+     * Fenster. Ein grosses Fenster meldet auch Tage, deren Bestellschluss
+     * noch weit weg ist — damit das nicht taeglich nervt, merkt sich
+     * [ResultStore.notifiedDates], worueber schon gemeldet wurde.
      */
     var daysAhead: Int
         get() = prefs.getInt(KEY_DAYS_AHEAD, DEFAULT_DAYS_AHEAD)
@@ -33,8 +32,9 @@ class SettingsStore(context: Context) {
         set(value) = prefs.edit().putString(KEY_FILTER, value.name).apply()
 
     companion object {
-        const val DEFAULT_DAYS_AHEAD = 2
-        val CHOICES = listOf(1, 2, 3)
+        const val DEFAULT_DAYS_AHEAD = 7
+        const val MIN_DAYS_AHEAD = 1
+        const val MAX_DAYS_AHEAD = 14
         private const val KEY_DAYS_AHEAD = "days_ahead"
         private const val KEY_FILTER = "day_filter"
     }

@@ -42,8 +42,9 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         }
 
         val settings = SettingsStore(applicationContext)
-        val outcome = OrderChecker(IbsClient(), CheckConfig(daysAhead = settings.daysAhead))
-            .run(credentials.customerNo, credentials.password, LocalDate.now())
+        val checker = OrderChecker(IbsClient(), CheckConfig(daysAhead = settings.daysAhead))
+        val today = LocalDate.now()
+        val outcome = checker.run(credentials.customerNo, credentials.password, today)
 
         results.lastRunEpochMillis = System.currentTimeMillis()
 
@@ -62,18 +63,32 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 } else {
                     "Alles bestellt bis ${De.short(outcome.days.last().date)}."
                 }
-                results.lastNotifiedSignature = ""
+                // Alles bestellt: vergessen, worueber gewarnt wurde — faellt ein
+                // Tag spaeter wieder aus, soll erneut gemeldet werden.
+                results.notifiedDates = emptySet()
             }
 
             is CheckResult.Alarm -> {
                 results.lastSummary = AlarmText.body(outcome)
-                // Dieselben Tage nicht jeden Tag erneut melden.
-                val signature = (outcome.actionable + outcome.tooLate)
-                    .joinToString(",") { "${it.date}:${it.state}" }
-                if (signature != results.lastNotifiedSignature) {
-                    Notifier.reminder(applicationContext, AlarmText.title(outcome), AlarmText.body(outcome))
-                    results.lastNotifiedSignature = signature
+
+                val affected = (outcome.actionable + outcome.tooLate).map { it.date }
+                val alreadyNotified = results.notifiedDates
+                val fresh = affected.any { it.toString() !in alreadyNotified }
+                // Letzte Chance: laeuft morgen der Bestellschluss ab, wird auch
+                // dann gemeldet, wenn der Tag schon einmal dran war.
+                val lastChance = outcome.actionable.any { !it.date.isAfter(today.plusDays(1)) }
+
+                if (fresh || lastChance) {
+                    Notifier.reminder(
+                        applicationContext,
+                        AlarmText.title(outcome, checker.lastProfile?.firstName.orEmpty()),
+                        AlarmText.body(outcome),
+                    )
                 }
+                // Vergangenes vergessen, sonst waechst die Menge unbegrenzt.
+                results.notifiedDates = (alreadyNotified + affected.map { it.toString() })
+                    .filter { runCatching { !LocalDate.parse(it).isBefore(today) }.getOrDefault(false) }
+                    .toSet()
             }
 
             is CheckResult.Failed -> {

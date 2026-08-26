@@ -55,7 +55,8 @@ class OrderCheckerTest {
 
         assertTrue(result is CheckResult.Alarm, "war: $result")
         assertEquals(1, result.actionable.size)
-        assertEquals("Kein Essen bestellt", AlarmText.title(result))
+        assertEquals("Noch nichts bestellt", AlarmText.title(result))
+        assertEquals("Noch nichts bestellt für Mia", AlarmText.title(result, "Mia"))
         assertTrue(AlarmText.body(result).contains("Donnerstag, 27.08.2026"), AlarmText.body(result))
     }
 

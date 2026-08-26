@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Slider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -195,12 +196,20 @@ private fun StatusCard(
                 onSelect = { filter = it; settings.dayFilter = it },
             )
 
-            ChipRow(
-                title = "Vorwarnzeit",
-                options = SettingsStore.CHOICES.map { it to if (it == 1) "1 Tag" else "$it Tage" },
-                selected = daysAhead,
-                onSelect = { daysAhead = it; settings.daysAhead = it },
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Vorwarnzeit: " + if (daysAhead == 1) "1 Tag" else "$daysAhead Tage",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                    value = daysAhead.toFloat(),
+                    onValueChange = { daysAhead = it.toInt() },
+                    onValueChangeFinished = { settings.daysAhead = daysAhead },
+                    valueRange = SettingsStore.MIN_DAYS_AHEAD.toFloat()..SettingsStore.MAX_DAYS_AHEAD.toFloat(),
+                    // Rastet auf ganze Tage — Zwischenwerte gaebe es sonst nur optisch.
+                    steps = SettingsStore.MAX_DAYS_AHEAD - SettingsStore.MIN_DAYS_AHEAD - 1,
+                )
+            }
 
             val shown = when (filter) {
                 DayFilter.ALL -> days

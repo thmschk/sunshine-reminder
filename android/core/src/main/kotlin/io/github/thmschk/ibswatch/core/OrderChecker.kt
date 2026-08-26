@@ -47,6 +47,10 @@ class OrderChecker(
     private val client: IbsClient,
     private val config: CheckConfig = CheckConfig(),
 ) {
+    /** Profil des letzten erfolgreichen Logins — fuer die Anrede in Meldungen. */
+    var lastProfile: Profile? = null
+        private set
+
     /** Die Tage, um die es in diesem Lauf geht. */
     fun targetDates(today: LocalDate): List<LocalDate> {
         val first = if (config.includeToday) 0L else 1L
@@ -60,7 +64,7 @@ class OrderChecker(
         if (dates.isEmpty()) return CheckResult.Ok(emptyList())
 
         val days = try {
-            client.login(customerNo, password)
+            lastProfile = client.login(customerNo, password)
             collect(dates)
         } catch (exc: IbsException) {
             return CheckResult.Failed(
@@ -111,8 +115,13 @@ class OrderChecker(
 
 /** Text der Benachrichtigung — geteilt von App und Kommandozeile. */
 object AlarmText {
-    fun title(alarm: CheckResult.Alarm): String =
-        if (alarm.actionable.isNotEmpty()) "Kein Essen bestellt" else "Bestellschluss verpasst"
+    fun title(alarm: CheckResult.Alarm, firstName: String = ""): String {
+        val what = if (alarm.actionable.isNotEmpty()) "Noch nichts bestellt" else "Bestellschluss verpasst"
+        return if (firstName.isBlank()) what else "$what für $firstName"
+    }
+
+    /** Kurzzeile der Benachrichtigung — was zu tun ist, nicht was los ist. */
+    const val CALL_TO_ACTION = "Bestellen …"
 
     fun body(alarm: CheckResult.Alarm): String = buildString {
         if (alarm.actionable.isNotEmpty()) {
