@@ -33,10 +33,11 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python3 tests/test_parser.py
 
-  apk:
-    name: APK bauen
+  debug-apk:
+    name: Debug-APK bauen
     runs-on: ubuntu-latest
     needs: core
+    if: "!startsWith(github.ref, 'refs/tags/v')"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -51,18 +52,68 @@ jobs:
         working-directory: android
       - uses: actions/upload-artifact@v4
         with:
-          name: ibs-bestellwaechter-debug
+          name: sunshine-reminder-debug
           path: android/app/build/outputs/apk/debug/*.apk
 
   release:
-    name: APK an das Release haengen
+    name: Signiertes APK veroeffentlichen
     runs-on: ubuntu-latest
-    needs: apk
+    needs: core
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          name: ibs-bestellwaechter-debug
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-37 build-tools;36.0.0 platform-tools"
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Der Schluessel liegt als base64-kodiertes Secret vor; ohne ihn wuerde
+      # der Build stillschweigend mit dem Debug-Schluessel signieren — und
+      # solche APKs kann niemand als Update installieren. Deshalb hier hart
+      # abbrechen, wenn das Secret fehlt.
+      - name: Schluessel bereitstellen
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SUNSHINE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "Secret SUNSHINE_KEYSTORE_BASE64 fehlt — Release abgebrochen." >&2
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Release bauen
+        working-directory: android
+        env:
+          SUNSHINE_KEYSTORE: ${{ runner.temp }}/release.jks
+          SUNSHINE_KEYSTORE_PASSWORD: ${{ secrets.SUNSHINE_KEYSTORE_PASSWORD }}
+          SUNSHINE_KEY_ALIAS: ${{ secrets.SUNSHINE_KEY_ALIAS }}
+          SUNSHINE_KEY_PASSWORD: ${{ secrets.SUNSHINE_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease
+
+      - name: Signatur pruefen
+        run: |
+          APK=$(ls android/app/build/outputs/apk/release/*.apk)
+          SIGNER=$("$ANDROID_HOME"/build-tools/36.0.0/apksigner verify --print-certs "$APK" \
+                   | grep -m1 'certificate DN')
+          echo "$SIGNER"
+          # Sicherheitsnetz: eine mit dem Debug-Schluessel signierte Datei darf
+          # nie als Release herausgehen.
+          if echo "$SIGNER" | grep -q 'CN=Android Debug'; then
+            echo "APK traegt den Debug-Schluessel — nicht veroeffentlichen." >&2
+            exit 1
+          fi
+
+      - name: Umbenennen
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/*.apk \
+             "dist/sunshine-reminder-${GITHUB_REF_NAME#v}.apk"
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: "*.apk"
+          files: dist/*.apk
+          generate_release_notes: true
