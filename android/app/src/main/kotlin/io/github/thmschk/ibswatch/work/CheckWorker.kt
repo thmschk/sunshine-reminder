@@ -64,8 +64,11 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                     "Alles bestellt bis ${De.short(outcome.days.last().date)}."
                 }
                 // Alles bestellt: vergessen, worueber gewarnt wurde — faellt ein
-                // Tag spaeter wieder aus, soll erneut gemeldet werden.
+                // Tag spaeter wieder aus, soll erneut gemeldet werden. Und die
+                // alte Meldung zuruecknehmen, sonst steht dort weiter etwas
+                // Falsches.
                 results.notifiedDates = emptySet()
+                Notifier.clearReminder(applicationContext)
             }
 
             is CheckResult.Alarm -> {
@@ -78,13 +81,14 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 // dann gemeldet, wenn der Tag schon einmal dran war.
                 val lastChance = outcome.actionable.any { !it.date.isAfter(today.plusDays(1)) }
 
-                if (fresh || lastChance) {
-                    Notifier.reminder(
-                        applicationContext,
-                        AlarmText.title(outcome, checker.lastProfile?.firstName.orEmpty()),
-                        AlarmText.body(outcome),
-                    )
-                }
+                // Immer auf den aktuellen Stand bringen — klingeln aber nur,
+                // wenn es etwas Neues gibt oder morgen Schluss ist.
+                Notifier.reminder(
+                    applicationContext,
+                    AlarmText.title(outcome, checker.lastProfile?.firstName.orEmpty()),
+                    AlarmText.body(outcome),
+                    alert = fresh || lastChance,
+                )
                 // Vergangenes vergessen, sonst waechst die Menge unbegrenzt.
                 results.notifiedDates = (alreadyNotified + affected.map { it.toString() })
                     .filter { runCatching { !LocalDate.parse(it).isBefore(today) }.getOrDefault(false) }

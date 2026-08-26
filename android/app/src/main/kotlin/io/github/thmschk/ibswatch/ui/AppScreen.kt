@@ -1,10 +1,13 @@
 package io.github.thmschk.ibswatch.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +21,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,6 +45,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import io.github.thmschk.ibswatch.R
 import io.github.thmschk.ibswatch.core.De
+import io.github.thmschk.ibswatch.core.IbsClient
 import io.github.thmschk.ibswatch.core.OrderState
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
@@ -61,7 +66,13 @@ fun AppScreen() {
     var configured by remember { mutableStateOf(credentials.isConfigured) }
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            // Ab Android 15 zeichnen Apps unter Status- und Navigationsleiste;
+            // ohne diesen Abstand klebt die Ueberschrift an der Uhrzeit.
+            .safeDrawingPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 24.dp, end = 24.dp, bottom = 24.dp, top = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
@@ -86,7 +97,20 @@ fun AppScreen() {
             val running = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
 
             StatusCard(results, settings, running = running, refreshKey = workInfos)
+            // Der Griff, den man nach einer Erinnerung braucht — bisher gab es
+            // ihn nur in der Benachrichtigung, also genau dann nicht, wenn man
+            // sie schon weggewischt hatte.
             Button(
+                onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(IbsClient.WEB_URL))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Bestellseite öffnen") }
+
+            OutlinedButton(
                 onClick = { CheckScheduler.runNow(context) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Jetzt prüfen") }

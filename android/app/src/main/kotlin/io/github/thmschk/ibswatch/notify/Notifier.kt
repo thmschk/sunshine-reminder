@@ -45,8 +45,23 @@ object Notifier {
         )
     }
 
-    fun reminder(context: Context, title: String, body: String) =
-        show(context, CHANNEL_REMINDER, ID_REMINDER, title, body, AlarmText.CALL_TO_ACTION)
+    /**
+     * @param alert true = darf klingeln. Bei false wird eine bereits liegende
+     * Meldung still auf den neuen Stand gebracht — so bleibt sie aktuell, ohne
+     * bei jedem Lauf erneut zu vibrieren.
+     */
+    fun reminder(context: Context, title: String, body: String, alert: Boolean) =
+        show(context, CHANNEL_REMINDER, ID_REMINDER, title, body, AlarmText.CALL_TO_ACTION, alert)
+
+    /**
+     * Meldung zuruecknehmen.
+     *
+     * Ohne das bleibt "Noch nichts bestellt" im Benachrichtigungsbereich
+     * liegen, auch wenn laengst bestellt ist — eine Meldung, die nicht mehr
+     * stimmt, ist schlimmer als gar keine.
+     */
+    fun clearReminder(context: Context) =
+        NotificationManagerCompat.from(context).cancel(ID_REMINDER)
 
     fun problem(context: Context, title: String, body: String) =
         show(context, CHANNEL_PROBLEM, ID_PROBLEM, title, body)
@@ -58,6 +73,7 @@ object Notifier {
         title: String,
         body: String,
         shortLine: String? = null,
+        alert: Boolean = true,
     ) {
         // Ohne Berechtigung wuerde notify() still verpuffen — dann lieber nichts
         // tun, als so zu wirken, als sei benachrichtigt worden.
@@ -84,6 +100,7 @@ object Notifier {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(openPortal)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(!alert)
             .addAction(0, "Bestellseite oeffnen", openPortal)
             .build()
 
