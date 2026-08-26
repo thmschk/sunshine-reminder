@@ -45,6 +45,13 @@ class IbsClient:
                 "Accept-Language": "de-DE,de;q=0.9",
             }
         )
+        # requests liest von sich aus ~/.netrc und setzt fuer passende Hosts
+        # HTTP-Basic-Auth — das ueberschreibt unseren Bearer-Token und der
+        # Server antwortet mit 500. Da die IBS5-Zugangsdaten per Design unter
+        # genau diesem Hostnamen im netrc stehen, trifft das jede Installation.
+        # Ein No-op-auth unterdrueckt die Automatik, ohne wie trust_env=False
+        # auch noch Proxy- und CA-Umgebungsvariablen abzuschalten.
+        self.session.auth = lambda request: request
 
     # -- authentication ---------------------------------------------------
 

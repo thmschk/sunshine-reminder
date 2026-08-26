@@ -1,15 +1,18 @@
 """Turn the IBS5 Wochenplan HTML fragment into a per-day order status.
 
-PROVISIONAL — calibrated against the *unauthenticated* markup only. The
-authenticated Wochenplan has not been seen yet (no credentials at the time of
-writing), so the selectors below are heuristics over the markup conventions
-the SPA uses. ``tools/explore.py`` dumps the real fragment; re-check
-``_ORDER_MARKERS`` and ``_find_day_blocks`` against it and delete this notice.
+Calibrated against real responses (2026-08-26). The relevant markup is one
+button per offered menu line per day:
 
-The one invariant that must survive any rewrite: three distinguishable states
-per day. A day on which nothing is offered at all (Feiertag, Einrichtung zu)
-must never be reported as "vergessen zu bestellen", and anything the parser
-does not genuinely recognise must come out as UNKNOWN, not as NOT_ORDERED.
+    <button id="menu_quantity_2026-08-27_16_828" class="menuplan-checkbox"
+            data-order-status="0"            0 = nicht bestellt, 2 = bestellt
+            data-quantity-ordered=""         "1" wenn bestellt
+            data-quantity-in-shopping-cart=""  liegt im Warenkorb
+            data-date="27.08.2026" data-name="Geflügelfrikassee …"
+            readonly="readonly">             fehlt, solange noch bestellbar
+
+``readonly`` ist der Bestellschluss: der Server sagt uns direkt, welche Tage
+noch änderbar sind. Damit braucht dieses Projekt keine geratene Deadline —
+erinnert wird nur an Tage, an denen Handeln überhaupt noch möglich ist.
 """
 
 from __future__ import annotations
@@ -23,130 +26,160 @@ from bs4 import BeautifulSoup
 
 
 class ParserNotCalibrated(RuntimeError):
-    """The HTML did not look like anything this parser knows.
+    """Response did not look like a Wochenplan at all.
 
-    Raised instead of guessing — a wrong guess here sends a false alarm or,
-    worse, stays silent on a day that really was forgotten.
+    Raised instead of guessing: a wrong guess either cries wolf or — worse —
+    stays quiet on a day that really was forgotten.
     """
 
 
 class OrderState(str, Enum):
     ORDERED = "ordered"
+    #: im Warenkorb liegengeblieben, nie abgeschickt — der teuerste Irrtum
+    IN_CART = "in_cart"
+    #: nichts bestellt, aber noch bestellbar → hier lohnt die Erinnerung
     NOT_ORDERED = "not_ordered"
+    #: nichts bestellt, Bestellschluss vorbei → Brot einpacken
+    DEADLINE_PASSED = "deadline_passed"
+    #: an dem Tag wird nichts angeboten (Wochenende, Ferien, Feiertag)
     NO_OFFER = "no_offer"
     UNKNOWN = "unknown"
+
+
+#: Werte von data-order-status, die wir sicher deuten können.
+_STATUS_ORDERED = "2"
+_STATUS_NOT_ORDERED = "0"
+
+_ID_DATE = re.compile(r"_(\d{4}-\d{2}-\d{2})_")
+_DE_DATE = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})$")
+_KW = re.compile(r"\bKW\s*(\d{1,2})\b")
+
+#: Wochentagsnamen fest verdrahtet — eine de_DE-Locale ist auf Servern und in
+#: Containern haeufig nicht installiert, %A liefert dann englische Namen.
+WEEKDAYS_LONG = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+WEEKDAYS_SHORT = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+
+def de_long(date: dt.date) -> str:
+    return f"{WEEKDAYS_LONG[date.weekday()]}, {date:%d.%m.%Y}"
+
+
+def de_short(date: dt.date) -> str:
+    return f"{WEEKDAYS_SHORT[date.weekday()]} {date:%d.%m.%Y}"
+
+
+
+@dataclass
+class MenuEntry:
+    date: dt.date
+    name: str
+    status: str
+    quantity_ordered: str
+    quantity_in_cart: str
+    orderable: bool
+
+    @property
+    def is_ordered(self) -> bool:
+        return self.status == _STATUS_ORDERED or bool(self.quantity_ordered)
+
+    @property
+    def is_understood(self) -> bool:
+        return self.status in (_STATUS_ORDERED, _STATUS_NOT_ORDERED)
 
 
 @dataclass
 class DayStatus:
     date: dt.date
     state: OrderState
-    items: list[str] = field(default_factory=list)
-    note: str = ""
+    ordered_items: list[str] = field(default_factory=list)
+    offered_items: list[str] = field(default_factory=list)
+    orderable: bool = False
+
+    LABELS = {
+        OrderState.ORDERED: "bestellt",
+        OrderState.IN_CART: "NUR IM WARENKORB — nicht abgeschickt",
+        OrderState.NOT_ORDERED: "NICHT bestellt (noch bestellbar)",
+        OrderState.DEADLINE_PASSED: "nicht bestellt, Bestellschluss vorbei",
+        OrderState.NO_OFFER: "kein Angebot",
+        OrderState.UNKNOWN: "unklar",
+    }
+
+    #: Zustände, bei denen Handeln möglich und sinnvoll ist.
+    ACTIONABLE = (OrderState.NOT_ORDERED, OrderState.IN_CART)
 
     def __str__(self) -> str:
-        label = {
-            OrderState.ORDERED: "bestellt",
-            OrderState.NOT_ORDERED: "NICHT bestellt",
-            OrderState.NO_OFFER: "kein Angebot",
-            OrderState.UNKNOWN: "unklar",
-        }[self.state]
-        extra = f" ({', '.join(self.items)})" if self.items else ""
-        return f"{self.date:%a %d.%m.%Y}: {label}{extra}"
+        extra = f" — {', '.join(self.ordered_items)}" if self.ordered_items else ""
+        return f"{de_short(self.date)}: {self.LABELS[self.state]}{extra}"
 
 
-# Substrings in class names / data attributes that mark a menu line as ordered.
-_ORDER_MARKERS = ("ordered", "bestellt", "is-ordered", "menu-selected", "selected")
-# ... and ones that mark a day as having no offer at all.
-_CLOSED_MARKERS = ("noplan", "no-plan", "closed", "holiday", "feiertag", "geschlossen")
+@dataclass
+class WeekPlan:
+    days: dict[dt.date, DayStatus]
+    #: Kalenderwoche laut Seitenkopf ("KW 35") — zum Abgleich mit der Anfrage
+    displayed_week: int | None = None
 
-_ISO_DATE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
-_DE_DATE = re.compile(r"\b(\d{2})\.(\d{2})\.(\d{4})\b")
+    def status_for(self, date: dt.date) -> DayStatus:
+        """Ein Tag, der in einer geladenen Woche fehlt, hat kein Angebot."""
+        return self.days.get(date, DayStatus(date, OrderState.NO_OFFER))
 
 
-def _extract_date(text: str) -> dt.date | None:
-    if m := _ISO_DATE.search(text):
-        return dt.date(int(m[1]), int(m[2]), int(m[3]))
-    if m := _DE_DATE.search(text):
+def _entry_date(tag) -> dt.date | None:
+    if m := _ID_DATE.search(tag.get("id", "")):
+        return dt.date.fromisoformat(m[1])
+    if m := _DE_DATE.match((tag.get("data-date") or "").strip()):
         return dt.date(int(m[3]), int(m[2]), int(m[1]))
     return None
 
 
-def _attr_blob(tag) -> str:
-    """All attribute values of a tag, lowercased, as one searchable string."""
-    parts = []
-    for value in tag.attrs.values():
-        parts.extend(value if isinstance(value, list) else [str(value)])
-    return " ".join(parts).lower()
+def _day_state(entries: list[MenuEntry]) -> OrderState:
+    if any(e.is_ordered for e in entries):
+        return OrderState.ORDERED
+    if any(e.quantity_in_cart for e in entries):
+        return OrderState.IN_CART
+    if not all(e.is_understood for e in entries):
+        return OrderState.UNKNOWN
+    return OrderState.NOT_ORDERED if any(e.orderable for e in entries) else OrderState.DEADLINE_PASSED
 
 
-def _find_day_blocks(soup: BeautifulSoup) -> list[tuple[dt.date, object]]:
-    """Locate the per-day containers and the date each one belongs to."""
-    blocks: list[tuple[dt.date, object]] = []
-    seen: set[int] = set()
-
-    for tag in soup.find_all(attrs={"data-date": True}):
-        if date := _extract_date(str(tag.get("data-date"))):
-            blocks.append((date, tag))
-            seen.add(id(tag))
-
-    if not blocks:
-        # Fallback: containers whose id/class carries the date, e.g. id="day_2026-08-27"
-        for tag in soup.find_all(["div", "td", "section", "li"]):
-            if id(tag) in seen:
-                continue
-            if date := _extract_date(_attr_blob(tag)):
-                blocks.append((date, tag))
-                seen.add(id(tag))
-
-    # Keep only the outermost container per date.
-    best: dict[dt.date, object] = {}
-    for date, tag in blocks:
-        if date not in best or len(str(tag)) > len(str(best[date])):
-            best[date] = tag
-    return sorted(best.items())
-
-
-def parse_weekplan(html: str) -> dict[dt.date, DayStatus]:
+def parse_weekplan(html: str) -> WeekPlan:
     soup = BeautifulSoup(html, "html.parser")
-    blocks = _find_day_blocks(soup)
 
-    if not blocks:
+    if soup.find(id="weekplan") is None:
         raise ParserNotCalibrated(
-            "Im Wochenplan wurden keine Tages-Container mit Datum gefunden. "
-            "Antwort mit tools/explore.py dumpen und die Selektoren in "
-            "ibswatch/parser.py anpassen."
+            "Antwort enthält keinen Container mit id='weekplan' — vermutlich "
+            "eine Fehler- oder Login-Seite statt eines Wochenplans."
         )
 
-    result: dict[dt.date, DayStatus] = {}
-    for date, block in blocks:
-        blob = _attr_blob(block)
-        text = block.get_text(" ", strip=True)
+    week = None
+    if m := _KW.search(soup.get_text(" ", strip=True)):
+        week = int(m[1])
 
-        if any(marker in blob for marker in _CLOSED_MARKERS):
-            result[date] = DayStatus(date, OrderState.NO_OFFER, note="als geschlossen markiert")
+    by_date: dict[dt.date, list[MenuEntry]] = {}
+    for tag in soup.find_all(attrs={"data-order-status": True}):
+        date = _entry_date(tag)
+        if date is None:
             continue
+        by_date.setdefault(date, []).append(
+            MenuEntry(
+                date=date,
+                name=(tag.get("data-name") or "").strip(),
+                status=(tag.get("data-order-status") or "").strip(),
+                quantity_ordered=(tag.get("data-quantity-ordered") or "").strip(),
+                quantity_in_cart=(tag.get("data-quantity-in-shopping-cart") or "").strip(),
+                orderable=not tag.has_attr("readonly"),
+            )
+        )
 
-        ordered_items: list[str] = []
-        for tag in block.find_all(True):
-            tag_blob = _attr_blob(tag)
-            if any(marker in tag_blob for marker in _ORDER_MARKERS):
-                label = tag.get_text(" ", strip=True)[:80]
-                if label:
-                    ordered_items.append(label)
-            elif tag.name == "input" and tag.get("type") == "checkbox" and tag.has_attr("checked"):
-                label = tag.get("data-menu-description") or tag.get("value") or ""
-                ordered_items.append(str(label)[:80] or "Menü")
+    days = {}
+    for date, entries in by_date.items():
+        days[date] = DayStatus(
+            date=date,
+            state=_day_state(entries),
+            ordered_items=[e.name for e in entries if e.is_ordered],
+            offered_items=[e.name for e in entries],
+            orderable=any(e.orderable for e in entries),
+        )
 
-        if ordered_items:
-            # de-duplicate while keeping order (markers often nest)
-            uniq = list(dict.fromkeys(ordered_items))
-            result[date] = DayStatus(date, OrderState.ORDERED, items=uniq)
-        elif not text:
-            result[date] = DayStatus(date, OrderState.NO_OFFER, note="leerer Tag")
-        else:
-            # Menus are offered but none carries an order marker. Only trust
-            # this once the parser has been verified against real markup.
-            result[date] = DayStatus(date, OrderState.NOT_ORDERED)
-
-    return result
+    # Ein leerer Wochenplan ist legitim (Ferienwoche) — deshalb hängt die
+    # Kalibrierungs-Ausnahme oben am Container, nicht an der Trefferzahl.
+    return WeekPlan(days=days, displayed_week=week)

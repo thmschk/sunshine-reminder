@@ -2,6 +2,7 @@
 # Kundennummer, Passwort und SMTP-Passwort stehen ausschliesslich in ~/.netrc.
 
 base_url      = "https://ibs.sunshine-catering.de/ibs5"
+web_url       = "https://ibs.sunshine-catering.de/IBS5"   # Link in den Nachrichten
 netrc_machine = "ibs.sunshine-catering.de"
 timezone      = "Europe/Berlin"
 

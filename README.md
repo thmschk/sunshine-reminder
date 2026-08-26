@@ -3,10 +3,9 @@
 Erinnert per E-Mail, wenn im Bestellsystem **IBS5** (`ibs.sunshine-catering.de`)
 für die kommenden Tage **kein Essen bestellt** ist.
 
-Status: **Proof of Concept.** Das Login-Protokoll ist implementiert und die
-Fehlerantwort gegen den echten Server geprüft; der erfolgreiche Login, die
-authentifizierten Endpunkte und der Wochenplan-Parser sind noch ungetestet
-(kalibriert an synthetischem Markup, siehe *Offene Punkte*).
+Status: **Proof of Concept, gegen das echte System verifiziert** (26.08.2026):
+Login, alle benutzten Endpunkte und der Wochenplan-Parser laufen end-to-end.
+Was noch fehlt, steht unter *Offene Punkte*.
 
 ## Wie es funktioniert
 
@@ -33,6 +32,33 @@ Zwei Eigenheiten des Servers sind im Client bereits abgefangen:
 * Authentifizierte Endpunkte erwarten zusätzlich `X-Requested-With: XMLHttpRequest`.
 
 Es wird nur gelesen — das Tool bestellt nichts und ändert nichts.
+
+### Wie „bestellt" im Markup aussieht
+
+Der Wochenplan enthält pro angebotener Menülinie und Tag einen Button:
+
+```html
+<button id="menu_quantity_2026-08-27_16_828" class="menuplan-checkbox"
+        data-order-status="0"               <!-- 0 = nicht bestellt, 2 = bestellt -->
+        data-quantity-ordered=""            <!-- "1" wenn bestellt -->
+        data-quantity-in-shopping-cart=""   <!-- liegt im Warenkorb -->
+        data-date="27.08.2026" data-name="Geflügelfrikassee …"
+        readonly="readonly">                <!-- fehlt, solange bestellbar -->
+```
+
+Der Glücksfall: **`readonly` ist der Bestellschluss.** Der Server sagt direkt,
+welche Tage noch änderbar sind — dieses Projekt muss keine Uhrzeit raten und
+erinnert nur an Tage, an denen Handeln überhaupt noch möglich ist.
+
+### Zwei Fallstricke, die Zeit gekostet haben
+
+* **`requests` liest selbst `~/.netrc`** und setzt für passende Hosts HTTP-Basic-Auth
+  — das überschreibt den Bearer-Token, und der Server antwortet mit 500. Da die
+  Zugangsdaten hier per Design unter genau diesem Hostnamen liegen, trifft das
+  jede Installation. `IbsClient` unterdrückt die Automatik mit einem No-op-`auth`.
+* **`netrc`-Syntax:** Das Feld heißt `login`, auch wenn der Wert eine Kundennummer
+  ist, und `machine` will einen reinen Hostnamen — keine URL. Ein falsches
+  Schlüsselwort macht die *ganze* Datei für alle Tools unlesbar.
 
 ## Warum das nicht (nur) im Browser laufen kann
 
@@ -96,11 +122,16 @@ Oder klassisch per Cron:
 
 Der Checker unterscheidet drei Ergebnisse und vermischt sie nicht:
 
-| Ergebnis | Bedeutung | Reaktion |
+Pro Tag werden sechs Zustände unterschieden:
+
+| Zustand | Bedeutung | Reaktion |
 |---|---|---|
-| OK | jeder relevante Tag ist bestellt oder hat kein Angebot | nichts |
-| ALARM | Tag hat Angebot, aber keine Bestellung | Erinnerungsmail |
-| FEHLGESCHLAGEN | Login/Netz/Parser-Problem — Zustand unbekannt | separate Fehlermail, Exit 2 |
+| `ORDERED` | mindestens eine Menülinie bestellt | nichts |
+| `NOT_ORDERED` | nichts bestellt, **noch bestellbar** | Erinnerung |
+| `IN_CART` | im Warenkorb liegengeblieben, nie abgeschickt | Erinnerung (eigener Hinweis) |
+| `DEADLINE_PASSED` | nichts bestellt, Bestellschluss vorbei | Hinweis „Brot einpacken" |
+| `NO_OFFER` | Wochenende, Ferien, Feiertag | nichts |
+| `UNKNOWN` | unbekannter Statuswert im Markup | Fehlermail, Exit 2 |
 
 „Kein Essen bestellt" wird also nur über Tage gesagt, die wirklich geprüft
 werden konnten. Ein Login-Fehler löst nie einen Fehlalarm aus. Es wird pro Lauf
@@ -109,14 +140,15 @@ unbekannt).
 
 ## Offene Punkte
 
-* **Parser kalibrieren.** `ibswatch/parser.py` arbeitet mit Heuristiken über das
-  Markup. Einmal `python3 tools/explore.py` laufen lassen (schreibt maskierte
-  Dumps nach `dumps/`, git-ignoriert), Selektoren gegen das echte HTML prüfen,
-  anonymisierten Ausschnitt als Fixture in `tests/` legen. Dabei mit abhaken:
-  * Erwartet `Weekplan?year=&week=` wirklich die ISO-Kalenderwoche?
-  * `Account/Orderhistory` bekommt hier ISO-Daten (`2026-08-27`); das eigene
-    Frontend schickt `toDateString()` (`Thu Aug 27 2026`) — welches Format gilt?
-  * Steht der Bestellschluss in der Antwort, und wie lange ist ein Token gültig?
+* **Der Alarm-Pfad ist nie in freier Wildbahn aufgetreten.** Beim Kalibrieren war
+  jeder Tag bestellt; `NOT_ORDERED`, `IN_CART` und `DEADLINE_PASSED` sind aus dem
+  echten Markup abgeleitet und in `tests/` abgedeckt, aber nicht live beobachtet.
+* **Push statt Mail.** Ein Notifier-Interface mit [ntfy](https://ntfy.sh) wäre der
+  nächste Schritt — eine Bestellerinnerung ist zeitkritisch und geht im Postfach unter.
+* **Wiederholungen unterdrücken:** aktuell meldet jeder Lauf denselben Tag erneut.
+  Braucht einen kleinen Zustand (SQLite), sobald mehrmals täglich geprüft wird.
+* **Ungeklärt:** welche Bedeutung `data-order-status="1"` hat (bisher nie gesehen),
+  und wie lange ein Token gültig ist.
 * **Bestellschluss** berücksichtigen — sinnvoll ist die Erinnerung nur *vor*
   der Deadline. Diese steht vermutlich in der Wochenplan-Antwort.
 * **Web-App (PWA):** kleine Statusseite + Einstellungen, per Manifest auf den

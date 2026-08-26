@@ -41,6 +41,8 @@ class SmtpConfig:
 @dataclass
 class Config:
     base_url: str = DEFAULT_BASE_URL
+    #: Adresse fuer Menschen (steht in den Benachrichtigungen)
+    web_url: str = "https://ibs.sunshine-catering.de/IBS5"
     netrc_machine: str = "ibs.sunshine-catering.de"
     timezone: str = "Europe/Berlin"
     #: how many calendar days ahead to inspect (1 = only the next delivery day)

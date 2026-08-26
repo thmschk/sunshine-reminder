@@ -20,7 +20,8 @@ from zoneinfo import ZoneInfo
 from .client import IbsClient, IbsError
 from .config import Config, ConfigError, netrc_credentials
 from .notify import send_mail
-from .parser import DayStatus, OrderState, ParserNotCalibrated, parse_weekplan
+from .parser import (DayStatus, OrderState, ParserNotCalibrated, de_long,
+                     de_short, parse_weekplan)
 
 
 def notify(cfg: Config, subject: str, body: str, dry_run: bool) -> None:
@@ -40,10 +41,24 @@ def target_dates(cfg: Config, today: dt.date) -> list[dt.date]:
 
 
 def collect_status(client: IbsClient, dates: list[dt.date]) -> dict[dt.date, DayStatus]:
-    """Fetch every ISO week the target dates fall into and parse it."""
+    """Fetch every ISO week the target dates fall into and parse it.
+
+    Ein Tag, der in einer geladenen Woche fehlt, ist kein Rätsel, sondern ein
+    Tag ohne Angebot — deshalb geht die Auflösung über WeekPlan.status_for.
+    """
     status: dict[dt.date, DayStatus] = {}
-    for year, week in sorted({(d.isocalendar().year, d.isocalendar().week) for d in dates}):
-        status.update(parse_weekplan(client.weekplan(year=year, week=week)))
+    weeks = {(d.isocalendar().year, d.isocalendar().week) for d in dates}
+
+    for year, week in sorted(weeks):
+        plan = parse_weekplan(client.weekplan(year=year, week=week))
+        if plan.displayed_week is not None and plan.displayed_week != week:
+            raise IbsError(
+                f"Angefragt war KW {week}, geliefert wurde KW {plan.displayed_week}"
+            )
+        for date in dates:
+            if (date.isocalendar().year, date.isocalendar().week) == (year, week):
+                status[date] = plan.status_for(date)
+
     return status
 
 
@@ -53,7 +68,7 @@ def run(cfg: Config, today: dt.date, dry_run: bool = False) -> int:
         print("Keine relevanten Tage im Prüffenster — nichts zu tun.")
         return 0
 
-    print("Prüfe: " + ", ".join(f"{d:%a %d.%m.}" for d in dates))
+    print("Prüfe: " + ", ".join(de_short(d) for d in dates))
 
     try:
         customer_no, password = netrc_credentials(cfg.netrc_machine)
@@ -75,44 +90,54 @@ def run(cfg: Config, today: dt.date, dry_run: bool = False) -> int:
             )
         return 2
 
-    missing: list[DayStatus] = []
-    unknown: list[dt.date] = []
+    actionable: list[DayStatus] = []
+    too_late: list[DayStatus] = []
+    unclear: list[dt.date] = []
+
     for date in dates:
         day = status.get(date)
-        if day is None:
-            unknown.append(date)
-            print(f"{date:%a %d.%m.%Y}: nicht im Wochenplan gefunden")
+        if day is None or day.state is OrderState.UNKNOWN:
+            unclear.append(date)
+            print(f"{de_short(date)}: Status unklar")
             continue
         print(str(day))
-        if day.state is OrderState.NOT_ORDERED:
-            missing.append(day)
-        elif day.state is OrderState.UNKNOWN:
-            unknown.append(date)
+        if day.state in DayStatus.ACTIONABLE:
+            actionable.append(day)
+        elif day.state is OrderState.DEADLINE_PASSED:
+            too_late.append(day)
 
-    if missing:
-        lines = "\n".join(f"  - {d.date:%A, %d.%m.%Y}" for d in missing)
-        notify(
-            cfg,
-            "[IBS] Kein Essen bestellt",
-            "Für folgende Tage ist im Bestellsystem kein Essen bestellt:\n\n"
-            f"{lines}\n\nBestellen: {cfg.base_url}\n",
-            dry_run=dry_run,
+    if actionable or too_late:
+        parts = []
+        if actionable:
+            parts.append(
+                "Für diese Tage ist noch nichts bestellt — Bestellen ist noch möglich:\n"
+                + "\n".join(
+                    f"  - {de_long(d.date)}"
+                    + (" (liegt im Warenkorb, aber nicht abgeschickt!)"
+                       if d.state is OrderState.IN_CART else "")
+                    for d in actionable
+                )
+            )
+        if too_late:
+            parts.append(
+                "Für diese Tage ist nichts bestellt und der Bestellschluss ist vorbei:\n"
+                + "\n".join(f"  - {de_long(d.date)}" for d in too_late)
+            )
+        subject = (
+            "[IBS] Kein Essen bestellt" if actionable
+            else "[IBS] Kein Essen — Bestellschluss vorbei"
         )
+        notify(cfg, subject, "\n\n".join(parts) + f"\n\n{cfg.web_url}\n", dry_run=dry_run)
 
-    if unknown:
-        # Not an alarm — but not silence either. A watchdog whose failure mode
-        # is "says nothing" is worse than no watchdog: cron swallows exit codes.
-        days = ", ".join(f"{d:%a %d.%m.%Y}" for d in unknown)
+    if unclear:
+        days = ", ".join(de_short(d) for d in unclear)
         print(f"Status unklar für: {days}", file=sys.stderr)
         if cfg.notify_on_error:
             notify(
                 cfg,
                 "[IBS] Bestellstatus unbekannt",
-                "Für folgende Tage konnte der Bestellstatus nicht ermittelt werden:\n\n"
-                f"  {days}\n\n"
-                "Der Tag stand nicht im Wochenplan oder wurde nicht erkannt.\n"
-                "Ob bestellt ist, ist damit offen — bitte selbst nachsehen:\n"
-                f"{cfg.base_url}\n",
+                f"Für folgende Tage konnte der Bestellstatus nicht ermittelt werden:\n\n"
+                f"  {days}\n\nBitte selbst nachsehen: {cfg.web_url}\n",
                 dry_run=dry_run,
             )
         return 2
