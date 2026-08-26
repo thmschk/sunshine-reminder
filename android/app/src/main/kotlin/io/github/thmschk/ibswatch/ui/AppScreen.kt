@@ -10,6 +10,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -23,12 +26,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import io.github.thmschk.ibswatch.R
+import io.github.thmschk.ibswatch.core.De
+import io.github.thmschk.ibswatch.core.OrderState
 import io.github.thmschk.ibswatch.data.CredentialStore
+import io.github.thmschk.ibswatch.data.DayLine
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
 import java.text.DateFormat
@@ -88,6 +97,7 @@ fun AppScreen() {
 private fun LoginCard(onSave: (String, String) -> Unit) {
     var customerNo by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -112,7 +122,23 @@ private fun LoginCard(onSave: (String, String) -> Unit) {
                 onValueChange = { password = it },
                 label = { Text("Passwort") },
                 singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (passwordVisible) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        // Eigene Vektor-Icons statt material-icons-extended:
+                        // dessen kompletter Icon-Satz kostet 7,5 MB im APK.
+                        Icon(
+                            painter = painterResource(
+                                if (passwordVisible) R.drawable.ic_visibility_off else R.drawable.ic_visibility,
+                            ),
+                            contentDescription = if (passwordVisible) "Passwort verbergen" else "Passwort anzeigen",
+                        )
+                    }
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -138,11 +164,19 @@ private fun StatusCard(results: ResultStore, running: Boolean, refreshKey: Any) 
             }
             // refreshKey erzwingt das Neulesen, sobald sich der Work-Zustand aendert.
             val summary = remember(refreshKey) { results.lastSummary }
+            val days = remember(refreshKey) { results.lastDays }
             val lastRun = remember(refreshKey) { results.lastRunEpochMillis }
+
             Text(
                 text = summary.ifBlank { "Noch nicht geprüft." },
                 style = MaterialTheme.typography.bodyLarge,
             )
+
+            if (days.isNotEmpty()) {
+                HorizontalDivider()
+                days.forEach { DayRow(it) }
+                HorizontalDivider()
+            }
             if (lastRun > 0) {
                 Text(
                     "Zuletzt geprüft: " +
@@ -154,6 +188,38 @@ private fun StatusCard(results: ResultStore, running: Boolean, refreshKey: Any) 
             Text(
                 "Geprüft wird werktags gegen ${CheckScheduler.CHECK_TIME}.",
                 style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DayRow(day: DayLine) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(
+            text = De.short(day.date) + when (day.state) {
+                OrderState.ORDERED -> ""
+                OrderState.NOT_ORDERED -> " — nicht bestellt"
+                OrderState.IN_CART -> " — nur im Warenkorb!"
+                OrderState.DEADLINE_PASSED -> " — nicht bestellt, zu spät"
+                OrderState.NO_OFFER -> " — kein Angebot"
+                OrderState.UNKNOWN -> " — unklar"
+            },
+            style = MaterialTheme.typography.labelLarge,
+            color = if (day.state == OrderState.ORDERED) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
+        if (day.item.isNotBlank()) {
+            // Die Gerichtsnamen sind teils ueber 200 Zeichen lang (vollstaendige
+            // Zutatenliste). Klein gesetzt und umbrechend statt abgeschnitten —
+            // wer nach Allergenen sucht, braucht den ganzen Text.
+            Text(
+                text = day.item,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import io.github.thmschk.ibswatch.data.CredentialStore
+import io.github.thmschk.ibswatch.data.DayLine
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.notify.Notifier
 import io.github.thmschk.ibswatch.core.AlarmText
@@ -43,6 +44,14 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             .run(credentials.customerNo, credentials.password, LocalDate.now())
 
         results.lastRunEpochMillis = System.currentTimeMillis()
+
+        // Tagesliste in beiden Erfolgsfaellen sichern — sie ist der Inhalt,
+        // den die Oberflaeche anzeigt, unabhaengig davon ob etwas fehlt.
+        when (outcome) {
+            is CheckResult.Ok -> results.lastDays = outcome.days.map { DayLine.from(it) }
+            is CheckResult.Alarm -> results.lastDays = outcome.days.map { DayLine.from(it) }
+            is CheckResult.Failed -> Unit
+        }
 
         when (outcome) {
             is CheckResult.Ok -> {

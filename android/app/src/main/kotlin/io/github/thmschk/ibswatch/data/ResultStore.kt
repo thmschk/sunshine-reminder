@@ -22,6 +22,14 @@ class ResultStore(context: Context) {
         get() = prefs.getLong(KEY_LAST_RUN, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_RUN, value).apply()
 
+    /** Der letzte Lauf, Tag fuer Tag — damit die App zeigt, WAS bestellt ist. */
+    var lastDays: List<DayLine>
+        get() = prefs.getString(KEY_DAYS, "").orEmpty()
+            .lineSequence().filter { it.isNotBlank() }.mapNotNull { DayLine.parse(it) }.toList()
+        set(value) = prefs.edit()
+            .putString(KEY_DAYS, value.joinToString("\n") { it.serialize() })
+            .apply()
+
     /** Signatur der zuletzt gemeldeten Tage — identische Meldung nicht wiederholen. */
     var lastNotifiedSignature: String
         get() = prefs.getString(KEY_SIGNATURE, "").orEmpty()
@@ -31,5 +39,6 @@ class ResultStore(context: Context) {
         const val KEY_SUMMARY = "last_summary"
         const val KEY_LAST_RUN = "last_run"
         const val KEY_SIGNATURE = "last_signature"
+        const val KEY_DAYS = "last_days"
     }
 }
