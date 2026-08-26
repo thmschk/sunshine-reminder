@@ -68,7 +68,9 @@ verschwindet die Meldung von selbst.
 
 Die App ist **nicht im Play Store**. Sie wird als APK-Datei installiert:
 
-1. Auf dem Handy die APK aus den [Releases](../../releases) herunterladen.
+1. Auf dem Handy diesen Link öffnen — er liefert immer die neueste Fassung:
+   **[sunshine-reminder.apk](../../releases/latest/download/sunshine-reminder.apk)**
+   (alle Versionen einzeln: [Releases](../../releases))
 2. Android fragt, ob der Browser Apps installieren darf — das muss einmal
    erlaubt werden.
 3. Danach kommt die Warnung „aus unbekannter Quelle". Bestätigen.

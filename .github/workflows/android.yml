@@ -107,11 +107,15 @@ jobs:
             exit 1
           fi
 
-      - name: Umbenennen
+      # Zwei Namen mit Absicht: der versionierte fuer das Archiv, der
+      # versionslose fuer den Dauerlink /releases/latest/download/
+      # sunshine-reminder.apk — der bricht sonst bei jeder neuen Version.
+      - name: Benennen
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/*.apk \
-             "dist/sunshine-reminder-${GITHUB_REF_NAME#v}.apk"
+          APK=$(ls android/app/build/outputs/apk/release/*.apk)
+          cp "$APK" "dist/sunshine-reminder-${GITHUB_REF_NAME#v}.apk"
+          cp "$APK" "dist/sunshine-reminder.apk"
 
       - uses: softprops/action-gh-release@v2
         with:
