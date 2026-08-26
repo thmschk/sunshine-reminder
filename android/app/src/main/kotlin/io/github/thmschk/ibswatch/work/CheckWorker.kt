@@ -6,6 +6,7 @@ import androidx.work.WorkerParameters
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
 import io.github.thmschk.ibswatch.data.ResultStore
+import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.notify.Notifier
 import io.github.thmschk.ibswatch.core.AlarmText
 import io.github.thmschk.ibswatch.core.CheckConfig
@@ -40,7 +41,8 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             return@withContext Result.success()  // noch nicht eingerichtet
         }
 
-        val outcome = OrderChecker(IbsClient(), CheckConfig())
+        val settings = SettingsStore(applicationContext)
+        val outcome = OrderChecker(IbsClient(), CheckConfig(daysAhead = settings.daysAhead))
             .run(credentials.customerNo, credentials.password, LocalDate.now())
 
         results.lastRunEpochMillis = System.currentTimeMillis()

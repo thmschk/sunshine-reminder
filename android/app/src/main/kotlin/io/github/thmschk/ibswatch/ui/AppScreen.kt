@@ -1,7 +1,9 @@
 package io.github.thmschk.ibswatch.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -10,6 +12,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,6 +32,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -39,6 +43,7 @@ import io.github.thmschk.ibswatch.core.De
 import io.github.thmschk.ibswatch.core.OrderState
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
+import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
 import java.text.DateFormat
@@ -49,6 +54,7 @@ fun AppScreen() {
     val context = LocalContext.current
     val credentials = remember { CredentialStore(context) }
     val results = remember { ResultStore(context) }
+    val settings = remember { SettingsStore(context) }
 
     var configured by remember { mutableStateOf(credentials.isConfigured) }
 
@@ -78,6 +84,7 @@ fun AppScreen() {
             val running = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
 
             StatusCard(results, running = running, refreshKey = workInfos)
+            LookaheadCard(settings)
             Button(
                 onClick = { CheckScheduler.runNow(context) },
                 modifier = Modifier.fillMaxWidth(),
@@ -196,7 +203,14 @@ private fun StatusCard(results: ResultStore, running: Boolean, refreshKey: Any) 
 
 @Composable
 private fun DayRow(day: DayLine) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+            .padding(vertical = 6.dp),
+    ) {
         Text(
             text = De.short(day.date) + when (day.state) {
                 OrderState.ORDERED -> ""
@@ -215,13 +229,48 @@ private fun DayRow(day: DayLine) {
         )
         if (day.item.isNotBlank()) {
             // Die Gerichtsnamen sind teils ueber 200 Zeichen lang (vollstaendige
-            // Zutatenliste). Klein gesetzt und umbrechend statt abgeschnitten —
-            // wer nach Allergenen sucht, braucht den ganzen Text.
+            // Zutatenliste). Eingeklappt bleibt die Liste ueberschaubar, beim
+            // Antippen steht der ganze Text da — wer nach Allergenen sucht,
+            // braucht ihn vollstaendig.
             Text(
                 text = day.item,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
+                overflow = TextOverflow.Ellipsis,
             )
+        }
+    }
+}
+
+@Composable
+private fun LookaheadCard(settings: SettingsStore) {
+    var daysAhead by remember { mutableStateOf(settings.daysAhead) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Vorwarnzeit", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Erinnert wird an jeden Tag in diesem Fenster, der noch bestellbar " +
+                    "und nicht bestellt ist. Ein grosses Fenster meldet auch Tage, " +
+                    "deren Bestellschluss noch weit weg ist.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingsStore.CHOICES.forEach { choice ->
+                    FilterChip(
+                        selected = daysAhead == choice,
+                        onClick = {
+                            daysAhead = choice
+                            settings.daysAhead = choice
+                        },
+                        label = { Text(if (choice == 1) "1 Tag" else "$choice Tage") },
+                    )
+                }
+            }
         }
     }
 }
