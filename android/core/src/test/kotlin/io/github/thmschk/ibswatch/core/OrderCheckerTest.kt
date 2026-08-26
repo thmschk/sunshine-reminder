@@ -57,7 +57,15 @@ class OrderCheckerTest {
         assertEquals(1, result.actionable.size)
         assertEquals("Noch nichts bestellt", AlarmText.title(result))
         assertEquals("Noch nichts bestellt für Mia", AlarmText.title(result, "Mia"))
-        assertTrue(AlarmText.body(result).contains("Donnerstag, 27.08.2026"), AlarmText.body(result))
+        // Genauer Aufbau der Meldung: Ueberschrift, dann was zu tun ist, dann die Tage.
+        assertEquals(
+            listOf(
+                "Noch nichts bestellt für Mia",
+                "Bestellen ist noch möglich:",
+                "  • Donnerstag, 27.08.2026",
+            ),
+            AlarmText.full(result, "Mia").lines(),
+        )
     }
 
     /** Ein Netzfehler ist keine Aussage ueber den Bestellstand. */

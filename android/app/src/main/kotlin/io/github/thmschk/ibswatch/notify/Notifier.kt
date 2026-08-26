@@ -13,7 +13,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.github.thmschk.ibswatch.R
-import io.github.thmschk.ibswatch.core.AlarmText
 import io.github.thmschk.ibswatch.core.IbsClient
 
 /** Lokale Benachrichtigungen — kein Server, kein Push-Dienst, kein Konto. */
@@ -51,7 +50,7 @@ object Notifier {
      * bei jedem Lauf erneut zu vibrieren.
      */
     fun reminder(context: Context, title: String, body: String, alert: Boolean) =
-        show(context, CHANNEL_REMINDER, ID_REMINDER, title, body, AlarmText.CALL_TO_ACTION, alert)
+        show(context, CHANNEL_REMINDER, ID_REMINDER, title, body, alert = alert)
 
     /**
      * Meldung zuruecknehmen.

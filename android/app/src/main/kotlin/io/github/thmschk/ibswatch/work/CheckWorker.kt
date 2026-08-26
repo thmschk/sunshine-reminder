@@ -72,7 +72,8 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             }
 
             is CheckResult.Alarm -> {
-                results.lastSummary = AlarmText.body(outcome)
+                val firstName = checker.lastProfile?.firstName.orEmpty()
+                results.lastSummary = AlarmText.full(outcome, firstName)
 
                 val affected = (outcome.actionable + outcome.tooLate).map { it.date }
                 val alreadyNotified = results.notifiedDates

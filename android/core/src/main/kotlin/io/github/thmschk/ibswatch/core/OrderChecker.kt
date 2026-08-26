@@ -120,12 +120,15 @@ object AlarmText {
         return if (firstName.isBlank()) what else "$what für $firstName"
     }
 
-    /** Kurzzeile der Benachrichtigung — was zu tun ist, nicht was los ist. */
-    const val CALL_TO_ACTION = "Bestellen …"
-
+    /**
+     * Die Zeilen unter der Ueberschrift.
+     *
+     * Erste Zeile sagt, was zu tun ist — Android zeigt eingeklappt nur sie.
+     * Darunter die betroffenen Tage.
+     */
     fun body(alarm: CheckResult.Alarm): String = buildString {
         if (alarm.actionable.isNotEmpty()) {
-            append("Noch nichts bestellt, Bestellen ist noch moeglich:\n")
+            append("Bestellen ist noch möglich:\n")
             alarm.actionable.forEach { day ->
                 append("  • ${De.long(day.date)}")
                 if (day.state == OrderState.IN_CART) append(" (liegt im Warenkorb, nicht abgeschickt!)")
@@ -134,8 +137,12 @@ object AlarmText {
         }
         if (alarm.tooLate.isNotEmpty()) {
             if (isNotEmpty()) append("\n")
-            append("Nichts bestellt, Bestellschluss vorbei:\n")
+            append("Bestellschluss vorbei:\n")
             alarm.tooLate.forEach { append("  • ${De.long(it.date)}\n") }
         }
     }.trimEnd()
+
+    /** Ueberschrift und Zeilen zusammen — fuer die Anzeige in der App. */
+    fun full(alarm: CheckResult.Alarm, firstName: String = ""): String =
+        title(alarm, firstName) + "\n" + body(alarm)
 }
