@@ -7,6 +7,23 @@ Die App prüft **auf dem Gerät**. Es gibt keinen Server, keine Anmeldung bei
 einem Dienst, kein Konto. Die Zugangsdaten verlassen das Handy nur in Richtung
 des Bestellsystems selbst.
 
+## Nur für Android — es gibt keine iPhone-Version
+
+Und es wird auch keine geben, die den Zweck erfüllt. Der Grund liegt nicht am
+Aufwand, sondern an iOS: Dort entscheidet das System selbst, ob eine App im
+Hintergrund rechnen darf, orientiert an den Nutzungsgewohnheiten. Eine Prüfung
+kann Stunden zu spät kommen oder tagelang ausbleiben. Für eine Erinnerung mit
+Frist ist das keine Grundlage.
+
+Eine iOS-App könnte den Wochenplan anzeigen und beim Öffnen prüfen — aber nicht
+zuverlässig um 17:00 aufwachen und warnen. Genau das ist der ganze Zweck: Wer
+daran denkt, die App zu öffnen, hätte auch ans Bestellen gedacht.
+
+Für iPhone-Nutzer bleibt der Weg über einen Rechner, der ohnehin durchläuft —
+Raspberry Pi, NAS, Server. Empfangen kann das iPhone eine Erinnerung
+tadellos, nur auslösen muss sie jemand anders. Dafür ist die
+[Python-Variante](#die-python-variante) in diesem Repository da.
+
 > **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
 > Sunshine Catering oder zum Hersteller von IBS5. Es benutzt dieselbe
 > Schnittstelle wie deren Webseite, mit den Zugangsdaten des jeweiligen
@@ -82,14 +99,6 @@ apksigner verify --print-certs sunshine-reminder-0.1.0.apk
 Ein Wechsel dieses Fingerabdrucks wäre ein Grund, misstrauisch zu werden:
 Android verweigert dann ohnehin das Update, und eine Neuinstallation von
 fremder Hand sollte niemand blind durchwinken.
-
-### Warum es die App für iPhone nicht gibt
-
-Nicht aus Faulheit: iOS entscheidet selbst, ob eine App im Hintergrund laufen
-darf, orientiert an den Nutzungsgewohnheiten. Eine Prüfung kann dort Stunden zu
-spät kommen oder ganz ausbleiben. Für eine Erinnerung mit Frist ist das keine
-Grundlage. Wer ein iPhone hat, kann die Python-Variante (siehe unten) auf einem
-Rechner betreiben, der ohnehin läuft.
 
 ## Was die App über dich weiß
 
