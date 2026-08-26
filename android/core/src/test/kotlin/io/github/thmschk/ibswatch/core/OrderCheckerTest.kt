@@ -55,12 +55,12 @@ class OrderCheckerTest {
 
         assertTrue(result is CheckResult.Alarm, "war: $result")
         assertEquals(1, result.actionable.size)
-        assertEquals("Noch nichts bestellt", AlarmText.title(result))
-        assertEquals("Noch nichts bestellt für Mia", AlarmText.title(result, "Mia"))
+        assertEquals("1 ausstehende Bestellung", AlarmText.title(result))
+        assertEquals("1 ausstehende Bestellung für Mia", AlarmText.title(result, "Mia"))
         // Genauer Aufbau der Meldung: Ueberschrift, dann was zu tun ist, dann die Tage.
         assertEquals(
             listOf(
-                "Noch nichts bestellt für Mia",
+                "1 ausstehende Bestellung für Mia",
                 "Bestellen ist noch möglich:",
                 "  • Donnerstag, 27.08.2026",
             ),

@@ -115,8 +115,21 @@ class OrderChecker(
 
 /** Text der Benachrichtigung — geteilt von App und Kommandozeile. */
 object AlarmText {
+    /**
+     * Ueberschrift der Meldung.
+     *
+     * Nennt die Anzahl statt "Noch nichts bestellt": meistens sind ja einige
+     * Tage bestellt und nur einzelne offen — eine Meldung, die pauschal das
+     * Gegenteil behauptet, verliert schnell ihren Kredit.
+     */
     fun title(alarm: CheckResult.Alarm, firstName: String = ""): String {
-        val what = if (alarm.actionable.isNotEmpty()) "Noch nichts bestellt" else "Bestellschluss verpasst"
+        val open = alarm.actionable.size
+        val what = when {
+            open == 1 -> "1 ausstehende Bestellung"
+            open > 1 -> "$open ausstehende Bestellungen"
+            alarm.tooLate.size == 1 -> "1 Tag ohne Essen"
+            else -> "${alarm.tooLate.size} Tage ohne Essen"
+        }
         return if (firstName.isBlank()) what else "$what für $firstName"
     }
 

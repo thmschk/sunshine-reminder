@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Warmes Orange, passend zum Namen. -->
-    <color name="ic_launcher_background">#C26A00</color>
+    <!-- Hausfarben des Anbieters, aus dem Logo ausgezaehlt. -->
+    <color name="brand_yellow">#F8D800</color>
+    <color name="brand_berry">#A01850</color>
     <!-- Fensterhintergrund: wird beim Start gezeigt, bevor Compose zeichnet.
          Ohne das blitzt kurz Weiss oder Schwarz auf. -->
-    <color name="app_background">#FFFBF5</color>
+    <color name="app_background">#FFFCF0</color>
 </resources>

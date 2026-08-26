@@ -36,28 +36,33 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * Warme, helle Farben — passend zum Namen und zum Anlass.
+ * Die Hausfarben des Anbieters: Gelb #F8D800 und Beere #A01850, aus dem Logo
+ * ausgezaehlt.
+ *
+ * Wichtig dabei: Material3 setzt normalerweise weisse Schrift auf `primary`.
+ * Auf diesem Gelb waere das unlesbar — deshalb ist `onPrimary` fast schwarz.
+ * Wer die Farben aendert, muss die Kontraste mit aendern.
  *
  * Bewusst kein automatisches Dunkelschema: Die App wird kurz aufgerufen, um
- * nachzusehen, was es zu essen gibt. Ein schwarzer Bildschirm mit einer
- * Fehlermeldung darauf ist dafuer der falsche Ton.
+ * nachzusehen, was es zu essen gibt. Ein schwarzer Bildschirm ist dafuer der
+ * falsche Ton.
  */
 private val SunshineColors = lightColorScheme(
-    primary = Color(0xFFC26A00),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFFFDDB8),
-    onPrimaryContainer = Color(0xFF2E1500),
-    secondary = Color(0xFF725A42),
+    primary = Color(0xFFF8D800),
+    onPrimary = Color(0xFF2A2100),
+    primaryContainer = Color(0xFFFFF3B0),
+    onPrimaryContainer = Color(0xFF241C00),
+    secondary = Color(0xFFA01850),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFFFDDB8),
-    onSecondaryContainer = Color(0xFF291806),
-    background = Color(0xFFFFFBF5),
-    onBackground = Color(0xFF211A14),
-    surface = Color(0xFFFFFBF5),
-    onSurface = Color(0xFF211A14),
-    surfaceVariant = Color(0xFFF3DFC9),
-    onSurfaceVariant = Color(0xFF514434),
-    outline = Color(0xFF837462),
+    secondaryContainer = Color(0xFFFFD9E4),
+    onSecondaryContainer = Color(0xFF3E0020),
+    background = Color(0xFFFFFCF0),
+    onBackground = Color(0xFF1E1B13),
+    surface = Color(0xFFFFFCF0),
+    onSurface = Color(0xFF1E1B13),
+    surfaceVariant = Color(0xFFEAE3C8),
+    onSurfaceVariant = Color(0xFF4A4632),
+    outline = Color(0xFF7B7761),
     error = Color(0xFFB3261E),
     onError = Color.White,
 )
