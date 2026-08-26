@@ -1,0 +1,24 @@
+# Kopieren nach config.toml und anpassen. Enthält KEINE Geheimnisse —
+# Kundennummer, Passwort und SMTP-Passwort stehen ausschliesslich in ~/.netrc.
+
+base_url      = "https://ibs.sunshine-catering.de/ibs5"
+netrc_machine = "ibs.sunshine-catering.de"
+timezone      = "Europe/Berlin"
+
+# Wie viele Tage im Voraus geprueft werden (1 = nur morgen).
+days_ahead = 2
+# Auch den heutigen Tag pruefen (falls Bestellschluss erst spaeter am Tag ist).
+include_today = false
+# Relevante Wochentage, 1 = Montag ... 7 = Sonntag.
+weekdays = [1, 2, 3, 4, 5]
+# Auch mailen, wenn die Pruefung selbst scheitert (Login/Netz/Parser).
+notify_on_error = true
+
+[smtp]
+host          = "smtp.example.org"
+port          = 587
+security      = "starttls"   # starttls | ssl | none
+mail_from     = "ibs-watch@example.org"
+mail_to       = ["du@example.org"]
+# Eintrag in ~/.netrc, aus dem User+Passwort gelesen werden (leer = host).
+netrc_machine = ""

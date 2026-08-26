@@ -1,0 +1,9 @@
+[Unit]
+Description=Prueft, ob im IBS5 Essen bestellt wurde
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/cloud_privat/Apps/ibs-order-watch
+ExecStart=/usr/bin/python3 -m ibswatch.check

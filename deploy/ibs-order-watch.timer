@@ -1,0 +1,11 @@
+[Unit]
+Description=Taegliche IBS5-Bestellpruefung
+
+[Timer]
+# Werktags 17:30 Ortszeit; RandomizedDelay verteilt die Last beim Anbieter.
+OnCalendar=Mon..Fri 17:30
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

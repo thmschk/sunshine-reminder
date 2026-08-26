@@ -1,0 +1,13 @@
+# Alles, was Zugangsdaten oder personenbezogene Daten enthalten kann
+config.toml
+dumps/
+*.log
+.env
+.netrc
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
