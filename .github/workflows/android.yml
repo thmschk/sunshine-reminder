@@ -46,7 +46,7 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-37 build-tools;36.0.0 platform-tools"
+          packages: "platforms;android-37.0 build-tools;36.0.0 platform-tools"
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew :app:assembleDebug
         working-directory: android
@@ -68,7 +68,7 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-37 build-tools;36.0.0 platform-tools"
+          packages: "platforms;android-37.0 build-tools;36.0.0 platform-tools"
       - uses: gradle/actions/setup-gradle@v4
 
       # Der Schluessel liegt als base64-kodiertes Secret vor; ohne ihn wuerde
