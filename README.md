@@ -95,7 +95,7 @@ Signer #1 certificate SHA-256 digest:
 ```
 
 ```bash
-apksigner verify --print-certs sunshine-reminder-0.1.0.apk
+apksigner verify --print-certs sunshine-reminder.apk
 ```
 
 Ein Wechsel dieses Fingerabdrucks wäre ein Grund, misstrauisch zu werden:
@@ -125,12 +125,19 @@ Gegen das echte System geprüft: Anmeldung, Abruf, Auswertung, Anzeige und die
 Erinnerung selbst — inklusive eines Tests mit einer absichtlich stornierten
 Bestellung.
 
+Bis 0.1.0 hat der Hintergrundlauf **nie** ausgelöst, solange die App
+geschlossen war: sie hat sich den geplanten Job beim Prozessstart selbst
+gelöscht. Weil ein ausgefallener Lauf von außen aussieht wie „alles bestellt",
+ist das monatelang nicht aufgefallen. Seit 0.1.1 ist die Ursache behoben, und
+die App sagt es selbst, wenn der letzte Lauf überfällig ist oder
+Benachrichtigungen ausgeschaltet sind.
+
 Ehrlich dazu, was **nicht** geprüft ist:
 
 * Wie zuverlässig der Hintergrundlauf über Wochen auslöst. Manche Hersteller
   (Xiaomi, Huawei, teils Samsung) beenden Hintergrundarbeit aggressiv. Falls die
   Erinnerung ausbleibt: Einstellungen → Apps → sunshine reminder → Akku →
-  „Uneingeschränkt".
+  „Uneingeschränkt". Dass sie ausbleibt, steht dann in der App.
 * Das Verhalten in Schulferien, wenn gar keine Wochenpläne veröffentlicht sind.
 * Alles außerhalb einer einzigen Einrichtung — ob andere Schulen dieselbe
   Struktur liefern, ist unbekannt.

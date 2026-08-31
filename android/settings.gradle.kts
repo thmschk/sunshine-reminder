@@ -20,7 +20,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ibs-order-watch"
+rootProject.name = "sunshine-reminder"
 
 // :core ist reines Kotlin/JVM und haengt NICHT am Android-SDK — die gesamte
 // Protokoll- und Auswertungslogik laesst sich damit ohne Emulator testen.
