@@ -60,6 +60,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: core
     if: startsWith(github.ref, 'refs/tags/v')
+    # Der GITHUB_TOKEN ist per Voreinstellung nur lesend; ohne das hier
+    # scheitert das Anlegen des Releases mit 403, nachdem die APK schon
+    # fertig gebaut und signiert ist. Nur contents, nichts weiter.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
