@@ -80,7 +80,15 @@ object CheckScheduler {
             .enqueueUniqueWork(WORK_NAME_NOW, ExistingWorkPolicy.REPLACE, request)
     }
 
+    /**
+     * Beide Plaene abbrechen — den taeglichen und einen eingereihten Sofortlauf.
+     *
+     * Ohne den zweiten kann nach dem Loeschen der Zugangsdaten noch eine
+     * Pruefung durchlaufen und frische Ergebnisse zurueckschreiben.
+     */
     fun cancel(context: Context) {
-        WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+        val manager = WorkManager.getInstance(context)
+        manager.cancelUniqueWork(WORK_NAME)
+        manager.cancelUniqueWork(WORK_NAME_NOW)
     }
 }

@@ -42,6 +42,15 @@ class ResultStore(context: Context) {
         get() = prefs.getStringSet(KEY_NOTIFIED, emptySet()).orEmpty()
         set(value) = prefs.edit().putStringSet(KEY_NOTIFIED, value).apply()
 
+    /**
+     * Alles vergessen.
+     *
+     * Gehoert zum Loeschen der Zugangsdaten: sonst bleiben Vorname des Kindes,
+     * Gerichte und Bestellstand stehen und werden weiter angezeigt, obwohl die
+     * App gar nicht mehr eingerichtet ist.
+     */
+    fun clear() = prefs.edit().clear().apply()
+
     private companion object {
         const val KEY_SUMMARY = "last_summary"
         const val KEY_LAST_RUN = "last_run"

@@ -139,6 +139,7 @@ fun AppScreen(
             TextButton(
                 onClick = {
                     credentials.clear()
+                    results.clear()
                     CheckScheduler.cancel(context)
                     configured = false
                 },
