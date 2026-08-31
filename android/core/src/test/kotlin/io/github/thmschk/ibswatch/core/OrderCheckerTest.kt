@@ -68,6 +68,53 @@ class OrderCheckerTest {
         )
     }
 
+    /**
+     * Regression: frueher hat ein einziger unbekannter Statuswert den ganzen
+     * Lauf zu Failed gemacht — die vergessene Bestellung am Nachbartag wurde
+     * dadurch nie gemeldet, und die App zeigte weiter den alten Stand.
+     */
+    @Test
+    fun `ein unklarer Tag reisst die klaren nicht mit`() {
+        val patched = fixture.split("<button").joinToString("<button") { block ->
+            when {
+                block.contains("_2026-08-27_") -> block
+                    .replace("""data-order-status="2"""", """data-order-status="0"""")
+                    .replace("""data-quantity-ordered="1"""", """data-quantity-ordered=""""")
+                block.contains("_2026-08-28_") -> block
+                    .replace("""data-order-status="2"""", """data-order-status="7"""")
+                    .replace("""data-quantity-ordered="1"""", """data-quantity-ordered=""""")
+                else -> block
+            }
+        }
+        server.enqueue(MockResponse().setBody("""{"token":"t"}"""))
+        server.enqueue(MockResponse().setBody(patched))
+
+        val result = checker(CheckConfig(daysAhead = 2)).run("1", "2", LocalDate.of(2026, 8, 26))
+
+        assertTrue(result is CheckResult.Alarm, "war: $result")
+        assertEquals(listOf(LocalDate.of(2026, 8, 27)), result.actionable.map { it.date })
+        assertEquals(listOf(LocalDate.of(2026, 8, 28)), result.unclear.map { it.date })
+        // Die Tagesliste bleibt vollstaendig — die Oberflaeche zeigt sonst Altes.
+        assertEquals(2, result.days.size)
+        assertTrue(
+            AlarmText.body(result).contains("Bestellstatus unklar"),
+            AlarmText.body(result),
+        )
+    }
+
+    /** Nur unklare Tage: die Ueberschrift darf nicht "0 Tage ohne Essen" sagen. */
+    @Test
+    fun `Ueberschrift wenn ausschliesslich unklare Tage uebrig sind`() {
+        val alarm = CheckResult.Alarm(
+            actionable = emptyList(),
+            tooLate = emptyList(),
+            unclear = listOf(DayStatus(LocalDate.of(2026, 8, 27), OrderState.UNKNOWN)),
+            days = emptyList(),
+        )
+        assertEquals("Bestellstatus unklar", AlarmText.title(alarm))
+        assertEquals("Bestellstatus unklar für Mia", AlarmText.title(alarm, "Mia"))
+    }
+
     /** Ein Netzfehler ist keine Aussage ueber den Bestellstand. */
     @Test
     fun `Serverfehler ergibt Failed, nicht Alarm`() {

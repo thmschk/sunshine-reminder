@@ -14,6 +14,7 @@ import io.github.thmschk.ibswatch.core.CheckConfig
 import io.github.thmschk.ibswatch.core.CheckResult
 import io.github.thmschk.ibswatch.core.De
 import io.github.thmschk.ibswatch.core.IbsClient
+import io.github.thmschk.ibswatch.core.NotifiedDays
 import io.github.thmschk.ibswatch.core.OrderChecker
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
@@ -76,9 +77,9 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 val firstName = checker.lastProfile?.firstName.orEmpty()
                 results.lastSummary = AlarmText.full(outcome, firstName)
 
-                val affected = (outcome.actionable + outcome.tooLate).map { it.date }
+                val affected = outcome.actionable + outcome.tooLate + outcome.unclear
                 val alreadyNotified = results.notifiedDates
-                val fresh = affected.any { it.toString() !in alreadyNotified }
+                val fresh = NotifiedDays.hasFresh(affected, alreadyNotified)
                 // Letzte Chance: laeuft morgen der Bestellschluss ab, wird auch
                 // dann gemeldet, wenn der Tag schon einmal dran war.
                 val lastChance = outcome.actionable.any { !it.date.isAfter(today.plusDays(1)) }
@@ -87,14 +88,11 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 // wenn es etwas Neues gibt oder morgen Schluss ist.
                 Notifier.reminder(
                     applicationContext,
-                    AlarmText.title(outcome, checker.lastProfile?.firstName.orEmpty()),
+                    AlarmText.title(outcome, firstName),
                     AlarmText.body(outcome),
                     alert = fresh || lastChance,
                 )
-                // Vergangenes vergessen, sonst waechst die Menge unbegrenzt.
-                results.notifiedDates = (alreadyNotified + affected.map { it.toString() })
-                    .filter { runCatching { !LocalDate.parse(it).isBefore(today) }.getOrDefault(false) }
-                    .toSet()
+                results.notifiedDates = NotifiedDays.remember(alreadyNotified, affected, today)
             }
 
             is CheckResult.Failed -> {

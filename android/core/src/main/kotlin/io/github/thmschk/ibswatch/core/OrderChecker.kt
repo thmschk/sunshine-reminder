@@ -28,6 +28,11 @@ sealed interface CheckResult {
         val actionable: List<DayStatus>,
         /** Nichts bestellt, Bestellschluss vorbei — nur noch Information. */
         val tooLate: List<DayStatus>,
+        /**
+         * Zustand nicht deutbar — muss gemeldet werden, darf aber die klar
+         * erkannten Tage nicht mitreissen.
+         */
+        val unclear: List<DayStatus>,
         val days: List<DayStatus>,
     ) : CheckResult
 
@@ -74,17 +79,24 @@ class OrderChecker(
             )
         }
 
-        if (days.any { it.state == OrderState.UNKNOWN }) {
-            val unclear = days.filter { it.state == OrderState.UNKNOWN }.joinToString { De.short(it.date) }
-            return CheckResult.Failed("Bestellstatus unklar fuer: $unclear")
-        }
-
+        // Ein unklarer Tag ist ein eigener Alarmgrund, kein Grund den Lauf
+        // wegzuwerfen: frueher hat ein einziger unbekannter Statuswert die
+        // Meldung fuer alle anderen Tage verschluckt — und weil der Worker bei
+        // Failed auch die Tagesliste nicht speichert, zeigte die App danach
+        // stillschweigend den alten Stand. Genau die Kombination, vor der das
+        // Projekt sonst ueberall warnt.
         val actionable = days.filter { it.isActionable }
         val tooLate = days.filter { it.state == OrderState.DEADLINE_PASSED }
-        return if (actionable.isEmpty() && tooLate.isEmpty()) {
+        val unclear = days.filter { it.state == OrderState.UNKNOWN }
+        return if (actionable.isEmpty() && tooLate.isEmpty() && unclear.isEmpty()) {
             CheckResult.Ok(days)
         } else {
-            CheckResult.Alarm(actionable = actionable, tooLate = tooLate, days = days)
+            CheckResult.Alarm(
+                actionable = actionable,
+                tooLate = tooLate,
+                unclear = unclear,
+                days = days,
+            )
         }
     }
 
@@ -128,7 +140,9 @@ object AlarmText {
             open == 1 -> "1 ausstehende Bestellung"
             open > 1 -> "$open ausstehende Bestellungen"
             alarm.tooLate.size == 1 -> "1 Tag ohne Essen"
-            else -> "${alarm.tooLate.size} Tage ohne Essen"
+            alarm.tooLate.size > 1 -> "${alarm.tooLate.size} Tage ohne Essen"
+            // Bleibt nur, wenn ausschliesslich unklare Tage uebrig sind.
+            else -> "Bestellstatus unklar"
         }
         return if (firstName.isBlank()) what else "$what für $firstName"
     }
@@ -152,6 +166,11 @@ object AlarmText {
             if (isNotEmpty()) append("\n")
             append("Bestellschluss vorbei:\n")
             alarm.tooLate.forEach { append("  • ${De.long(it.date)}\n") }
+        }
+        if (alarm.unclear.isNotEmpty()) {
+            if (isNotEmpty()) append("\n")
+            append("Bestellstatus unklar — bitte selbst nachsehen:\n")
+            alarm.unclear.forEach { append("  • ${De.long(it.date)}\n") }
         }
     }.trimEnd()
 
