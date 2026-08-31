@@ -45,6 +45,22 @@ object Notifier {
     }
 
     /**
+     * Kann eine Erinnerung ueberhaupt beim Nutzer ankommen?
+     *
+     * Ist die Berechtigung verweigert oder der Kanal stummgeschaltet, laeuft
+     * die App weiter voellig unauffaellig — sie prueft, findet einen offenen
+     * Tag, meldet ihn, und niemand sieht es. Von aussen ist dieser Zustand von
+     * "alles bestellt" nicht zu unterscheiden. Deshalb fragt die Oberflaeche
+     * hier nach und sagt es hin.
+     */
+    fun remindersReachUser(context: Context): Boolean {
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return false
+        val channel = manager.getNotificationChannel(CHANNEL_REMINDER) ?: return true
+        return channel.importance != NotificationManager.IMPORTANCE_NONE
+    }
+
+    /**
      * @param alert true = darf klingeln. Bei false wird eine bereits liegende
      * Meldung still auf den neuen Stand gebracht — so bleibt sie aktuell, ohne
      * bei jedem Lauf erneut zu vibrieren.

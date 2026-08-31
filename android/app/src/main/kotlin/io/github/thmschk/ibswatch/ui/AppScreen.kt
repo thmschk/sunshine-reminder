@@ -14,7 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Slider
 import androidx.compose.material3.HorizontalDivider
@@ -41,9 +43,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import io.github.thmschk.ibswatch.R
+import io.github.thmschk.ibswatch.core.CheckSchedule
 import io.github.thmschk.ibswatch.core.De
 import io.github.thmschk.ibswatch.core.IbsClient
 import io.github.thmschk.ibswatch.core.OrderState
@@ -54,10 +58,16 @@ import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
 import java.text.DateFormat
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 import java.util.Date
 
 @Composable
-fun AppScreen() {
+fun AppScreen(
+    remindersReachUser: Boolean = true,
+    onOpenNotificationSettings: () -> Unit = {},
+) {
     val context = LocalContext.current
     val credentials = remember { CredentialStore(context) }
     val results = remember { ResultStore(context) }
@@ -95,6 +105,18 @@ fun AppScreen() {
                 .getWorkInfosForUniqueWorkFlow(CheckScheduler.WORK_NAME_NOW)
                 .collectAsState(initial = emptyList())
             val running = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+
+            // Ohne diesen Hinweis laeuft die App voellig unauffaellig weiter und
+            // meldet ins Leere — von aussen nicht von "alles bestellt" zu
+            // unterscheiden.
+            if (!remindersReachUser) {
+                WarningCard(
+                    text = "Benachrichtigungen sind ausgeschaltet. Die App prüft weiter, " +
+                        "aber die Erinnerung erreicht dich nicht.",
+                    actionLabel = "Benachrichtigungen einschalten",
+                    onAction = onOpenNotificationSettings,
+                )
+            }
 
             StatusCard(results, settings, running = running, refreshKey = workInfos)
             // Der Griff, den man nach einer Erinnerung braucht — bisher gab es
@@ -191,6 +213,7 @@ private fun StatusCard(
     running: Boolean,
     refreshKey: Any,
 ) {
+    val context = LocalContext.current
     var filter by remember { mutableStateOf(settings.dayFilter) }
     var daysAhead by remember { mutableStateOf(settings.daysAhead) }
 
@@ -212,6 +235,32 @@ private fun StatusCard(
                 text = summary.ifBlank { "Noch nicht geprüft." },
                 style = MaterialTheme.typography.bodyLarge,
             )
+
+            // Die App kann nicht merken, dass Android sie nicht mehr weckt —
+            // ein ausgefallener Lauf sieht von innen aus wie "alles bestellt".
+            // Also wird nachgerechnet, wann der letzte Lauf faellig gewesen waere.
+            val overdue = remember(refreshKey) {
+                CheckSchedule.isOverdue(
+                    lastRun.takeIf { it > 0L }
+                        ?.let { LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault()) },
+                    LocalDateTime.now(),
+                )
+            }
+            if (overdue) {
+                Text(
+                    "Die Prüfung läuft nicht mehr von selbst — der letzte Lauf ist " +
+                        "überfällig. Häufigste Ursache ist die Akku-Optimierung des " +
+                        "Herstellers: Einstellungen → Apps → Akku → „Uneingeschränkt“.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                TextButton(
+                    onClick = {
+                        CheckScheduler.scheduleNext(context, ExistingWorkPolicy.REPLACE)
+                        CheckScheduler.runNow(context)
+                    },
+                ) { Text("Prüfung neu einplanen") }
+            }
 
             ChipRow(
                 title = "Angezeigte Tage",
@@ -258,9 +307,42 @@ private fun StatusCard(
                 )
             }
             Text(
-                "Geprüft wird werktags gegen ${CheckScheduler.CHECK_TIME}.",
+                "Geprüft wird werktags gegen ${CheckSchedule.CHECK_TIME}.",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+/**
+ * Ein Zustand, in dem die App zwar laeuft, aber nichts mehr melden kann.
+ *
+ * Auffaellig und mit genau einem Knopf: Schweigen ist der gefaehrliche Zustand
+ * dieser App: man darf ihn nicht uebersehen koennen, und der Ausweg muss ohne
+ * Nachdenken erreichbar sein.
+ */
+@Composable
+private fun WarningCard(text: String, actionLabel: String, onAction: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+            TextButton(
+                onClick = onAction,
+                // Sonst faerbt Material3 die Schrift in primary — auf dem roten
+                // Grund dieser Karte waere das unleserlich.
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+            ) { Text(actionLabel) }
         }
     }
 }

@@ -2,6 +2,7 @@ package io.github.thmschk.ibswatch.work
 
 import android.content.Context
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkerParameters
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
@@ -107,7 +108,7 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                         "Anmeldung fehlgeschlagen",
                         "${outcome.reason}\n\nZugangsdaten in der App prüfen.",
                     )
-                    CheckScheduler.scheduleNext(applicationContext)
+                    CheckScheduler.scheduleNext(applicationContext, ExistingWorkPolicy.REPLACE)
                     return@withContext Result.success()
                 }
 
@@ -121,12 +122,16 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                     "Bestellstand unbekannt",
                     "Der Bestellstand konnte nicht geprüft werden:\n${outcome.reason}",
                 )
-                CheckScheduler.scheduleNext(applicationContext)
+                CheckScheduler.scheduleNext(applicationContext, ExistingWorkPolicy.REPLACE)
                 return@withContext Result.failure()
             }
         }
 
-        CheckScheduler.scheduleNext(applicationContext)
+        // REPLACE und nicht KEEP: der eigene Lauf gilt hier noch als "nicht
+        // abgeschlossen", KEEP wuerde deshalb nichts einplanen und die Kette
+        // bliebe stehen. Dass REPLACE dabei den eigenen, praktisch fertigen
+        // Lauf abbricht, ist folgenlos — Meldung und Speichern sind durch.
+        CheckScheduler.scheduleNext(applicationContext, ExistingWorkPolicy.REPLACE)
         Result.success()
     }
 }
