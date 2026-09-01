@@ -1,5 +1,6 @@
 package io.github.thmschk.ibswatch.ui
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
@@ -35,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -51,6 +53,7 @@ import io.github.thmschk.ibswatch.core.CheckSchedule
 import io.github.thmschk.ibswatch.core.De
 import io.github.thmschk.ibswatch.core.IbsClient
 import io.github.thmschk.ibswatch.core.OrderState
+import io.github.thmschk.ibswatch.core.UpdateCheck
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
 import io.github.thmschk.ibswatch.data.DayFilter
@@ -110,11 +113,34 @@ fun AppScreen(
             // meldet ins Leere — von aussen nicht von "alles bestellt" zu
             // unterscheiden.
             if (!remindersReachUser) {
-                WarningCard(
+                NoticeCard(
                     text = "Benachrichtigungen sind ausgeschaltet. Die App prüft weiter, " +
                         "aber die Erinnerung erreicht dich nicht.",
                     actionLabel = "Benachrichtigungen einschalten",
                     onAction = onOpenNotificationSettings,
+                    container = MaterialTheme.colorScheme.errorContainer,
+                    onContainer = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+
+            // Es gibt keinen Store, der von sich aus Bescheid sagt — und eine
+            // veraltete Fassung dieses Waechters schweigt womoeglich, obwohl
+            // man sich auf sie verlaesst.
+            val available = remember(workInfos) { results.availableVersion }
+            if (available.isNotBlank()) {
+                NoticeCard(
+                    text = "Version $available ist verfügbar — installiert ist " +
+                        "${installedVersion(context)}. Die neue Fassung legt sich " +
+                        "ohne Umweg über die vorhandene.",
+                    actionLabel = "Neue Fassung laden",
+                    onAction = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(UpdateCheck.DOWNLOAD_URL))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
+                    container = MaterialTheme.colorScheme.secondaryContainer,
+                    onContainer = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
             }
 
@@ -148,6 +174,12 @@ fun AppScreen(
         }
     }
 }
+
+/** Die eigene Version, wie sie im Paket steht — ohne BuildConfig. */
+private fun installedVersion(context: Context): String =
+    runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+    }.getOrNull().orEmpty().ifBlank { "?" }
 
 @Composable
 private fun LoginCard(onSave: (String, String) -> Unit) {
@@ -316,20 +348,23 @@ private fun StatusCard(
 }
 
 /**
- * Ein Zustand, in dem die App zwar laeuft, aber nichts mehr melden kann.
+ * Etwas, das der Nutzer wissen muss, mit genau einem Knopf.
  *
- * Auffaellig und mit genau einem Knopf: Schweigen ist der gefaehrliche Zustand
- * dieser App: man darf ihn nicht uebersehen koennen, und der Ausweg muss ohne
- * Nachdenken erreichbar sein.
+ * Rot fuer die Zustaende, in denen die App zwar laeuft, aber nichts mehr
+ * melden kann — Schweigen ist der gefaehrliche Zustand dieser App, den darf man
+ * nicht uebersehen koennen. Ruhig gefaerbt fuer alles, was nur nuetzlich ist.
  */
 @Composable
-private fun WarningCard(text: String, actionLabel: String, onAction: () -> Unit) {
+private fun NoticeCard(
+    text: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+    container: Color,
+    onContainer: Color,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        ),
+        colors = CardDefaults.cardColors(containerColor = container, contentColor = onContainer),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -338,11 +373,9 @@ private fun WarningCard(text: String, actionLabel: String, onAction: () -> Unit)
             Text(text, style = MaterialTheme.typography.bodyMedium)
             TextButton(
                 onClick = onAction,
-                // Sonst faerbt Material3 die Schrift in primary — auf dem roten
-                // Grund dieser Karte waere das unleserlich.
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
+                // Sonst faerbt Material3 die Schrift in primary — auf dem
+                // farbigen Grund dieser Karte waere das unleserlich.
+                colors = ButtonDefaults.textButtonColors(contentColor = onContainer),
             ) { Text(actionLabel) }
         }
     }

@@ -14,15 +14,18 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.github.thmschk.ibswatch.R
 import io.github.thmschk.ibswatch.core.IbsClient
+import io.github.thmschk.ibswatch.core.UpdateCheck
 
 /** Lokale Benachrichtigungen — kein Server, kein Push-Dienst, kein Konto. */
 object Notifier {
 
     const val CHANNEL_REMINDER = "reminder"
     const val CHANNEL_PROBLEM = "problem"
+    const val CHANNEL_UPDATE = "update"
 
     private const val ID_REMINDER = 1
     private const val ID_PROBLEM = 2
+    private const val ID_UPDATE = 3
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -41,6 +44,15 @@ object Notifier {
                 "Probleme bei der Pruefung",
                 NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "Meldet, wenn der Bestellstand nicht geprueft werden konnte." },
+        )
+        manager.createNotificationChannel(
+            // Noch leiser, und als eigener Kanal, damit man genau das
+            // abschalten kann, ohne die Erinnerung mit stillzulegen.
+            NotificationChannel(
+                CHANNEL_UPDATE,
+                "Neue Fassung",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = "Meldet, wenn eine neuere Fassung der App bereitliegt." },
         )
     }
 
@@ -81,6 +93,23 @@ object Notifier {
     fun problem(context: Context, title: String, body: String) =
         show(context, CHANNEL_PROBLEM, ID_PROBLEM, title, body)
 
+    /**
+     * Es liegt eine neuere Fassung bereit.
+     *
+     * Ohne Store erfaehrt das sonst niemand — und ein veralteter Waechter
+     * schweigt womoeglich, obwohl man sich auf ihn verlaesst.
+     */
+    fun update(context: Context, latest: String, current: String) = show(
+        context,
+        CHANNEL_UPDATE,
+        ID_UPDATE,
+        "Neue Fassung $latest",
+        "Installiert ist $current. Die neue Fassung legt sich ohne Umweg darüber.",
+        url = UpdateCheck.DOWNLOAD_URL,
+        actionLabel = "Herunterladen",
+        alert = false,
+    )
+
     private fun show(
         context: Context,
         channel: String,
@@ -88,6 +117,8 @@ object Notifier {
         title: String,
         body: String,
         shortLine: String? = null,
+        url: String = IbsClient.WEB_URL,
+        actionLabel: String = "Bestellseite oeffnen",
         alert: Boolean = true,
     ) {
         // Ohne Berechtigung wuerde notify() still verpuffen — dann lieber nichts
@@ -99,10 +130,12 @@ object Notifier {
             return
         }
 
-        val openPortal = PendingIntent.getActivity(
+        val openTarget = PendingIntent.getActivity(
             context,
-            0,
-            Intent(Intent.ACTION_VIEW, Uri.parse(IbsClient.WEB_URL)),
+            // Eigener Request-Code je Meldung, damit sich die Ziele nicht
+            // gegenseitig ueberschreiben.
+            id,
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
@@ -113,10 +146,10 @@ object Notifier {
             // zu tun ist — die Tage stehen im aufgeklappten Text darunter.
             .setContentText(shortLine ?: body.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(openPortal)
+            .setContentIntent(openTarget)
             .setAutoCancel(true)
             .setOnlyAlertOnce(!alert)
-            .addAction(0, "Bestellseite oeffnen", openPortal)
+            .addAction(0, actionLabel, openTarget)
             .build()
 
         NotificationManagerCompat.from(context).notify(id, notification)

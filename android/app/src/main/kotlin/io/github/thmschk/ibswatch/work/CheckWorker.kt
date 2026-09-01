@@ -16,6 +16,7 @@ import io.github.thmschk.ibswatch.core.De
 import io.github.thmschk.ibswatch.core.IbsClient
 import io.github.thmschk.ibswatch.core.NotifiedDays
 import io.github.thmschk.ibswatch.core.OrderChecker
+import io.github.thmschk.ibswatch.core.UpdateCheck
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -49,6 +50,10 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val outcome = checker.run(credentials.customerNo, credentials.password, today)
 
         results.lastRunEpochMillis = System.currentTimeMillis()
+
+        // Beiwerk, und deshalb streng abgeschirmt: ein Fehler beim
+        // Update-Blick darf den Bestellstand weder faerben noch aufhalten.
+        runCatching { checkForUpdate(results) }
 
         // Tagesliste in beiden Erfolgsfaellen sichern — sie ist der Inhalt,
         // den die Oberflaeche anzeigt, unabhaengig davon ob etwas fehlt.
@@ -132,4 +137,38 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         CheckScheduler.scheduleNext(applicationContext, ExistingWorkPolicy.REPLACE)
         Result.success()
     }
+
+    /**
+     * Nachsehen, ob eine neuere Fassung bereitliegt.
+     *
+     * Die App wird ohne Store verteilt, es gibt also niemanden, der von sich
+     * aus Bescheid sagt. Bei einem Waechter, dessen Versagen wie "alles in
+     * Ordnung" aussieht, ist eine veraltete Installation schlimmer als gar
+     * keine — deshalb sieht die App selbst nach.
+     *
+     * Klingeln tut sie je Version genau einmal; der Hinweis in der Oberflaeche
+     * bleibt dagegen stehen, solange er gilt.
+     */
+    private fun checkForUpdate(results: ResultStore) {
+        val current = currentVersionName() ?: return
+        // null heisst "keine Aussage" — dann bleibt ein vorhandener Hinweis
+        // stehen, statt faelschlich zu verschwinden.
+        val latest = UpdateCheck.latestVersion() ?: return
+
+        if (!UpdateCheck.isNewer(latest, current)) {
+            results.availableVersion = ""
+            return
+        }
+        results.availableVersion = latest
+        if (results.updateNotifiedFor != latest) {
+            Notifier.update(applicationContext, latest, current)
+            results.updateNotifiedFor = latest
+        }
+    }
+
+    private fun currentVersionName(): String? = runCatching {
+        applicationContext.packageManager
+            .getPackageInfo(applicationContext.packageName, 0)
+            .versionName
+    }.getOrNull()
 }

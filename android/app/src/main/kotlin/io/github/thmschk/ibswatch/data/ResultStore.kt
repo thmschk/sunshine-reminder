@@ -43,6 +43,25 @@ class ResultStore(context: Context) {
         set(value) = prefs.edit().putStringSet(KEY_NOTIFIED, value).apply()
 
     /**
+     * Version, die auf GitHub bereitliegt — leer, wenn die App aktuell ist
+     * oder es keine Aussage gab. Steht als Hinweis in der Oberflaeche, solange
+     * sie gilt.
+     */
+    var availableVersion: String
+        get() = prefs.getString(KEY_AVAILABLE, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_AVAILABLE, value).apply()
+
+    /**
+     * Version, ueber die schon benachrichtigt wurde.
+     *
+     * Ohne das klingelt jeder Werktag wegen desselben Updates — dieselbe
+     * Abnutzung wie bei einer taeglich wiederholten Bestellerinnerung.
+     */
+    var updateNotifiedFor: String
+        get() = prefs.getString(KEY_UPDATE_NOTIFIED, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_UPDATE_NOTIFIED, value).apply()
+
+    /**
      * Alles vergessen.
      *
      * Gehoert zum Loeschen der Zugangsdaten: sonst bleiben Vorname des Kindes,
@@ -56,5 +75,7 @@ class ResultStore(context: Context) {
         const val KEY_LAST_RUN = "last_run"
         const val KEY_NOTIFIED = "notified_dates"
         const val KEY_DAYS = "last_days"
+        const val KEY_AVAILABLE = "available_version"
+        const val KEY_UPDATE_NOTIFIED = "update_notified_for"
     }
 }
