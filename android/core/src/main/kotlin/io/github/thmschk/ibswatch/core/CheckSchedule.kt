@@ -14,8 +14,14 @@ import java.time.LocalTime
  */
 object CheckSchedule {
 
-    /** Ortszeit, zu der geprueft wird — frueh genug, um abends noch zu handeln. */
-    val CHECK_TIME: LocalTime = LocalTime.of(17, 0)
+    /**
+     * Ortszeit, zu der geprueft wird, wenn der Nutzer nichts anderes einstellt.
+     *
+     * Mittags: frueh genug, um den Nachmittag noch zum Handeln zu haben, und
+     * spaet genug, dass das Handy wach ist. Einstellbar ist es trotzdem, weil
+     * der Tagesablauf von Familie zu Familie verschieden ist.
+     */
+    val DEFAULT_CHECK_TIME: LocalTime = LocalTime.of(12, 0)
 
     /**
      * Luft zwischen "der Lauf haette stattfinden muessen" und "hier stimmt etwas nicht".
@@ -27,8 +33,8 @@ object CheckSchedule {
     private val OVERDUE_GRACE: Duration = Duration.ofHours(12)
 
     /** Naechste Pruefzeit nach [now]; Samstag und Sonntag werden uebersprungen. */
-    fun nextRun(now: LocalDateTime): LocalDateTime {
-        val todayAtCheckTime = LocalDateTime.of(now.toLocalDate(), CHECK_TIME)
+    fun nextRun(now: LocalDateTime, checkTime: LocalTime = DEFAULT_CHECK_TIME): LocalDateTime {
+        val todayAtCheckTime = LocalDateTime.of(now.toLocalDate(), checkTime)
         val candidate = if (now < todayAtCheckTime) todayAtCheckTime else todayAtCheckTime.plusDays(1)
         // Samstag und Sonntag ueberspringen: fuer Montag ist der Bestellschluss
         // ohnehin am Freitag, spaetestens am Sonntagabend erreicht uns niemand mehr.
@@ -43,8 +49,8 @@ object CheckSchedule {
      * feuern. [nextRun] zielt danach noch einmal auf denselben Termin, und der
      * Tag wird zweimal geprueft.
      */
-    fun delayMinutes(now: LocalDateTime): Long {
-        val seconds = Duration.between(now, nextRun(now)).seconds
+    fun delayMinutes(now: LocalDateTime, checkTime: LocalTime = DEFAULT_CHECK_TIME): Long {
+        val seconds = Duration.between(now, nextRun(now, checkTime)).seconds
         return ((seconds + 59) / 60).coerceAtLeast(0)
     }
 
@@ -60,6 +66,9 @@ object CheckSchedule {
      * `null` heisst "noch nie gelaufen" — dazu sagt die Oberflaeche schon etwas
      * anderes.
      */
-    fun isOverdue(lastRun: LocalDateTime?, now: LocalDateTime): Boolean =
-        lastRun != null && now.isAfter(nextRun(lastRun).plus(OVERDUE_GRACE))
+    fun isOverdue(
+        lastRun: LocalDateTime?,
+        now: LocalDateTime,
+        checkTime: LocalTime = DEFAULT_CHECK_TIME,
+    ): Boolean = lastRun != null && now.isAfter(nextRun(lastRun, checkTime).plus(OVERDUE_GRACE))
 }

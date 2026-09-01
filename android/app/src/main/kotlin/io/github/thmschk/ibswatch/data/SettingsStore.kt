@@ -1,6 +1,8 @@
 package io.github.thmschk.ibswatch.data
 
 import android.content.Context
+import io.github.thmschk.ibswatch.core.CheckSchedule
+import java.time.LocalTime
 
 /** Welche Tage die Wochenliste zeigt. */
 enum class DayFilter(val label: String) {
@@ -26,6 +28,23 @@ class SettingsStore(context: Context) {
         get() = prefs.getInt(KEY_DAYS_AHEAD, DEFAULT_DAYS_AHEAD)
         set(value) = prefs.edit().putInt(KEY_DAYS_AHEAD, value).apply()
 
+    /**
+     * Ortszeit, zu der geprueft wird.
+     *
+     * Gespeichert als Minuten seit Mitternacht: das laesst sich nicht
+     * missverstehen und braucht keine Locale. Wer sie aendert, muss den
+     * geplanten Lauf neu einplanen — der vorhandene zielt sonst weiter auf die
+     * alte Zeit.
+     */
+    var checkTime: LocalTime
+        get() = prefs.getInt(KEY_CHECK_TIME, -1)
+            .takeIf { it in 0..(24 * 60 - 1) }
+            ?.let { LocalTime.of(it / 60, it % 60) }
+            ?: CheckSchedule.DEFAULT_CHECK_TIME
+        set(value) = prefs.edit()
+            .putInt(KEY_CHECK_TIME, value.hour * 60 + value.minute)
+            .apply()
+
     var dayFilter: DayFilter
         get() = runCatching { DayFilter.valueOf(prefs.getString(KEY_FILTER, "").orEmpty()) }
             .getOrDefault(DayFilter.ALL)
@@ -37,5 +56,6 @@ class SettingsStore(context: Context) {
         const val MAX_DAYS_AHEAD = 14
         private const val KEY_DAYS_AHEAD = "days_ahead"
         private const val KEY_FILTER = "day_filter"
+        private const val KEY_CHECK_TIME = "check_time_minutes"
     }
 }

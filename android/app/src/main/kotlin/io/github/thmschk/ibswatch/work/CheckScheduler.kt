@@ -8,6 +8,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import io.github.thmschk.ibswatch.core.CheckSchedule
+import io.github.thmschk.ibswatch.data.SettingsStore
 import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 
@@ -55,7 +56,10 @@ object CheckScheduler {
         now: LocalDateTime = LocalDateTime.now(),
     ) {
         val request = OneTimeWorkRequestBuilder<CheckWorker>()
-            .setInitialDelay(CheckSchedule.delayMinutes(now), TimeUnit.MINUTES)
+            .setInitialDelay(
+                CheckSchedule.delayMinutes(now, SettingsStore(context).checkTime),
+                TimeUnit.MINUTES,
+            )
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)

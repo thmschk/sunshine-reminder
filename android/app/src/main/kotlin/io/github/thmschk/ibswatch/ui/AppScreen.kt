@@ -14,12 +14,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Slider
+import androidx.compose.material3.TimeInput
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -63,6 +68,7 @@ import io.github.thmschk.ibswatch.work.CheckScheduler
 import java.text.DateFormat
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 import java.util.Date
 
@@ -77,6 +83,11 @@ fun AppScreen(
     val settings = remember { SettingsStore(context) }
 
     var configured by remember { mutableStateOf(credentials.isConfigured) }
+    var showSettings by remember { mutableStateOf(false) }
+
+    if (showSettings) {
+        SettingsDialog(settings = settings, onDismiss = { showSettings = false })
+    }
 
     Column(
         modifier = Modifier
@@ -88,7 +99,22 @@ fun AppScreen(
             .padding(start = 24.dp, end = 24.dp, bottom = 24.dp, top = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
+            // Erst sinnvoll, wenn ueberhaupt geprueft wird.
+            if (configured) {
+                IconButton(onClick = { showSettings = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_settings),
+                        contentDescription = "Einstellungen",
+                    )
+                }
+            }
+        }
 
         if (!configured) {
             LoginCard(
@@ -175,6 +201,77 @@ fun AppScreen(
     }
 }
 
+/**
+ * Die beiden Stellschrauben, die wirklich vom Tagesablauf abhaengen.
+ *
+ * Bewusst hinter dem Zahnrad und nicht auf der Startseite: die Statuskarte soll
+ * beantworten, was es zu essen gibt und ob etwas offen ist — nicht mit
+ * Reglern zugestellt sein, die man einmal im Jahr anfasst.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsDialog(settings: SettingsStore, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var daysAhead by remember { mutableStateOf(settings.daysAhead) }
+    val timeState = rememberTimePickerState(
+        initialHour = settings.checkTime.hour,
+        initialMinute = settings.checkTime.minute,
+        is24Hour = true,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Einstellungen") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Vorwarnzeit: " + if (daysAhead == 1) "1 Tag" else "$daysAhead Tage",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Text(
+                    "So weit schaut die App voraus. Ein grosses Fenster meldet auch " +
+                        "Tage, deren Bestellschluss noch weit weg ist — erinnert wird " +
+                        "aber nur einmal je Tag.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Slider(
+                    value = daysAhead.toFloat(),
+                    onValueChange = { daysAhead = it.toInt() },
+                    valueRange = SettingsStore.MIN_DAYS_AHEAD.toFloat()..SettingsStore.MAX_DAYS_AHEAD.toFloat(),
+                    // Rastet auf ganze Tage — Zwischenwerte gaebe es sonst nur optisch.
+                    steps = SettingsStore.MAX_DAYS_AHEAD - SettingsStore.MIN_DAYS_AHEAD - 1,
+                )
+
+                HorizontalDivider()
+
+                Text("Wann geprüft wird", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Werktags zu dieser Zeit. Ein Richtwert: Android darf den Lauf " +
+                        "verschieben, wenn das Gerät gerade schläft.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TimeInput(state = timeState)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    settings.daysAhead = daysAhead
+                    settings.checkTime = LocalTime.of(timeState.hour, timeState.minute)
+                    // Der schon eingeplante Lauf zielt sonst weiter auf die alte
+                    // Zeit — hier ist REPLACE genau richtig.
+                    CheckScheduler.scheduleNext(context, ExistingWorkPolicy.REPLACE)
+                    onDismiss()
+                },
+            ) { Text("Speichern") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
+    )
+}
+
 /** Die eigene Version, wie sie im Paket steht — ohne BuildConfig. */
 private fun installedVersion(context: Context): String =
     runCatching {
@@ -248,7 +345,6 @@ private fun StatusCard(
 ) {
     val context = LocalContext.current
     var filter by remember { mutableStateOf(settings.dayFilter) }
-    var daysAhead by remember { mutableStateOf(settings.daysAhead) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -277,6 +373,7 @@ private fun StatusCard(
                     lastRun.takeIf { it > 0L }
                         ?.let { LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault()) },
                     LocalDateTime.now(),
+                    settings.checkTime,
                 )
             }
             if (overdue) {
@@ -302,21 +399,6 @@ private fun StatusCard(
                 onSelect = { filter = it; settings.dayFilter = it },
             )
 
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "Vorwarnzeit: " + if (daysAhead == 1) "1 Tag" else "$daysAhead Tage",
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Slider(
-                    value = daysAhead.toFloat(),
-                    onValueChange = { daysAhead = it.toInt() },
-                    onValueChangeFinished = { settings.daysAhead = daysAhead },
-                    valueRange = SettingsStore.MIN_DAYS_AHEAD.toFloat()..SettingsStore.MAX_DAYS_AHEAD.toFloat(),
-                    // Rastet auf ganze Tage — Zwischenwerte gaebe es sonst nur optisch.
-                    steps = SettingsStore.MAX_DAYS_AHEAD - SettingsStore.MIN_DAYS_AHEAD - 1,
-                )
-            }
-
             val shown = when (filter) {
                 DayFilter.ALL -> days
                 DayFilter.PENDING -> days.filter {
@@ -340,7 +422,7 @@ private fun StatusCard(
                 )
             }
             Text(
-                "Geprüft wird werktags gegen ${CheckSchedule.CHECK_TIME}.",
+                "Geprüft wird werktags gegen ${settings.checkTime}.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
