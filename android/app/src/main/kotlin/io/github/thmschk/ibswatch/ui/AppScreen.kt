@@ -421,8 +421,12 @@ private fun StatusCard(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            // Bewusst der naechste Lauf und nicht die eingestellte Zeit:
+            // "gegen 12:00" kann heute oder morgen heissen, und wer nach 12:00
+            // etwas umstellt, wartet sonst den Rest des Tages ahnungslos.
             Text(
-                "Geprüft wird werktags gegen ${settings.checkTime}.",
+                "Nächste Prüfung: " +
+                    CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime) + ".",
                 style = MaterialTheme.typography.bodySmall,
             )
         }

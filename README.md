@@ -142,6 +142,14 @@ Ehrlich dazu, was **nicht** geprüft ist:
 * Alles außerhalb einer einzigen Einrichtung — ob andere Schulen dieselbe
   Struktur liefern, ist unbekannt.
 
+**„Beenden erzwingen" legt die App still — anders als ein Neustart.** Android
+versetzt sie damit in den *stopped state*: alle geplanten Läufe werden gelöscht,
+und sie bekommt keine Broadcasts mehr zugestellt, auch `BOOT_COMPLETED` nicht.
+Ein Neustart weckt sie danach also **nicht** wieder auf; erst das nächste Öffnen
+von Hand plant alles neu ein. Ein gewöhnlicher Neustart des Handys ohne
+vorheriges Erzwingen ist dagegen unkritisch — WorkManager plant seine Läufe beim
+Hochfahren selbst neu.
+
 **Der gefährlichste Zustand ist Schweigen.** Wenn der Anbieter etwas ändert,
 kann die App verstummen statt zu warnen. Verlass dich nicht blind auf sie.
 

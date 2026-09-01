@@ -3,6 +3,7 @@ package io.github.thmschk.ibswatch.core
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.util.Locale
 
 /**
  * Wann der naechste Lauf faellig ist — reine Zeitrechnung, ohne Android.
@@ -52,6 +53,28 @@ object CheckSchedule {
     fun delayMinutes(now: LocalDateTime, checkTime: LocalTime = DEFAULT_CHECK_TIME): Long {
         val seconds = Duration.between(now, nextRun(now, checkTime)).seconds
         return ((seconds + 59) / 60).coerceAtLeast(0)
+    }
+
+    /**
+     * Wann der naechste Lauf faellig ist, als Satzteil: "heute gegen 12:00",
+     * "morgen gegen 12:00", "Montag gegen 12:00".
+     *
+     * Die Oberflaeche zeigte bisher nur die eingestellte Uhrzeit. Das ist
+     * zweideutig: "gegen 12:00" kann heute oder morgen heissen, und wer nach
+     * 12:00 etwas umstellt, wartet den Rest des Tages vergeblich, ohne dass
+     * ihm die App einen Hinweis darauf gibt.
+     */
+    fun nextRunLabel(now: LocalDateTime, checkTime: LocalTime = DEFAULT_CHECK_TIME): String {
+        val nextDate = nextRun(now, checkTime).toLocalDate()
+        val today = now.toLocalDate()
+        // isEqual statt == : java.time-Typen sind wertbasiert, ein Vergleich
+        // ueber die Identitaet waere hier bestenfalls zufaellig richtig.
+        val day = when {
+            nextDate.isEqual(today) -> "heute"
+            nextDate.isEqual(today.plusDays(1)) -> "morgen"
+            else -> De.weekday(nextDate)
+        }
+        return "$day gegen %02d:%02d".format(Locale.ROOT, checkTime.hour, checkTime.minute)
     }
 
     /**

@@ -116,6 +116,27 @@ class CheckScheduleTest {
         assertFalse(isOverdue(null, at(26, 10, 0)))
     }
 
+    /**
+     * Regression aus dem Alltag: die Karte zeigte nur die eingestellte Zeit.
+     * Wer nach der Pruefzeit etwas umstellte, wartete den Rest des Tages
+     * vergeblich, ohne dass die App einen Hinweis darauf gab.
+     */
+    @Test
+    fun `der naechste Lauf steht als Satz da`() {
+        val mittags = LocalTime.of(12, 0)
+        assertEquals("heute gegen 12:00", CheckSchedule.nextRunLabel(at(26, 9, 0), mittags))
+        assertEquals("morgen gegen 12:00", CheckSchedule.nextRunLabel(at(26, 13, 0), mittags))
+        // Freitagnachmittag: der naechste Lauf ist Montag, nicht "morgen".
+        assertEquals("Montag gegen 12:00", CheckSchedule.nextRunLabel(at(28, 13, 0), mittags))
+        // Samstag: auch heute ist nichts mehr, obwohl die Uhrzeit noch kommt.
+        assertEquals("Montag gegen 12:00", CheckSchedule.nextRunLabel(at(29, 9, 0), mittags))
+    }
+
+    @Test
+    fun `krumme Uhrzeiten werden zweistellig gesetzt`() {
+        assertEquals("heute gegen 07:05", CheckSchedule.nextRunLabel(at(26, 6, 0), LocalTime.of(7, 5)))
+    }
+
     @Test
     fun `ohne Angabe wird mittags geprueft`() {
         assertEquals(LocalTime.of(12, 0), CheckSchedule.DEFAULT_CHECK_TIME)
