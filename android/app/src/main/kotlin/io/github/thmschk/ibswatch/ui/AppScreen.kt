@@ -210,45 +210,51 @@ fun AppScreen(
                 onClick = { CheckScheduler.runNow(context) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Jetzt prüfen") }
-            TextButton(
-                onClick = {
-                    credentials.clear()
-                    results.clear()
-                    CheckScheduler.cancel(context)
-                    configured = false
-                },
+            // Fusszeile: links das Selten-und-Endgueltige, rechts das
+            // Freiwillige. Beides gehoert nicht in den taeglichen Blick, also
+            // teilen sie sich eine Zeile am Ende.
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Zugangsdaten löschen") }
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = {
+                        credentials.clear()
+                        results.clear()
+                        CheckScheduler.cancel(context)
+                        configured = false
+                    },
+                ) { Text("Zugangsdaten löschen") }
 
-            // Ganz unten und rechts: wer bis hierher scrollt, sucht nichts
-            // Dringendes mehr. Das Herz allein waere zweideutig — in Apps heisst
-            // es sonst "Favorit" —, deshalb steht das Wort daneben.
-            if (DONATE_URL.isNotBlank()) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.End)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        }
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_heart),
-                        contentDescription = null,
-                        tint = DonatePink,
-                        modifier = Modifier.size(15.dp),
-                    )
-                    Text(
-                        "Unterstützen",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                // Das Herz allein waere zweideutig — in Apps heisst es sonst
+                // "Favorit" —, deshalb steht das Wort daneben.
+                if (DONATE_URL.isNotBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_heart),
+                            contentDescription = null,
+                            tint = DonatePink,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Text(
+                            "Unterstützen",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
