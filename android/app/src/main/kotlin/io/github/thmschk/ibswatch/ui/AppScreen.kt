@@ -72,6 +72,15 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.util.Date
 
+/**
+ * Ziel des Herzens in der Kopfzeile.
+ *
+ * Bewusst ein blosser Link nach draussen und kein In-App-Kauf: die App
+ * verkauft nichts und schaltet nichts frei, es ist ein Trinkgeld. Leer lassen
+ * heisst, das Herz gar nicht erst anzuzeigen.
+ */
+private const val DONATE_URL = "https://paypal.me/LorenzThomschke"
+
 @Composable
 fun AppScreen(
     remindersReachUser: Boolean = true,
@@ -105,13 +114,33 @@ fun AppScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
-            // Erst sinnvoll, wenn ueberhaupt geprueft wird.
+            // Erst sinnvoll, wenn ueberhaupt geprueft wird — und um Geld
+            // bitten sollte man erst, wenn die App etwas geleistet hat.
             if (configured) {
-                IconButton(onClick = { showSettings = true }) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_settings),
-                        contentDescription = "Einstellungen",
-                    )
+                Row {
+                    if (DONATE_URL.isNotBlank()) {
+                        IconButton(
+                            onClick = {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            },
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_heart),
+                                contentDescription = "Entwicklung unterstützen",
+                                // Zurueckgenommen: es soll auffindbar sein, nicht werben.
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_settings),
+                            contentDescription = "Einstellungen",
+                        )
+                    }
                 }
             }
         }
