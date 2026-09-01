@@ -73,7 +73,8 @@ Die App ist **nicht im Play Store**. Sie wird als APK-Datei installiert:
    (alle Versionen einzeln: [Releases](../../releases))
 2. Android fragt, ob der Browser Apps installieren darf — das muss einmal
    erlaubt werden.
-3. Danach kommt die Warnung „aus unbekannter Quelle". Bestätigen.
+3. Dann blockiert Google Play Protect die Installation. **Der große Knopf ist
+   der falsche** — siehe den nächsten Abschnitt.
 4. App öffnen, Kundennummer und Passwort des Bestellsystems eintragen,
    Benachrichtigungen erlauben.
 
@@ -81,6 +82,26 @@ Wer Updates automatisch haben will, kann [Obtainium](https://github.com/ImranR98
 benutzen und dieses Repository als Quelle eintragen.
 
 **Voraussetzung:** Android 8.0 oder neuer.
+
+### „App wurde zum Schutz deines Geräts blockiert"
+
+<img src="docs/play-protect-blockiert.jpg" alt="Google Play Protect blockiert die Installation" width="320">
+
+Hier hört es für die meisten auf, und das ist kein Zufall: Der große weiße
+Knopf heißt **„Ok"** und bricht ab. Weiter geht es nur über die unscheinbare
+Zeile darüber, **„Trotzdem installieren"**.
+
+Der Dialog klingt nach einem Fund, ist aber keiner. Er sagt selbst, woran es
+liegt: *„Play Protect kennt von diesem Entwickler noch keine anderen Apps."*
+Google hat diesen Signierschlüssel schlicht noch nie gesehen. Bei einem
+privaten Projekt mit genau einer App bleibt das auch so — die Meldung
+verschwindet nicht, wenn die App bekannter wird.
+
+Wer sich darauf nicht verlassen mag, muss es auch nicht: Der Abschnitt
+[Echtheit prüfen](#echtheit-prüfen) zeigt, wie sich nachrechnen lässt, dass die
+Datei tatsächlich aus diesem Projekt stammt. Das ist die belastbarere Auskunft
+als jede Warnung — und die einzige, die auch etwas wert ist, wenn dir jemand
+eine APK weiterreicht, die nicht von hier kommt.
 
 ### Echtheit prüfen
 
