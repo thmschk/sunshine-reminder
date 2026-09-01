@@ -244,6 +244,16 @@ und setzt für passende Hosts HTTP-Basic-Auth — das überschreibt den
 Bearer-Token, und der Server antwortet mit 500. Da die Zugangsdaten dort per
 Design unter genau diesem Hostnamen liegen, trifft das jede Installation.
 
+## Danke sagen
+
+Das Projekt ist ein Nebenher und kostet nichts. Wer trotzdem etwas dalassen
+möchte: **[paypal.me/LorenzThomschke](https://paypal.me/LorenzThomschke)** —
+in der App liegt derselbe Link hinter dem kleinen Herz.
+
+Es ist ein Trinkgeld, keine Bezahlung: Es wird nichts freigeschaltet, und ohne
+Spende fehlt nichts. Wer die Wahl hat, schickt es als „Freunde und Familie" —
+dann bleiben die Gebühren aus, und es ist auch das, was es ist.
+
 ## Lizenz
 
 MIT — siehe [LICENSE](LICENSE).

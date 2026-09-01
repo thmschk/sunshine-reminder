@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -81,6 +82,14 @@ import java.util.Date
  */
 private const val DONATE_URL = "https://paypal.me/LorenzThomschke"
 
+/**
+ * Rosa, aus der Hausfarbe Beere (#A01850) aufgehellt.
+ *
+ * Hell genug, um neben grauem Text nicht wie eine Warnung zu wirken, dunkel
+ * genug, um auf dem cremefarbenen Grund noch zu stehen.
+ */
+private val DonatePink = Color(0xFFD05A86)
+
 @Composable
 fun AppScreen(
     remindersReachUser: Boolean = true,
@@ -114,33 +123,13 @@ fun AppScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
-            // Erst sinnvoll, wenn ueberhaupt geprueft wird — und um Geld
-            // bitten sollte man erst, wenn die App etwas geleistet hat.
+            // Erst sinnvoll, wenn ueberhaupt geprueft wird.
             if (configured) {
-                Row {
-                    if (DONATE_URL.isNotBlank()) {
-                        IconButton(
-                            onClick = {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                )
-                            },
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_heart),
-                                contentDescription = "Entwicklung unterstützen",
-                                // Zurueckgenommen: es soll auffindbar sein, nicht werben.
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_settings),
-                            contentDescription = "Einstellungen",
-                        )
-                    }
+                IconButton(onClick = { showSettings = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_settings),
+                        contentDescription = "Einstellungen",
+                    )
                 }
             }
         }
@@ -450,14 +439,40 @@ private fun StatusCard(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            // Bewusst der naechste Lauf und nicht die eingestellte Zeit:
-            // "gegen 12:00" kann heute oder morgen heissen, und wer nach 12:00
-            // etwas umstellt, wartet sonst den Rest des Tages ahnungslos.
-            Text(
-                "Nächste Prüfung: " +
-                    CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime) + ".",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Bewusst der naechste Lauf und nicht die eingestellte Zeit:
+                // "gegen 12:00" kann heute oder morgen heissen, und wer nach
+                // 12:00 etwas umstellt, wartet sonst den Rest des Tages ahnungslos.
+                Text(
+                    "Nächste Prüfung: " +
+                        CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime) + ".",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (DONATE_URL.isNotBlank()) {
+                    IconButton(
+                        onClick = {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                        // Kleiner als die ueblichen 48dp: das Herz soll in einer
+                        // Zeile mit Kleingedrucktem stehen, nicht sie sprengen.
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_heart),
+                            contentDescription = "Entwicklung unterstützen",
+                            tint = DonatePink,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }

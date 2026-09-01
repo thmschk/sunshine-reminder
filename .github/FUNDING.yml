@@ -1,0 +1,3 @@
+# Blendet den "Sponsor"-Knopf oben im Repository ein.
+# custom, weil GitHub keinen eigenen Schluessel fuer PayPal.me hat.
+custom: ["https://paypal.me/LorenzThomschke"]
