@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -42,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -85,10 +87,12 @@ private const val DONATE_URL = "https://paypal.me/LorenzThomschke"
 /**
  * Rosa, aus der Hausfarbe Beere (#A01850) aufgehellt.
  *
- * Hell genug, um neben grauem Text nicht wie eine Warnung zu wirken, dunkel
- * genug, um auf dem cremefarbenen Grund noch zu stehen.
+ * Bewusst blass: gegen den cremefarbenen Grund sind das nur 2,9:1, unter den
+ * 3:1, die fuer grafische Elemente gefordert sind. Zulaessig ist das hier, weil
+ * das Herz rein dekorativ ist — die Bedeutung traegt das Wort daneben, und das
+ * steht in onSurfaceVariant mit 9,2:1.
  */
-private val DonatePink = Color(0xFFD05A86)
+private val DonatePink = Color(0xFFCE7C9B)
 
 @Composable
 fun AppScreen(
@@ -215,6 +219,38 @@ fun AppScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Zugangsdaten löschen") }
+
+            // Ganz unten und rechts: wer bis hierher scrollt, sucht nichts
+            // Dringendes mehr. Das Herz allein waere zweideutig — in Apps heisst
+            // es sonst "Favorit" —, deshalb steht das Wort daneben.
+            if (DONATE_URL.isNotBlank()) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_heart),
+                        contentDescription = null,
+                        tint = DonatePink,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Text(
+                        "Unterstützen",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
@@ -439,40 +475,14 @@ private fun StatusCard(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Bewusst der naechste Lauf und nicht die eingestellte Zeit:
-                // "gegen 12:00" kann heute oder morgen heissen, und wer nach
-                // 12:00 etwas umstellt, wartet sonst den Rest des Tages ahnungslos.
-                Text(
-                    "Nächste Prüfung: " +
-                        CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime) + ".",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                if (DONATE_URL.isNotBlank()) {
-                    IconButton(
-                        onClick = {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        },
-                        // Kleiner als die ueblichen 48dp: das Herz soll in einer
-                        // Zeile mit Kleingedrucktem stehen, nicht sie sprengen.
-                        modifier = Modifier.size(32.dp),
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_heart),
-                            contentDescription = "Entwicklung unterstützen",
-                            tint = DonatePink,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-            }
+            // Bewusst der naechste Lauf und nicht die eingestellte Zeit:
+            // "gegen 12:00" kann heute oder morgen heissen, und wer nach 12:00
+            // etwas umstellt, wartet sonst den Rest des Tages ahnungslos.
+            Text(
+                "Nächste Prüfung: " +
+                    CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime) + ".",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }
