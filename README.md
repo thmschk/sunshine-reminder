@@ -265,6 +265,19 @@ und setzt für passende Hosts HTTP-Basic-Auth — das überschreibt den
 Bearer-Token, und der Server antwortet mit 500. Da die Zugangsdaten dort per
 Design unter genau diesem Hostnamen liegen, trifft das jede Installation.
 
+## Entstehung
+
+Große Teile dieses Codes sind im Dialog mit einem KI-Assistenten entstanden.
+Entwurf, Prüfung und Verantwortung liegen bei mir: Die Logik in `:core` ist
+durch Tests abgedeckt, gegen echte Antworten des Bestellsystems kalibriert und
+auf einem Gerät erprobt.
+
+Dass das nicht vor Fehlern schützt, steht weiter oben unter [Stand](#stand):
+Bis 0.1.0 hat der Hintergrundlauf überhaupt nicht ausgelöst. Erwähnt sei die
+Entstehung, weil dieses README auch sonst sagt, worauf man sich nicht verlassen
+soll. Wer etwas findet, das daneben liegt, möge es melden; das gilt hier wie
+bei jedem anderen Code.
+
 ## Danke sagen
 
 Das Projekt ist ein Nebenher und kostet nichts. Wer trotzdem etwas dalassen
