@@ -32,8 +32,8 @@ def block(t, f, fill, lh, gap=0, maxw=W - 2*M, x=M):
         d.text((x, y), line, font=f, fill=fill); y += lh
     y += gap
 
-d.text((M, y), "Schulessen vergessen?", font=font("Bold", 60), fill=BERRY); y += 76
-d.text((M, y), "Das Handy erinnert dich.", font=font("Light", 46), fill=INK); y += 86
+d.text((M, y), "Och nö, Schulessen vergessen!", font=font("Bold", 60), fill=BERRY); y += 76
+d.text((M, y), "Muss doch nicht sein …", font=font("Light", 46), fill=INK); y += 86
 
 block("Eine kleine App sieht werktags von allein nach, ob für die nächsten "
       "Tage etwas bestellt ist — und meldet sich nur, wenn noch etwas offen ist.",
@@ -51,9 +51,7 @@ for path, x in (("screenshot-status.png", M + 70), ("screenshot-einstellungen.pn
     s = s.resize((int(s.width * sh / s.height), sh), Image.LANCZOS)
     d.rectangle([x-3, top-3, x+s.width+3, top+sh+3], outline=(224, 218, 200), width=3)
     im.paste(s, (x, top))
-y = top + sh + 34
-d.text((M, y), "Links: ein offener Tag.   Rechts: Uhrzeit und Vorwarnzeit einstellbar.",
-       font=font("Italic", 26), fill=GREY); y += 56
+y = top + sh + 48
 
 # --- Kasten mit QR --------------------------------------------------------
 # Der QR zeigt direkt auf die Datei, nicht auf die Projektseite: Wer den Zettel
