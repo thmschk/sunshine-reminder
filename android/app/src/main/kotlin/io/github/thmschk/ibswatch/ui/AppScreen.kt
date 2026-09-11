@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -43,7 +42,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -76,7 +74,7 @@ import java.time.ZoneId
 import java.util.Date
 
 /**
- * Ziel des Herzens in der Kopfzeile.
+ * Ziel des Herzens in der Fusszeile.
  *
  * Bewusst ein blosser Link nach draussen und kein In-App-Kauf: die App
  * verkauft nichts und schaltet nichts frei, es ist ein Trinkgeld. Leer lassen
@@ -84,15 +82,18 @@ import java.util.Date
  */
 private const val DONATE_URL = "https://paypal.me/LorenzThomschke"
 
+/** Das offene Repository — der Weg fuer alle, die mitcoden wollen. */
+private const val REPO_URL = "https://github.com/thmschk/sunshine-reminder"
+
 /**
  * Rosa, aus der Hausfarbe Beere (#A01850) aufgehellt.
  *
- * Bewusst blass: gegen den cremefarbenen Grund sind das nur 2,9:1, unter den
- * 3:1, die fuer grafische Elemente gefordert sind. Zulaessig ist das hier, weil
- * das Herz rein dekorativ ist — die Bedeutung traegt das Wort daneben, und das
- * steht in onSurfaceVariant mit 9,2:1.
+ * So blass wie moeglich und so kraeftig wie noetig: gegen den cremefarbenen
+ * Grund (#FFFCF0) sind das 3,0:1 — genau die Schwelle, die WCAG 1.4.11 fuer
+ * Bedienelemente fordert. Das Herz traegt seine Bedeutung allein, es darf also
+ * nicht unter diesen Wert.
  */
-private val DonatePink = Color(0xFFCE7C9B)
+private val DonatePink = Color(0xFFCA7A98)
 
 @Composable
 fun AppScreen(
@@ -106,9 +107,13 @@ fun AppScreen(
 
     var configured by remember { mutableStateOf(credentials.isConfigured) }
     var showSettings by remember { mutableStateOf(false) }
+    var showDonate by remember { mutableStateOf(false) }
 
     if (showSettings) {
         SettingsDialog(settings = settings, onDismiss = { showSettings = false })
+    }
+    if (showDonate) {
+        DonateDialog(onDismiss = { showDonate = false })
     }
 
     Column(
@@ -227,38 +232,78 @@ fun AppScreen(
                     },
                 ) { Text("Zugangsdaten löschen") }
 
-                // Das Herz allein waere zweideutig — in Apps heisst es sonst
-                // "Favorit" —, deshalb steht das Wort daneben.
+                // Das Herz allein hiesse in Apps "Favorit" — was gemeint ist,
+                // sagt der Dialog dahinter. Der Tipp darauf kostet daher nichts
+                // und fuehrt erst nach dem Lesen aus der App heraus.
                 if (DONATE_URL.isNotBlank()) {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                )
-                            }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    ) {
+                    IconButton(onClick = { showDonate = true }) {
                         Icon(
                             painter = painterResource(R.drawable.ic_heart),
-                            contentDescription = null,
+                            contentDescription = "Über diese App",
                             tint = DonatePink,
-                            modifier = Modifier.size(15.dp),
-                        )
-                        Text(
-                            "Unterstützen",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * Was hinter der App steckt, und der Hut, der danebenliegt.
+ *
+ * Der Satz steht vor dem Link: wer das Herz antippt, liest erst, worum es geht,
+ * und landet nur auf ausdruecklichen Wunsch bei PayPal.
+ */
+@Composable
+private fun DonateDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                painter = painterResource(R.drawable.ic_heart),
+                contentDescription = null,
+                tint = DonatePink,
+                modifier = Modifier.size(28.dp),
+            )
+        },
+        title = { Text("Über diese App") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Diese App wurde mithilfe eines KI-Agenten in meiner Freizeit " +
+                        "entwickelt. Ich freue mich über Feedback. Wer will, darf " +
+                        "gerne auch mitcoden. Wer mir unbedingt einen Espresso " +
+                        "spendieren möchte, darf das per PayPal.Me machen.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                TextButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                        onDismiss()
+                    },
+                ) { Text("Projekt auf GitHub") }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                    onDismiss()
+                },
+            ) { Text("PayPal.Me öffnen") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Schließen") } },
+    )
 }
 
 /**
