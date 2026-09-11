@@ -46,7 +46,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.LinkInteractionListener
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -253,12 +260,32 @@ fun AppScreen(
 /**
  * Was hinter der App steckt, und der Hut, der danebenliegt.
  *
- * Der Satz steht vor dem Link: wer das Herz antippt, liest erst, worum es geht,
- * und landet nur auf ausdruecklichen Wunsch bei PayPal.
+ * Die Ziele stecken in den Woertern selbst: "mitcoden" und "PayPal.Me" sagen
+ * bereits, wohin sie fuehren. Der Satz steht damit vor dem Griff nach
+ * draussen — wer das Herz antippt, liest erst, worum es geht.
  */
 @Composable
 private fun DonateDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
+
+    // Ohne eigenen Listener oeffnet Compose den Link selbst und laesst den
+    // Dialog stehen — man kaeme aus dem Browser auf eine Frage zurueck, die
+    // schon beantwortet ist.
+    val openAndClose = LinkInteractionListener { link ->
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse((link as LinkAnnotation.Url).url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        onDismiss()
+    }
+    // Farbe allein traegt die Information nicht (WCAG 1.4.1), deshalb zusaetzlich
+    // unterstrichen.
+    val linkStyles = TextLinkStyles(
+        style = SpanStyle(
+            color = MaterialTheme.colorScheme.primary,
+            textDecoration = TextDecoration.Underline,
+        ),
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -272,37 +299,29 @@ private fun DonateDialog(onDismiss: () -> Unit) {
         },
         title = { Text("Über diese App") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Diese App wurde mithilfe eines KI-Agenten in meiner Freizeit " +
-                        "entwickelt. Ich freue mich über Feedback. Wer will, darf " +
-                        "gerne auch mitcoden. Wer mir unbedingt einen Espresso " +
-                        "spendieren möchte, darf das per PayPal.Me machen.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                TextButton(
-                    onClick = {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                        onDismiss()
-                    },
-                ) { Text("Projekt auf GitHub") }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(DONATE_URL))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            Text(
+                buildAnnotatedString {
+                    append(
+                        "Diese App wurde mithilfe eines KI-Agenten in meiner Freizeit " +
+                            "entwickelt. Ich freue mich über Feedback. Wer will, darf " +
+                            "gerne auch ",
                     )
-                    onDismiss()
+                    withLink(LinkAnnotation.Url(REPO_URL, linkStyles, openAndClose)) {
+                        append("mitcoden")
+                    }
+                    append(
+                        ". Wer mir unbedingt einen Espresso spendieren möchte, darf " +
+                            "das per ",
+                    )
+                    withLink(LinkAnnotation.Url(DONATE_URL, linkStyles, openAndClose)) {
+                        append("PayPal.Me")
+                    }
+                    append(" machen.")
                 },
-            ) { Text("PayPal.Me öffnen") }
+                style = MaterialTheme.typography.bodyMedium,
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Schließen") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Schließen") } },
     )
 }
 
