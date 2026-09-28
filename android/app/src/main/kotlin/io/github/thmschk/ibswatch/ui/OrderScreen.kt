@@ -123,7 +123,11 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
                         scope.launch {
                             val selection = choice.values.sortedBy { it.date }
                             val outcome = withContext(Dispatchers.IO) {
-                                OrderPlacer(client).place(selection, dryRun) { checker.fetch(it) }
+                                OrderPlacer(client).place(
+                                    selection,
+                                    dryRun,
+                                    previouslyInCart = days.flatMap { d -> d.entries.filter { it.quantityInCart.isNotEmpty() } },
+                                ) { checker.fetch(it) }
                             }
                             result = when (outcome) {
                                 is PlaceResult.Ordered -> "Bestellt: " + outcome.dates.joinToString { De.short(it) }

@@ -74,12 +74,20 @@ class OrderPlacerTest {
         server.enqueue(cart(2)) // SaveOrder Di
         server.enqueue(cart(1)) // Rollback Mo
         server.enqueue(cart(0)) // Rollback Di
+        server.enqueue(cart(1)) // alter Di-Eintrag zurueck
 
-        val result = OrderPlacer(client).place(listOf(line(mon, "828"), line(tue, "829")), dryRun = true) { emptyList() }
+        val result = OrderPlacer(client).place(
+            listOf(line(mon, "828"), line(tue, "829")),
+            dryRun = true,
+            previouslyInCart = listOf(line(tue, "828")),
+        ) { emptyList() }
 
         assertIs<PlaceResult.DryRunOk>(result)
-        val paths = (1..6).map { server.takeRequest().path }
-        assertFalse(paths.any { it!!.contains("Cart/Order") }, "Probelauf darf nie abschicken: $paths")
+        val reqs = (1..7).map { server.takeRequest() }
+        assertFalse(reqs.any { it.path!!.contains("Cart/Order") }, "Probelauf darf nie abschicken")
+        val last = reqs.last()
+        assertEquals("/ibs5/Mealplan/SaveOrder", last.path)
+        assertTrue(last.body.readUtf8().contains("\"MenuLineId\":\"828\""), "alter Warenkorb-Eintrag wiederhergestellt")
     }
 
     @Test

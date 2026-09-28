@@ -31,10 +31,15 @@ sealed interface PlaceResult {
  */
 class OrderPlacer(private val client: IbsClient) {
 
-    /** @param reload laedt nach dem Abschicken den Wochenplan-Stand der Tage neu. */
+    /**
+     * @param previouslyInCart Eintraege, die vorher schon im Warenkorb lagen;
+     * sie werden beim Zuruecknehmen (Probelauf, Abbruch) wiederhergestellt.
+     * @param reload laedt nach dem Abschicken den Wochenplan-Stand der Tage neu.
+     */
     fun place(
         selection: List<MenuEntry>,
         dryRun: Boolean,
+        previouslyInCart: List<MenuEntry> = emptyList(),
         reload: (List<LocalDate>) -> List<DayStatus>,
     ): PlaceResult {
         if (selection.isEmpty()) return PlaceResult.Aborted("Nichts ausgewählt.")
@@ -46,8 +51,10 @@ class OrderPlacer(private val client: IbsClient) {
         }
 
         val touched = mutableListOf<MenuEntry>()
-        fun rollback() = touched.forEach {
-            runCatching { client.clearCart(it.customerId, it.date, it.menuGroupId) }
+        fun rollback() {
+            touched.forEach { runCatching { client.clearCart(it.customerId, it.date, it.menuGroupId) } }
+            previouslyInCart.filter { old -> touched.any { it.date == old.date } }
+                .forEach { runCatching { client.addToCart(it) } }
         }
 
         try {

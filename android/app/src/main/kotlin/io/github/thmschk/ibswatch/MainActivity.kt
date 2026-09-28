@@ -53,7 +53,8 @@ class MainActivity : ComponentActivity() {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        handleOrderIntent(intent)
+        // Nach Drehung o. Ae. nicht erneut oeffnen — der Intent ist derselbe.
+        if (savedInstanceState == null) handleOrderIntent(intent)
 
         setContent {
             IbsWatchTheme {
