@@ -157,7 +157,7 @@ class OrderPlacerTest {
     fun `Umbestellung, bei der die alte Linie bestellt bleibt, wird nicht als erledigt gemeldet`() {
         val client = loggedInClient()
         server.enqueue(cart(0))
-        server.enqueue(cart(1))
+        server.enqueue(cart(2)) // neue Linie + vom Server ergaenzte Abbestellung der alten
         server.enqueue(MockResponse().setBody("""{"MessageStatus":"OK"}"""))
 
         val old = line(wed, "828")
@@ -183,5 +183,27 @@ class OrderPlacerTest {
         val result = OrderPlacer(client).place(listOf(DayChange(wed, kept, kept)), dryRun = false) { emptyList() }
         assertIs<PlaceResult.Aborted>(result)
         assertEquals(1, server.requestCount) // nur der Login
+    }
+
+    @Test
+    fun `Umbestellung zaehlt zwei Warenkorb-Eintraege und wird abgeschickt`() {
+        val client = loggedInClient()
+        server.enqueue(cart(0))
+        server.enqueue(cart(2))
+        server.enqueue(MockResponse().setBody("""{"MessageStatus":"OK"}"""))
+
+        val old = line(wed, "828")
+        val new = line(wed, "827")
+        val result = OrderPlacer(client).place(listOf(DayChange(wed, current = old, target = new)), dryRun = false) {
+            listOf(
+                DayStatus(
+                    wed, OrderState.ORDERED,
+                    entries = listOf(old.copy(status = "0", quantityOrdered = ""), new.copy(status = "2", quantityOrdered = "1")),
+                ),
+            )
+        }
+
+        assertIs<PlaceResult.Done>(result)
+        assertEquals("/ibs5/Cart/Order", (1..3).map { server.takeRequest() }.last().path)
     }
 }

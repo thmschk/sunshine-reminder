@@ -47,9 +47,9 @@ sealed interface PlaceResult {
  * liegt. Weicht die Zahl ab, liegt dort etwas Fremdes — dann wird nicht
  * abgeschickt.
  *
- * Umbestellen ist wie auf der Webseite nur ein Eintrag: die neue Linie mit
- * Typ `I`, waehrend die alte bestellt ist. Ob der Server die alte dabei
- * wirklich abbestellt, prueft die Nachkontrolle je Tag.
+ * Umbestellen schickt wie die Webseite nur die neue Linie mit Typ `I`; die
+ * Abbestellung der alten legt der Server selbst in den Warenkorb (dann zwei
+ * Eintraege). Dass danach nur die neue bestellt ist, prueft die Nachkontrolle.
  */
 class OrderPlacer(private val client: IbsClient) {
 
@@ -99,10 +99,13 @@ class OrderPlacer(private val client: IbsClient) {
                 total = added.totalItemsInCart
             }
 
-            if (total != changes.size) {
+            // Beim Umbestellen legt der Server selbst die Abbestellung der alten
+            // Linie dazu — das sind zwei Eintraege.
+            val expected = changes.sumOf { if (it.kind == DayChange.Kind.SWITCH) 2 else 1 }
+            if (total != expected) {
                 rollback()
                 return PlaceResult.Aborted(
-                    "Im Warenkorb liegen ${total ?: "?"} statt ${changes.size} Einträge — " +
+                    "Im Warenkorb liegen ${total ?: "?"} statt $expected Einträge — " +
                         "vermutlich noch etwas anderes. Nichts abgeschickt.",
                 )
             }
