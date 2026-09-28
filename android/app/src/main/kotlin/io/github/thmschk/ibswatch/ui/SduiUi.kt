@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +37,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import io.github.thmschk.ibswatch.R
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.thmschk.ibswatch.core.De
 import io.github.thmschk.ibswatch.core.IbsException
@@ -74,6 +81,9 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
     var chosen by remember { mutableStateOf(store.subjects) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var passwordVisible by remember { mutableStateOf(false) }
+    // Nach dem ersten Login ist der Zugang eingeklappt — er aendert sich selten.
+    var editLogin by remember { mutableStateOf(!store.isConfigured) }
 
     val connected = children.isNotEmpty() && known.isNotEmpty()
 
@@ -119,6 +129,17 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
                         "gehen nur an Sdui.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (!editLogin) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "Angemeldet als $identifier\n${SduiStore.parseSlink(school)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { editLogin = true }) { Text("Ändern") }
+                    }
+                }
+                if (editLogin) {
                 OutlinedTextField(
                     value = school,
                     onValueChange = { school = it },
@@ -140,12 +161,23 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
                     onValueChange = { password = it },
                     label = { Text("Passwort") },
                     singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                painter = painterResource(
+                                    if (passwordVisible) R.drawable.ic_visibility_off else R.drawable.ic_visibility,
+                                ),
+                                contentDescription = if (passwordVisible) "Passwort verbergen" else "Passwort anzeigen",
+                            )
+                        }
+                    },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                }
                 Button(
-                    onClick = ::connect,
+                    onClick = { editLogin = false; connect() },
                     enabled = !busy && identifier.isNotBlank() && password.isNotBlank() && school.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(if (connected) "Neu laden" else "Verbinden") }
@@ -217,6 +249,10 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
     )
 }
 
+/** Blau fuer den Stundenplan — hebt sich vom Gelb/Gruen/Rot des Essens ab. */
+private val TimetableContainer = Color(0xFFDCE8F7)
+private val TimetableOnContainer = Color(0xFF14304F)
+
 /** Startseiten-Karte, nur wenn Sdui eingerichtet ist. */
 @Composable
 fun SduiCard(refreshKey: Any, onEdit: () -> Unit) {
@@ -228,31 +264,68 @@ fun SduiCard(refreshKey: Any, onEdit: () -> Unit) {
     val subjects = remember(refreshKey) { store.subjects.sortedWith(String.CASE_INSENSITIVE_ORDER) }
     val day = remember(refreshKey) { store.nextDay.let { runCatching { LocalDate.parse(it) }.getOrNull() } }
     val matches = remember(refreshKey) { store.nextMatches }
+    val lessons = remember(refreshKey) { store.nextLessons }
     val error = remember(refreshKey) { store.lastError }
+    var showPlan by remember { mutableStateOf(false) }
 
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onEdit),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = TimetableContainer, contentColor = TimetableOnContainer),
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                "STUNDENPLAN" + (store.childName.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Stundenplan" + (store.childName.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = onEdit,
+                    colors = ButtonDefaults.textButtonColors(contentColor = TimetableOnContainer),
+                ) { Text("Fächer") }
+            }
             when {
                 error.isNotBlank() -> Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                subjects.isEmpty() -> Text("Noch kein Fach ausgewählt — antippen zum Einrichten.", style = MaterialTheme.typography.bodyMedium)
+                subjects.isEmpty() -> Text("Noch kein Fach ausgewählt.", style = MaterialTheme.typography.bodyMedium)
                 day == null -> Text("Noch nicht geprüft.", style = MaterialTheme.typography.bodyMedium)
                 matches.isEmpty() -> Text(
-                    "${De.chip(day)}: nichts davon (${subjects.joinToString(", ")})",
-                    style = MaterialTheme.typography.bodyMedium,
+                    "${dayLabel(day)}: nichts davon (${subjects.joinToString(", ")})",
+                    style = MaterialTheme.typography.bodyLarge,
                 )
                 else -> {
-                    Text(De.long(day), style = MaterialTheme.typography.labelLarge)
-                    matches.forEach { Text(it, style = MaterialTheme.typography.bodyLarge) }
+                    Text(dayLabel(day), style = MaterialTheme.typography.labelLarge)
+                    matches.forEach { Text(it, style = MaterialTheme.typography.headlineSmall) }
+                }
+            }
+            if (day != null && lessons.isNotEmpty()) {
+                TextButton(
+                    onClick = { showPlan = !showPlan },
+                    colors = ButtonDefaults.textButtonColors(contentColor = TimetableOnContainer),
+                ) { Text((if (showPlan) "▾ " else "▸ ") + "Ganzer Plan für ${dayLabel(day)}") }
+                if (showPlan) {
+                    lessons.forEach { line ->
+                        val parts = line.split("|")
+                        val (hour, time, subject) = parts.take(3).let { it + List(3 - it.size) { "" } }
+                        val note = parts.getOrNull(3).orEmpty()
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(hour, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(28.dp))
+                            Text(time, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(48.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    subject,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (subjects.any { it in subject.split(" / ") }) FontWeight.Bold else null,
+                                )
+                                if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+/** "morgen (Do 01.10.)" oder "Mo 05.10." */
+private fun dayLabel(day: LocalDate): String =
+    if (day.isEqual(LocalDate.now().plusDays(1))) "morgen (${De.chip(day)})" else De.chip(day)

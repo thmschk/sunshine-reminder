@@ -266,6 +266,9 @@ fun AppScreen(
                 onOrder = { onOpenOrder(settings.daysAhead) },
             )
 
+            // Direkt unter dem Essen: der zweite Blick am Vorabend.
+            SduiCard(refreshKey = workInfos to sduiVersion, onEdit = { showSdui = true })
+
             // Die App kann nicht merken, dass Android sie nicht mehr weckt —
             // ein ausgefallener Lauf sieht von innen aus wie "alles bestellt".
             // Also wird nachgerechnet, wann der letzte Lauf faellig gewesen waere.
@@ -310,8 +313,6 @@ fun AppScreen(
                     }
                 }
             }
-
-            SduiCard(refreshKey = workInfos to sduiVersion, onEdit = { showSdui = true })
 
             TextButton(
                 onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS) },

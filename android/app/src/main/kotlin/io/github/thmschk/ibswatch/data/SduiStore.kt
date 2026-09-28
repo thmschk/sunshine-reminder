@@ -52,6 +52,14 @@ class SduiStore(context: Context) {
         get() = prefs.getString("next_matches", "").orEmpty().lines().filter { it.isNotBlank() }
         set(v) = prefs.edit().putString("next_matches", v.joinToString("\n")).apply()
 
+    /**
+     * Der ganze Plan des naechsten Schultags, je Zeile "2.|08:50|Deutsch|Hinweis".
+     * Parallele Kurse derselben Stunde stehen zusammen ("Lebenskunde / isl. Religion").
+     */
+    var nextLessons: List<String>
+        get() = prefs.getString("next_lessons", "").orEmpty().lines().filter { it.isNotBlank() }
+        set(v) = prefs.edit().putString("next_lessons", v.joinToString("\n")).apply()
+
     var lastError: String
         get() = prefs.getString("last_error", "").orEmpty()
         set(v) = prefs.edit().putString("last_error", v).apply()
