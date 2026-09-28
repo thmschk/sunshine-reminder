@@ -752,10 +752,10 @@ private fun Footer(lastRun: Long, settings: SettingsStore, onHeart: () -> Unit) 
     ) {
         val now = LocalDateTime.now()
         val last = if (lastRun > 0) "Geprüft ${checkedLabel(lastRun, now)} · " else ""
-        // Eine Zeile: "gegen" ist hier entbehrlich, die Uhrzeit ist ohnehin ein Richtwert.
-        val next = CheckSchedule.nextRunLabel(now, settings.checkTime).replace(" gegen ", " ")
+        // Eine Zeile: "morgen wieder 17:00" statt "morgen gegen 17:00" — die Uhrzeit ist ohnehin ein Richtwert.
+        val next = CheckSchedule.nextRunLabel(now, settings.checkTime).replace(" gegen ", " wieder ")
         Text(
-            last + "wieder $next",
+            last + next,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
