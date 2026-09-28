@@ -43,11 +43,14 @@ block("Kostenlos, ohne Werbung, ohne Server: Geprüft wird auf dem Handy, die "
       font("Regular", 33), GREY, 46, gap=34)
 
 # --- Screenshots, auf den Inhalt beschnitten ------------------------------
-BOX = (0, 120, 1080, 1900)
 sh = 505
 top = y
-for path, x in (("screenshot-status.png", M + 70), ("screenshot-einstellungen.png", W - M - 70 - 340)):
-    s = Image.open(HERE / path).convert("RGB").crop(BOX)
+# Ausschnitt je Bild: die Startseite reicht bis unter den Link "Alle bestellbaren Tage".
+for path, x, box in (
+    ("screenshot-status.png", M + 70, (0, 120, 1080, 1990)),
+    ("screenshot-einstellungen.png", W - M - 70 - 340, (0, 120, 1080, 1900)),
+):
+    s = Image.open(HERE / path).convert("RGB").crop(box)
     s = s.resize((int(s.width * sh / s.height), sh), Image.LANCZOS)
     d.rectangle([x-3, top-3, x+s.width+3, top+sh+3], outline=(224, 218, 200), width=3)
     im.paste(s, (x, top))
