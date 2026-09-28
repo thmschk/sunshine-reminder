@@ -21,7 +21,8 @@ object SduiCheck {
 
     fun run(context: Context, today: LocalDate = LocalDate.now()) {
         val store = SduiStore(context)
-        if (!store.isConfigured || store.subjects.isEmpty()) return
+        // Auch ohne gewaehltes Fach: die Zeitleiste auf der Startseite braucht den Plan.
+        if (!store.isConfigured) return
         // Abgelehnter Zugang: nicht bei jedem Lauf erneut versuchen, Fehlversuche
         // koennten das Konto sperren. Erst wieder nach dem Speichern im Dialog.
         if (store.lastError.startsWith(AUTH_ERROR)) return
@@ -55,6 +56,11 @@ object SduiCheck {
                         ls.flatMap { listOfNotNull(it.kind, it.comment.ifBlank { null }) }.distinct().joinToString("; "),
                     ).joinToString("|") { it.replace("|", "/").replace("\n", " ") }
                 }
+            store.plan = lessons.map { l ->
+                listOf(l.begins.toLocalDate().toString(), l.hour, l.short, l.subject,
+                    listOfNotNull(l.kind, l.comment.ifBlank { null }).joinToString("; "))
+                    .joinToString("|") { it.replace("|", "/").replace("\n", " ") }
+            }
             store.lastError = ""
 
             val key = "$day:" + matches.joinToString(",") { it.subject }

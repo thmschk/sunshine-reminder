@@ -80,6 +80,7 @@ import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
 import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
@@ -266,9 +267,6 @@ fun AppScreen(
                 onOrder = { onOpenOrder(settings.daysAhead) },
             )
 
-            // Direkt unter dem Essen: der zweite Blick am Vorabend.
-            SduiCard(refreshKey = workInfos to sduiVersion, onEdit = { showSdui = true })
-
             // Die App kann nicht merken, dass Android sie nicht mehr weckt —
             // ein ausgefallener Lauf sieht von innen aus wie "alles bestellt".
             // Also wird nachgerechnet, wann der letzte Lauf faellig gewesen waere.
@@ -295,6 +293,12 @@ fun AppScreen(
                 )
             }
 
+            // Optionaler Stundenplan: nur wenn Sdui eingerichtet ist, bekommt jeder Tag eine Zeitleiste.
+            val sdui = remember(workInfos, sduiVersion) { SduiView.load(context) }
+            sdui?.error?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+
             if (days.isNotEmpty()) {
                 Text(
                     "DIE NÄCHSTEN TAGE",
@@ -309,7 +313,13 @@ fun AppScreen(
                     // Kurz halten: der Blick nach vorn, nicht die ganze Vorwarnzeit.
                     days.take(DAY_LIST_LENGTH).forEachIndexed { i, day ->
                         if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                        DayRow(day, onOrder = { onOpenOrder(settings.daysAhead) })
+                        DayRow(
+                            day,
+                            timetable = sdui?.let { it.plan[day.date].orEmpty() },
+                            maxHour = sdui?.maxHour ?: 0,
+                            selected = sdui?.subjects.orEmpty(),
+                            onOrder = { onOpenOrder(settings.daysAhead) },
+                        )
                     }
                 }
             }
@@ -678,7 +688,13 @@ private fun HeroCard(
 }
 
 @Composable
-private fun DayRow(day: DayLine, onOrder: () -> Unit) {
+private fun DayRow(
+    day: DayLine,
+    timetable: Map<Int, List<PlanCell>>?,
+    maxHour: Int,
+    selected: Set<String>,
+    onOrder: () -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     val open = day.state == OrderState.NOT_ORDERED || day.state == OrderState.IN_CART
     val scheme = MaterialTheme.colorScheme
@@ -714,7 +730,9 @@ private fun DayRow(day: DayLine, onOrder: () -> Unit) {
                 maxLines = if (expanded) Int.MAX_VALUE else 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
+            val hasStrip = timetable != null && maxHour > 0 && timetable.isNotEmpty()
+            // Mit Zeitleiste sagt der Haken rechts schon "bestellt" — eine Zeile gespart.
+            if (!(hasStrip && day.state == OrderState.ORDERED)) Text(
                 text = when (day.state) {
                     OrderState.ORDERED -> "bestellt"
                     OrderState.NOT_ORDERED -> "offen · Tippen zum Bestellen"
@@ -730,6 +748,9 @@ private fun DayRow(day: DayLine, onOrder: () -> Unit) {
                     else -> scheme.error
                 },
             )
+            if (hasStrip) {
+                TimetableStrip(checkNotNull(timetable), maxHour, selected)
+            }
         }
         val (symbol, bg, fg) = when {
             day.state == OrderState.ORDERED -> Triple("✓", OkContainer, OkGreen)
@@ -834,3 +855,22 @@ private fun NoticeCard(
     }
 }
 
+
+/** Was die Startseite vom Sdui-Bereich braucht; null, wenn er nicht genutzt wird. */
+private class SduiView(
+    val plan: Map<LocalDate, Map<Int, List<PlanCell>>>,
+    val maxHour: Int,
+    val subjects: Set<String>,
+    val error: String?,
+) {
+    companion object {
+        fun load(context: Context): SduiView? {
+            val store = SduiStore(context)
+            if (!store.isConfigured) return null
+            val plan = parsePlan(store.plan)
+            // Gleiche Zellbreite in allen Zeilen: die spaeteste Stunde des ganzen Plans.
+            val maxHour = plan.values.flatMap { it.keys }.maxOrNull() ?: 0
+            return SduiView(plan, maxHour, store.subjects, store.lastError.ifBlank { null })
+        }
+    }
+}

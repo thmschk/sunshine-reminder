@@ -1,6 +1,18 @@
 package io.github.thmschk.ibswatch.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -176,11 +188,13 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 }
-                Button(
-                    onClick = { editLogin = false; connect() },
-                    enabled = !busy && identifier.isNotBlank() && password.isNotBlank() && school.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(if (connected) "Neu laden" else "Verbinden") }
+                if (editLogin) {
+                    Button(
+                        onClick = { editLogin = false; connect() },
+                        enabled = !busy && identifier.isNotBlank() && password.isNotBlank() && school.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Verbinden") }
+                }
                 if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
 
@@ -200,16 +214,7 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
 
                 if (known.isNotEmpty()) {
                     HorizontalDivider()
-                    Text("Erinnern an", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        known.forEach { subject ->
-                            FilterChip(
-                                selected = subject in chosen,
-                                onClick = { chosen = if (subject in chosen) chosen - subject else chosen + subject },
-                                label = { Text(subject) },
-                            )
-                        }
-                    }
+                    SubjectDropdown(known, chosen) { chosen = it }
                 }
 
                 if (store.isConfigured) {
@@ -249,83 +254,96 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
     )
 }
 
+/** Eine Stunde in der Zeitleiste; mehrere Eintraege = parallele Kurse. */
+data class PlanCell(val short: String, val subject: String, val note: String)
+
+/** Plan aus dem [SduiStore] je Tag und Stundennummer. */
+fun parsePlan(lines: List<String>): Map<LocalDate, Map<Int, List<PlanCell>>> =
+    lines.mapNotNull { line ->
+        val p = line.split("|")
+        val date = runCatching { LocalDate.parse(p[0]) }.getOrNull() ?: return@mapNotNull null
+        val hour = p.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+        Triple(date, hour, PlanCell(p.getOrElse(2) { "" }, p.getOrElse(3) { "" }, p.getOrElse(4) { "" }))
+    }
+        .groupBy { it.first }
+        .mapValues { (_, v) -> v.groupBy({ it.second }, { it.third }) }
+
 /** Blau fuer den Stundenplan — hebt sich vom Gelb/Gruen/Rot des Essens ab. */
-private val TimetableContainer = Color(0xFFDCE8F7)
-private val TimetableOnContainer = Color(0xFF14304F)
+private val TimetableHighlight = Color(0xFF14304F)
+private val TimetableCell = Color(0xFFEEF1F5)
+private val TimetableText = Color(0xFF4D5968)
 
-/** Startseiten-Karte, nur wenn Sdui eingerichtet ist. */
+/**
+ * Der Schultag als Leiste gleich breiter Zellen, eine je Stunde 1..[maxHour].
+ * Freistunden bleiben als Luecke stehen, damit die Stunden untereinander
+ * in allen Zeilen an derselben Stelle liegen. Gewaehlte Faecher sind dunkel.
+ */
 @Composable
-fun SduiCard(refreshKey: Any, onEdit: () -> Unit) {
-    val context = LocalContext.current
-    val store = remember { SduiStore(context) }
-    val configured = remember(refreshKey) { store.isConfigured }
-    if (!configured) return
-
-    val subjects = remember(refreshKey) { store.subjects.sortedWith(String.CASE_INSENSITIVE_ORDER) }
-    val day = remember(refreshKey) { store.nextDay.let { runCatching { LocalDate.parse(it) }.getOrNull() } }
-    val matches = remember(refreshKey) { store.nextMatches }
-    val lessons = remember(refreshKey) { store.nextLessons }
-    val error = remember(refreshKey) { store.lastError }
-    var showPlan by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = TimetableContainer, contentColor = TimetableOnContainer),
+fun TimetableStrip(slots: Map<Int, List<PlanCell>>, maxHour: Int, selected: Set<String>) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    "Stundenplan" + (store.childName.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(
-                    onClick = onEdit,
-                    colors = ButtonDefaults.textButtonColors(contentColor = TimetableOnContainer),
-                ) { Text("Fächer") }
-            }
-            when {
-                error.isNotBlank() -> Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                subjects.isEmpty() -> Text("Noch kein Fach ausgewählt.", style = MaterialTheme.typography.bodyMedium)
-                day == null -> Text("Noch nicht geprüft.", style = MaterialTheme.typography.bodyMedium)
-                matches.isEmpty() -> Text(
-                    "${dayLabel(day)}: nichts davon (${subjects.joinToString(", ")})",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                else -> {
-                    Text(dayLabel(day), style = MaterialTheme.typography.labelLarge)
-                    matches.forEach { Text(it, style = MaterialTheme.typography.headlineSmall) }
-                }
-            }
-            if (day != null && lessons.isNotEmpty()) {
-                TextButton(
-                    onClick = { showPlan = !showPlan },
-                    colors = ButtonDefaults.textButtonColors(contentColor = TimetableOnContainer),
-                ) { Text((if (showPlan) "▾ " else "▸ ") + "Ganzer Plan für ${dayLabel(day)}") }
-                if (showPlan) {
-                    lessons.forEach { line ->
-                        val parts = line.split("|")
-                        val (hour, time, subject) = parts.take(3).let { it + List(3 - it.size) { "" } }
-                        val note = parts.getOrNull(3).orEmpty()
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(hour, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(28.dp))
-                            Text(time, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(48.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    subject,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (subjects.any { it in subject.split(" / ") }) FontWeight.Bold else null,
-                                )
-                                if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
+        for (hour in 1..maxHour) {
+            val cells = slots[hour].orEmpty()
+            val hl = cells.any { it.subject in selected }
+            val note = cells.any { it.note.isNotBlank() }
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(18.dp)
+                    .background(
+                        when {
+                            cells.isEmpty() -> Color.Transparent
+                            hl -> TimetableHighlight
+                            else -> TimetableCell
+                        },
+                        RoundedCornerShape(4.dp),
+                    ),
+            ) {
+                if (cells.isNotEmpty()) {
+                    Text(
+                        // Parallele Kurse passen nicht in eine Zelle: das gewaehlte (sonst erste) Kuerzel + "+".
+                        (cells.firstOrNull { it.subject in selected } ?: cells.first()).short +
+                            (if (cells.map { it.short }.distinct().size > 1) "+" else "") +
+                            (if (note) "*" else ""),
+                        fontSize = 9.sp,
+                        fontWeight = if (hl) FontWeight.Bold else null,
+                        color = if (hl) Color.White else TimetableText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                    )
                 }
             }
         }
     }
 }
 
-/** "morgen (Do 01.10.)" oder "Mo 05.10." */
-private fun dayLabel(day: LocalDate): String =
-    if (day.isEqual(LocalDate.now().plusDays(1))) "morgen (${De.chip(day)})" else De.chip(day)
+/** Mehrfachauswahl als Dropdown mit Haken; bleibt beim Antippen offen. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SubjectDropdown(known: List<String>, chosen: Set<String>, onChange: (Set<String>) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
+        OutlinedTextField(
+            value = known.filter { it in chosen }.joinToString(", ").ifBlank { "keins" },
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Erinnern an") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = open) },
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
+        )
+        ExposedDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            known.forEach { subject ->
+                DropdownMenuItem(
+                    text = { Text(subject) },
+                    leadingIcon = {
+                        Checkbox(checked = subject in chosen, onCheckedChange = null)
+                    },
+                    onClick = { onChange(if (subject in chosen) chosen - subject else chosen + subject) },
+                )
+            }
+        }
+    }
+}
