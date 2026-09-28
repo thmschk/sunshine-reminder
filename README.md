@@ -27,7 +27,8 @@ tadellos, nur auslösen muss sie jemand anders. Dafür ist die
 > **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
 > Sunshine Catering oder zum Hersteller von IBS5. Es benutzt dieselbe
 > Schnittstelle wie deren Webseite, mit den Zugangsdaten des jeweiligen
-> Nutzers, und liest ausschließlich — es bestellt nichts und ändert nichts.
+> Nutzers. Bestellt wird nur, wenn man in der App ausdrücklich Gerichte wählt
+> und bestätigt — von selbst bestellt oder ändert sie nichts.
 > Der Anbieter kann die Webseite jederzeit ändern; dann funktioniert die App
 > nicht mehr. Nutzung auf eigene Verantwortung.
 
@@ -45,6 +46,12 @@ Bestellen ist noch möglich:
 
 In der App steht zusätzlich der Wochenplan mit den Gerichten — praktisch, wenn
 man nur kurz wissen will, was es gibt.
+
+Bestellen geht auch direkt aus der App: „Jetzt bestellen" in der Erinnerung
+oder „Offene Tage bestellen" zeigt die offenen Tage mit ihren Gerichten, „Alle
+bestellbaren Tage" die nächsten vier Wochen. Man wählt je Tag ein Gericht und
+bestätigt. Abgeschickt wird nur, wenn im Warenkorb genau diese Auswahl liegt;
+danach prüft die App im Wochenplan nach, ob alles als bestellt erscheint.
 
 Unterschieden werden sechs Zustände je Tag, damit die Meldung stimmt:
 
