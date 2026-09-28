@@ -53,6 +53,13 @@ bestellbaren Tage" die nächsten vier Wochen. Man wählt je Tag ein Gericht und
 bestätigt. Abgeschickt wird nur, wenn im Warenkorb genau diese Auswahl liegt;
 danach prüft die App im Wochenplan nach, ob alles als bestellt erscheint.
 
+Wahlweise gibt es einen Bereich für den **Stundenplan aus Sdui**
+(Einstellungen → „Stundenplan (Sdui) einrichten"). Dort wählt man Fächer wie
+Sport oder Schwimmen; beim täglichen Prüfen erinnert die App dann am Vortag
+daran. Wer Sdui nicht nutzt, lässt den Bereich einfach leer. Auch hier gilt:
+keine offizielle Schnittstelle von Sdui, die App liest nur mit den eigenen
+Zugangsdaten mit, die auf dem Gerät bleiben.
+
 Unterschieden werden sechs Zustände je Tag, damit die Meldung stimmt:
 
 | Zustand | Bedeutung | Reaktion |
