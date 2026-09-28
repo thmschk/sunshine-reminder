@@ -78,12 +78,11 @@ import io.github.thmschk.ibswatch.data.DayLine
 import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
-import java.text.DateFormat
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
-import java.util.Date
+import java.util.Locale
 
 /**
  * Ziel des Herzens in der Fusszeile.
@@ -533,8 +532,8 @@ private fun LoginCard(onSave: (String, String) -> Unit) {
     }
 }
 
-/** So viele Tage zeigt die Liste auf der Startseite. */
-private const val DAY_LIST_LENGTH = 5
+/** So viele Tage zeigt die Liste auf der Startseite — mehr wirkt gequetscht. */
+private const val DAY_LIST_LENGTH = 3
 
 /** Gelb = offen, Gruen = erledigt, Rot = zu spaet oder unklar. */
 private val OkGreen = Color(0xFF2E7D32)
@@ -731,6 +730,17 @@ private fun DayRow(day: DayLine, onOrder: () -> Unit) {
     }
 }
 
+/** "15:40", "gestern 15:40" oder "25.09. 15:40" — kurz genug fuer die Fusszeile. */
+private fun checkedLabel(epochMillis: Long, now: LocalDateTime): String {
+    val at = LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault())
+    val time = "%02d:%02d".format(Locale.ROOT, at.hour, at.minute)
+    return when (at.toLocalDate()) {
+        now.toLocalDate() -> time
+        now.toLocalDate().minusDays(1) -> "gestern $time"
+        else -> "%02d.%02d. %s".format(Locale.ROOT, at.dayOfMonth, at.monthValue, time)
+    }
+}
+
 /**
  * Prueflauf-Zeiten klein am Rand, dazu das Herz.
  *
@@ -746,15 +756,16 @@ private fun Footer(lastRun: Long, settings: SettingsStore, onHeart: () -> Unit) 
             .padding(start = 20.dp, end = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val last = if (lastRun > 0) {
-            "Geprüft " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(lastRun)) + " · "
-        } else {
-            ""
-        }
+        val now = LocalDateTime.now()
+        val last = if (lastRun > 0) "Geprüft ${checkedLabel(lastRun, now)} · " else ""
+        // Eine Zeile: "gegen" ist hier entbehrlich, die Uhrzeit ist ohnehin ein Richtwert.
+        val next = CheckSchedule.nextRunLabel(now, settings.checkTime).replace(" gegen ", " ")
         Text(
-            last + "nächste Prüfung " + CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime),
+            last + "nächste $next",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         // Das Herz allein hiesse in Apps "Favorit" — was gemeint ist, sagt der
