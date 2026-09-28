@@ -3,7 +3,13 @@ package io.github.thmschk.ibswatch.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -69,7 +75,6 @@ import io.github.thmschk.ibswatch.core.OrderState
 import io.github.thmschk.ibswatch.core.UpdateCheck
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
-import io.github.thmschk.ibswatch.data.DayFilter
 import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
@@ -118,57 +123,88 @@ fun AppScreen(
     var showDonate by remember { mutableStateOf(false) }
 
     if (showSettings) {
-        SettingsDialog(settings = settings, onDismiss = { showSettings = false })
+        SettingsDialog(
+            settings = settings,
+            onDismiss = { showSettings = false },
+            onDeleteCredentials = {
+                credentials.clear()
+                results.clear()
+                CheckScheduler.cancel(context)
+                configured = false
+                showSettings = false
+            },
+        )
     }
     if (showDonate) {
         DonateDialog(onDismiss = { showDonate = false })
     }
+
+    // Der Worker laeuft in einem anderen Prozesskontext; ohne diese
+    // Beobachtung erfaehrt die Oberflaeche nie, dass er fertig ist,
+    // und bleibt auf "Noch nicht geprueft" stehen.
+    val workInfos by WorkManager.getInstance(context)
+        .getWorkInfosForUniqueWorkFlow(CheckScheduler.WORK_NAME_NOW)
+        .collectAsState(initial = emptyList())
+    val running = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             // Ab Android 15 zeichnen Apps unter Status- und Navigationsleiste;
             // ohne diesen Abstand klebt die Ueberschrift an der Uhrzeit.
-            .safeDrawingPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(start = 24.dp, end = 24.dp, bottom = 24.dp, top = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .safeDrawingPadding(),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
-            // Erst sinnvoll, wenn ueberhaupt geprueft wird.
-            if (configured) {
-                IconButton(onClick = { showSettings = true }) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_settings),
-                        contentDescription = "Einstellungen",
-                    )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                // Die Webseite ist nur noch der Ausweg — bestellt wird in der App.
+                IconButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(IbsClient.WEB_URL))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
+                ) {
+                    Icon(painterResource(R.drawable.ic_open_in_new), contentDescription = "Bestellseite öffnen")
+                }
+                if (configured) {
+                    IconButton(onClick = { CheckScheduler.runNow(context) }, enabled = !running) {
+                        Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Jetzt prüfen")
+                    }
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(painterResource(R.drawable.ic_settings), contentDescription = "Einstellungen")
+                    }
                 }
             }
-        }
 
-        if (!configured) {
-            LoginCard(
-                onSave = { customerNo, password ->
-                    credentials.customerNo = customerNo
-                    credentials.password = password
-                    CheckScheduler.scheduleNext(context)
-                    CheckScheduler.runNow(context)
-                    configured = true
-                },
-            )
-        } else {
-            // Der Worker laeuft in einem anderen Prozesskontext; ohne diese
-            // Beobachtung erfaehrt die Oberflaeche nie, dass er fertig ist,
-            // und bleibt auf "Noch nicht geprueft" stehen.
-            val workInfos by WorkManager.getInstance(context)
-                .getWorkInfosForUniqueWorkFlow(CheckScheduler.WORK_NAME_NOW)
-                .collectAsState(initial = emptyList())
-            val running = workInfos.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+            if (!configured) {
+                LoginCard(
+                    onSave = { customerNo, password ->
+                        credentials.customerNo = customerNo
+                        credentials.password = password
+                        CheckScheduler.scheduleNext(context)
+                        CheckScheduler.runNow(context)
+                        configured = true
+                    },
+                )
+                return@Column
+            }
+
+            if (running) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 
             // Ohne diesen Hinweis laeuft die App voellig unauffaellig weiter und
             // meldet ins Leere — von aussen nicht von "alles bestellt" zu
@@ -205,70 +241,78 @@ fun AppScreen(
                 )
             }
 
-            StatusCard(results, settings, running = running, refreshKey = workInfos)
+            // refreshKey erzwingt das Neulesen, sobald sich der Work-Zustand aendert.
+            val days = remember(workInfos) { results.lastDays.filter { it.state != OrderState.NO_OFFER } }
+            val lastRun = remember(workInfos) { results.lastRunEpochMillis }
+            val failed = remember(workInfos) { results.lastFailed }
+            val summary = remember(workInfos) { results.lastSummary }
+            val firstName = remember(workInfos) { results.firstName }
 
-            // PoC: Idee 1 = die gemeldeten offenen Tage, Idee 2 = alles, was bestellbar ist.
-            val hasOpen = remember(workInfos) {
-                results.lastDays.any { it.state == OrderState.NOT_ORDERED || it.state == OrderState.IN_CART }
-            }
-            if (hasOpen) {
-                Button(
-                    onClick = { onOpenOrder(settings.daysAhead) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Offene Tage bestellen") }
-            }
-            OutlinedButton(
-                onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Alle bestellbaren Tage") }
-            // Der Griff, den man nach einer Erinnerung braucht — bisher gab es
-            // ihn nur in der Benachrichtigung, also genau dann nicht, wenn man
-            // sie schon weggewischt hatte.
-            Button(
-                onClick = {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(IbsClient.WEB_URL))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Bestellseite öffnen") }
+            HeroCard(
+                days = days,
+                checked = lastRun > 0L,
+                failedReason = summary.takeIf { failed },
+                firstName = firstName,
+                onOrder = { onOpenOrder(settings.daysAhead) },
+            )
 
-            OutlinedButton(
-                onClick = { CheckScheduler.runNow(context) },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Jetzt prüfen") }
-            // Fusszeile: links das Selten-und-Endgueltige, rechts das
-            // Freiwillige. Beides gehoert nicht in den taeglichen Blick, also
-            // teilen sie sich eine Zeile am Ende.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    onClick = {
-                        credentials.clear()
-                        results.clear()
-                        CheckScheduler.cancel(context)
-                        configured = false
+            // Die App kann nicht merken, dass Android sie nicht mehr weckt —
+            // ein ausgefallener Lauf sieht von innen aus wie "alles bestellt".
+            // Also wird nachgerechnet, wann der letzte Lauf faellig gewesen waere.
+            val overdue = remember(workInfos) {
+                CheckSchedule.isOverdue(
+                    lastRun.takeIf { it > 0L }
+                        ?.let { LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault()) },
+                    LocalDateTime.now(),
+                    settings.checkTime,
+                )
+            }
+            if (overdue) {
+                NoticeCard(
+                    text = "Die Prüfung läuft nicht mehr von selbst — der letzte Lauf ist " +
+                        "überfällig. Häufigste Ursache ist die Akku-Optimierung des " +
+                        "Herstellers: Einstellungen → Apps → Akku → „Uneingeschränkt“.",
+                    actionLabel = "Prüfung neu einplanen",
+                    onAction = {
+                        CheckScheduler.scheduleNext(context, ExistingWorkPolicy.REPLACE)
+                        CheckScheduler.runNow(context)
                     },
-                ) { Text("Zugangsdaten löschen") }
+                    container = MaterialTheme.colorScheme.errorContainer,
+                    onContainer = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
 
-                // Das Herz allein hiesse in Apps "Favorit" — was gemeint ist,
-                // sagt der Dialog dahinter. Der Tipp darauf kostet daher nichts
-                // und fuehrt erst nach dem Lesen aus der App heraus.
-                if (DONATE_URL.isNotBlank()) {
-                    IconButton(onClick = { showDonate = true }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_heart),
-                            contentDescription = "Über diese App",
-                            tint = DonatePink,
-                            modifier = Modifier.size(18.dp),
-                        )
+            if (days.isNotEmpty()) {
+                Text(
+                    "DIE NÄCHSTEN TAGE",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+                )
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                ) {
+                    days.forEachIndexed { i, day ->
+                        if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        DayRow(day, onOrder = { onOpenOrder(settings.daysAhead) })
                     }
                 }
             }
+
+            TextButton(
+                onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS) },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.secondary),
+            ) { Text("Alle bestellbaren Tage →") }
+        }
+
+        if (configured) {
+            Footer(
+                lastRun = remember(workInfos) { results.lastRunEpochMillis },
+                settings = settings,
+                onHeart = { showDonate = true },
+            )
         }
     }
 }
@@ -350,7 +394,11 @@ private fun DonateDialog(onDismiss: () -> Unit) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsDialog(settings: SettingsStore, onDismiss: () -> Unit) {
+private fun SettingsDialog(
+    settings: SettingsStore,
+    onDismiss: () -> Unit,
+    onDeleteCredentials: () -> Unit,
+) {
     val context = LocalContext.current
     var daysAhead by remember { mutableStateOf(settings.daysAhead) }
     val timeState = rememberTimePickerState(
@@ -394,6 +442,14 @@ private fun SettingsDialog(settings: SettingsStore, onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 TimeInput(state = timeState)
+
+                HorizontalDivider()
+
+                // Selten und endgueltig — deshalb hier und nicht auf der Startseite.
+                TextButton(
+                    onClick = onDeleteCredentials,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Zugangsdaten löschen") }
             }
         },
         confirmButton = {
@@ -476,99 +532,238 @@ private fun LoginCard(onSave: (String, String) -> Unit) {
     }
 }
 
+/** Gelb = offen, Gruen = erledigt, Rot = zu spaet oder unklar. */
+private val OkGreen = Color(0xFF2E7D32)
+private val OkContainer = Color(0xFFDDF0DC)
+
+/**
+ * Die eine Aussage der Startseite, mit hoechstens einem Knopf.
+ *
+ * Reihenfolge der Faelle = Dringlichkeit: was man noch aendern kann, kommt
+ * vor dem, was nur noch Information ist.
+ */
 @Composable
-private fun StatusCard(
-    results: ResultStore,
-    settings: SettingsStore,
-    running: Boolean,
-    refreshKey: Any,
+private fun HeroCard(
+    days: List<DayLine>,
+    checked: Boolean,
+    failedReason: String?,
+    firstName: String,
+    onOrder: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var filter by remember { mutableStateOf(settings.dayFilter) }
+    val open = days.filter { it.state == OrderState.NOT_ORDERED || it.state == OrderState.IN_CART }
+    val late = days.filter { it.state == OrderState.DEADLINE_PASSED }
+    val unclear = days.filter { it.state == OrderState.UNKNOWN }
+    val forName = if (firstName.isBlank()) "" else " für $firstName"
+    val scheme = MaterialTheme.colorScheme
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    val (container, onContainer) = when {
+        failedReason != null || !checked -> scheme.surfaceVariant to scheme.onSurfaceVariant
+        open.isNotEmpty() -> scheme.primaryContainer to scheme.onPrimaryContainer
+        late.isNotEmpty() || unclear.isNotEmpty() -> scheme.errorContainer to scheme.onErrorContainer
+        else -> OkContainer to scheme.onSurface
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = container, contentColor = onContainer),
+    ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (running) {
-                Text("Prüfe …", style = MaterialTheme.typography.bodyLarge)
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-            // refreshKey erzwingt das Neulesen, sobald sich der Work-Zustand aendert.
-            val summary = remember(refreshKey) { results.lastSummary }
-            val days = remember(refreshKey) { results.lastDays }
-            val lastRun = remember(refreshKey) { results.lastRunEpochMillis }
+            val big = MaterialTheme.typography.headlineSmall
+            when {
+                !checked -> Text("Noch nicht geprüft", style = big)
 
-            Text(
-                text = summary.ifBlank { "Noch nicht geprüft." },
-                style = MaterialTheme.typography.bodyLarge,
-            )
-
-            // Die App kann nicht merken, dass Android sie nicht mehr weckt —
-            // ein ausgefallener Lauf sieht von innen aus wie "alles bestellt".
-            // Also wird nachgerechnet, wann der letzte Lauf faellig gewesen waere.
-            val overdue = remember(refreshKey) {
-                CheckSchedule.isOverdue(
-                    lastRun.takeIf { it > 0L }
-                        ?.let { LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault()) },
-                    LocalDateTime.now(),
-                    settings.checkTime,
-                )
-            }
-            if (overdue) {
-                Text(
-                    "Die Prüfung läuft nicht mehr von selbst — der letzte Lauf ist " +
-                        "überfällig. Häufigste Ursache ist die Akku-Optimierung des " +
-                        "Herstellers: Einstellungen → Apps → Akku → „Uneingeschränkt“.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                TextButton(
-                    onClick = {
-                        CheckScheduler.scheduleNext(context, ExistingWorkPolicy.REPLACE)
-                        CheckScheduler.runNow(context)
-                    },
-                ) { Text("Prüfung neu einplanen") }
-            }
-
-            ChipRow(
-                title = "Angezeigte Tage",
-                options = DayFilter.entries.map { it to it.label },
-                selected = filter,
-                onSelect = { filter = it; settings.dayFilter = it },
-            )
-
-            val shown = when (filter) {
-                DayFilter.ALL -> days
-                DayFilter.PENDING -> days.filter {
-                    it.state != OrderState.ORDERED && it.state != OrderState.NO_OFFER
+                failedReason != null -> {
+                    Text("Bestellstand unbekannt", style = big)
+                    // Die Tagesliste darunter ist dann der alte Stand.
+                    Text(
+                        "$failedReason\nDie Liste unten zeigt den letzten erfolgreichen Stand.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
-                DayFilter.NONE -> emptyList()
+
+                open.isNotEmpty() -> {
+                    Text(
+                        (if (open.size == 1) "1 Tag offen" else "${open.size} Tage offen") + forName,
+                        style = big,
+                    )
+                    Text(
+                        if (open.any { it.state == OrderState.IN_CART }) {
+                            "Bestellen ist noch möglich — etwas liegt nur im Warenkorb."
+                        } else {
+                            "Bestellen ist noch möglich."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(top = 4.dp),
+                    ) {
+                        open.forEach { day ->
+                            Text(
+                                De.chip(day.date),
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier
+                                    .background(Color.White, RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = onOrder,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                    ) { Text("Jetzt bestellen") }
+                }
+
+                late.isNotEmpty() -> {
+                    Text(
+                        (if (late.size == 1) "1 Tag ohne Essen" else "${late.size} Tage ohne Essen") + forName,
+                        style = big,
+                    )
+                    Text(
+                        "Bestellschluss vorbei: " + late.joinToString { De.chip(it.date) } + " — Brot einpacken.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+
+                unclear.isNotEmpty() -> {
+                    Text("Bestellstatus unklar", style = big)
+                    Text(
+                        unclear.joinToString { De.chip(it.date) } + " — bitte auf der Bestellseite nachsehen.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+
+                days.isEmpty() -> Text("Keine Schultage im Prüfzeitraum", style = big)
+
+                else -> {
+                    Text("Alles bestellt ✓", style = big)
+                    Text("bis ${De.long(days.last().date)}", style = MaterialTheme.typography.bodyMedium)
+                    // Was als Naechstes auf den Tisch kommt — der taeglich genutzte Teil.
+                    val next = days.first()
+                    Text(
+                        "Als Nächstes · ${De.chip(next.date)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Text(next.item, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
             }
-            if (shown.isNotEmpty()) {
-                HorizontalDivider()
-                shown.forEach { DayRow(it) }
-                HorizontalDivider()
-            } else if (filter == DayFilter.PENDING && days.isNotEmpty()) {
-                Text("Nichts offen.", style = MaterialTheme.typography.bodySmall)
-            }
-            if (lastRun > 0) {
-                Text(
-                    "Zuletzt geprüft: " +
-                        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                            .format(Date(lastRun)),
-                    style = MaterialTheme.typography.bodySmall,
+        }
+    }
+}
+
+@Composable
+private fun DayRow(day: DayLine, onOrder: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val open = day.state == OrderState.NOT_ORDERED || day.state == OrderState.IN_CART
+    val scheme = MaterialTheme.colorScheme
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { if (open) onOrder() else expanded = !expanded }
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(
+            modifier = Modifier.width(40.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(De.weekdayShort(day.date), style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+            Text(day.date.dayOfMonth.toString(), style = MaterialTheme.typography.titleMedium)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            // Die Gerichtsnamen sind teils ueber 200 Zeichen lang (vollstaendige
+            // Zutatenliste). Antippen zeigt den ganzen Text — wer nach
+            // Allergenen sucht, braucht ihn vollstaendig.
+            Text(
+                text = when (day.state) {
+                    OrderState.NOT_ORDERED -> "Gericht wählen"
+                    OrderState.DEADLINE_PASSED -> "nicht bestellt"
+                    else -> day.item
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = when (day.state) {
+                    OrderState.ORDERED -> "bestellt"
+                    OrderState.NOT_ORDERED -> "offen · Tippen zum Bestellen"
+                    OrderState.IN_CART -> "nur im Warenkorb · Tippen zum Bestellen"
+                    OrderState.DEADLINE_PASSED -> "Bestellschluss vorbei · Brot einpacken"
+                    OrderState.NO_OFFER -> "kein Angebot"
+                    OrderState.UNKNOWN -> "unklar · bitte selbst nachsehen"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    open -> Color(0xFF7A5D00)
+                    day.state == OrderState.ORDERED -> scheme.onSurfaceVariant
+                    else -> scheme.error
+                },
+            )
+        }
+        val (symbol, bg, fg) = when {
+            day.state == OrderState.ORDERED -> Triple("✓", OkContainer, OkGreen)
+            open -> Triple("!", scheme.primary, scheme.onPrimary)
+            else -> Triple("✕", scheme.errorContainer, scheme.error)
+        }
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .background(bg, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(symbol, color = fg, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/**
+ * Prueflauf-Zeiten klein am Rand, dazu das Herz.
+ *
+ * Bewusst der naechste Lauf und nicht die eingestellte Zeit: "gegen 12:00"
+ * kann heute oder morgen heissen, und wer nach 12:00 etwas umstellt, wartet
+ * sonst den Rest des Tages ahnungslos.
+ */
+@Composable
+private fun Footer(lastRun: Long, settings: SettingsStore, onHeart: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 8.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val last = if (lastRun > 0) {
+            "Geprüft " + DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(lastRun)) + " · "
+        } else {
+            ""
+        }
+        Text(
+            last + "nächste Prüfung " + CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        // Das Herz allein hiesse in Apps "Favorit" — was gemeint ist, sagt der
+        // Dialog dahinter.
+        if (DONATE_URL.isNotBlank()) {
+            IconButton(onClick = onHeart) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_heart),
+                    contentDescription = "Über diese App",
+                    tint = DonatePink,
+                    modifier = Modifier.size(18.dp),
                 )
             }
-            // Bewusst der naechste Lauf und nicht die eingestellte Zeit:
-            // "gegen 12:00" kann heute oder morgen heissen, und wer nach 12:00
-            // etwas umstellt, wartet sonst den Rest des Tages ahnungslos.
-            Text(
-                "Nächste Prüfung: " +
-                    CheckSchedule.nextRunLabel(LocalDateTime.now(), settings.checkTime) + ".",
-                style = MaterialTheme.typography.bodySmall,
-            )
         }
     }
 }
@@ -607,65 +802,3 @@ private fun NoticeCard(
     }
 }
 
-@Composable
-private fun DayRow(day: DayLine) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { expanded = !expanded }
-            .padding(vertical = 6.dp),
-    ) {
-        Text(
-            text = (if (expanded) "▾ " else "▸ ") + De.short(day.date) + when (day.state) {
-                OrderState.ORDERED -> ""
-                OrderState.NOT_ORDERED -> " — nicht bestellt"
-                OrderState.IN_CART -> " — nur im Warenkorb!"
-                OrderState.DEADLINE_PASSED -> " — nicht bestellt, zu spät"
-                OrderState.NO_OFFER -> " — kein Angebot"
-                OrderState.UNKNOWN -> " — unklar"
-            },
-            style = MaterialTheme.typography.labelLarge,
-            color = if (day.state == OrderState.ORDERED) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.error
-            },
-        )
-        if (day.item.isNotBlank()) {
-            // Die Gerichtsnamen sind teils ueber 200 Zeichen lang (vollstaendige
-            // Zutatenliste). Eingeklappt bleibt die Liste ueberschaubar, beim
-            // Antippen steht der ganze Text da — wer nach Allergenen sucht,
-            // braucht ihn vollstaendig.
-            Text(
-                text = day.item,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (expanded) Int.MAX_VALUE else 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun <T> ChipRow(
-    title: String,
-    options: List<Pair<T, String>>,
-    selected: T,
-    onSelect: (T) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(title, style = MaterialTheme.typography.labelMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { (value, label) ->
-                FilterChip(
-                    selected = selected == value,
-                    onClick = { onSelect(value) },
-                    label = { Text(label) },
-                )
-            }
-        }
-    }
-}

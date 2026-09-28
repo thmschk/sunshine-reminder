@@ -27,4 +27,10 @@ object De {
     fun long(date: LocalDate): String = "${weekday(date)}, ${dmy(date)}"
 
     fun short(date: LocalDate): String = "${SHORT[date.dayOfWeek.value - 1]} ${dmy(date)}"
+
+    /** "Mi 14.10." — fuer knappe Chips, in denen das Jahr nur stoert. */
+    fun chip(date: LocalDate): String =
+        "%s %02d.%02d.".format(Locale.ROOT, SHORT[date.dayOfWeek.value - 1], date.dayOfMonth, date.monthValue)
+
+    fun weekdayShort(date: LocalDate): String = SHORT[date.dayOfWeek.value - 1]
 }

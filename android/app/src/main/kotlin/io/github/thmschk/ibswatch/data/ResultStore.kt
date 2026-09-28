@@ -22,6 +22,19 @@ class ResultStore(context: Context) {
         get() = prefs.getLong(KEY_LAST_RUN, 0L)
         set(value) = prefs.edit().putLong(KEY_LAST_RUN, value).apply()
 
+    /** Vorname aus dem letzten erfolgreichen Login — fuer die Statuskarte. */
+    var firstName: String
+        get() = prefs.getString(KEY_FIRST_NAME, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_FIRST_NAME, value).apply()
+
+    /**
+     * true = der letzte Lauf konnte nicht pruefen. Die Tagesliste ist dann der
+     * alte Stand und darf nicht als aktuell ausgegeben werden.
+     */
+    var lastFailed: Boolean
+        get() = prefs.getBoolean(KEY_FAILED, false)
+        set(value) = prefs.edit().putBoolean(KEY_FAILED, value).apply()
+
     /** Der letzte Lauf, Tag fuer Tag — damit die App zeigt, WAS bestellt ist. */
     var lastDays: List<DayLine>
         get() = prefs.getString(KEY_DAYS, "").orEmpty()
@@ -77,5 +90,7 @@ class ResultStore(context: Context) {
         const val KEY_DAYS = "last_days"
         const val KEY_AVAILABLE = "available_version"
         const val KEY_UPDATE_NOTIFIED = "update_notified_for"
+        const val KEY_FIRST_NAME = "first_name"
+        const val KEY_FAILED = "last_failed"
     }
 }

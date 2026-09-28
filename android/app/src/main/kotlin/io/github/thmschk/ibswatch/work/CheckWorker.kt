@@ -62,6 +62,8 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             is CheckResult.Alarm -> results.lastDays = outcome.days.map { DayLine.from(it) }
             is CheckResult.Failed -> Unit
         }
+        results.lastFailed = outcome is CheckResult.Failed
+        checker.lastProfile?.let { results.firstName = it.firstName }
 
         when (outcome) {
             is CheckResult.Ok -> {

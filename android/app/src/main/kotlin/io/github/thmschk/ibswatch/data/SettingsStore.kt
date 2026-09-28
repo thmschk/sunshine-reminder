@@ -4,13 +4,6 @@ import android.content.Context
 import io.github.thmschk.ibswatch.core.CheckSchedule
 import java.time.LocalTime
 
-/** Welche Tage die Wochenliste zeigt. */
-enum class DayFilter(val label: String) {
-    ALL("Alle"),
-    PENDING("Nur offene"),
-    NONE("Keine"),
-}
-
 /** Einstellungen, die der Nutzer drehen kann. Bewusst wenige. */
 class SettingsStore(context: Context) {
 
@@ -45,17 +38,11 @@ class SettingsStore(context: Context) {
             .putInt(KEY_CHECK_TIME, value.hour * 60 + value.minute)
             .apply()
 
-    var dayFilter: DayFilter
-        get() = runCatching { DayFilter.valueOf(prefs.getString(KEY_FILTER, "").orEmpty()) }
-            .getOrDefault(DayFilter.ALL)
-        set(value) = prefs.edit().putString(KEY_FILTER, value.name).apply()
-
     companion object {
         const val DEFAULT_DAYS_AHEAD = 7
         const val MIN_DAYS_AHEAD = 1
         const val MAX_DAYS_AHEAD = 14
         private const val KEY_DAYS_AHEAD = "days_ahead"
-        private const val KEY_FILTER = "day_filter"
         private const val KEY_CHECK_TIME = "check_time_minutes"
     }
 }
