@@ -293,7 +293,8 @@ fun AppScreen(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
                 ) {
-                    days.forEachIndexed { i, day ->
+                    // Kurz halten: der Blick nach vorn, nicht die ganze Vorwarnzeit.
+                    days.take(DAY_LIST_LENGTH).forEachIndexed { i, day ->
                         if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                         DayRow(day, onOrder = { onOpenOrder(settings.daysAhead) })
                     }
@@ -531,6 +532,9 @@ private fun LoginCard(onSave: (String, String) -> Unit) {
         }
     }
 }
+
+/** So viele Tage zeigt die Liste auf der Startseite. */
+private const val DAY_LIST_LENGTH = 5
 
 /** Gelb = offen, Gruen = erledigt, Rot = zu spaet oder unklar. */
 private val OkGreen = Color(0xFF2E7D32)

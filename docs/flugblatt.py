@@ -45,10 +45,10 @@ block("Kostenlos, ohne Werbung, ohne Server: Geprüft wird auf dem Handy, die "
 # --- Screenshots, auf den Inhalt beschnitten ------------------------------
 sh = 505
 top = y
-# Ausschnitt je Bild: die Startseite reicht bis unter den Link "Alle bestellbaren Tage".
+# Ausschnitt je Bild: Startseite bis unter "Alle bestellbaren Tage", Einstellungen bis unter den Dialog.
 for path, x, box in (
     ("screenshot-status.png", M + 70, (0, 120, 1080, 1990)),
-    ("screenshot-einstellungen.png", W - M - 70 - 340, (0, 120, 1080, 1900)),
+    ("screenshot-einstellungen.png", W - M - 70 - 340, (0, 120, 1080, 2060)),
 ):
     s = Image.open(HERE / path).convert("RGB").crop(box)
     s = s.resize((int(s.width * sh / s.height), sh), Image.LANCZOS)
