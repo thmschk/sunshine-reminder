@@ -55,6 +55,7 @@ class SduiClientTest {
         assertEquals("Bearer tok", req.getHeader("Authorization"))
         assertEquals(9, lessons.size)
         assertEquals(8, lessons.first().begins.hour)
+        assertEquals("Sp", lessons.first().short)
     }
 
     @Test

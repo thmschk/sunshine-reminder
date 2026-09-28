@@ -29,6 +29,8 @@ data class Lesson(
     val begins: LocalDateTime,
     val ends: LocalDateTime,
     val subject: String,
+    /** Kuerzel fuer die Zeitleiste ("D", "Sp"); faellt auf den Fachanfang zurueck. */
+    val short: String = subject.take(2),
     /** "2" = 2. Stunde; leer, wenn Sdui keine Stundennummer liefert. */
     val hour: String,
     /** Art der Abweichung; bisher nur null gesehen, Werte fuer Ausfall/Vertretung unbekannt. */
@@ -104,6 +106,7 @@ class SduiClient(
             begins = time(o["begins_at"]),
             ends = time(o["ends_at"]),
             subject = s(meta, "displayname").ifBlank { s(meta, "shortname") },
+            short = s(meta, "shortname").ifBlank { s(meta, "displayname").take(2) },
             hour = s(meta, "displayname_hour"),
             kind = s(o, "kind").ifBlank { null },
             comment = s(o, "comment"),

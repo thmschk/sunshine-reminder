@@ -60,6 +60,14 @@ class SduiStore(context: Context) {
         get() = prefs.getString("next_lessons", "").orEmpty().lines().filter { it.isNotBlank() }
         set(v) = prefs.edit().putString("next_lessons", v.joinToString("\n")).apply()
 
+    /**
+     * Stundenplan der naechsten zwei Wochen fuer die Zeitleiste, je Stunde eine
+     * Zeile "2026-10-01|2|D|Deutsch|Hinweis". Parallele Kurse stehen als eigene Zeilen.
+     */
+    var plan: List<String>
+        get() = prefs.getString("plan", "").orEmpty().lines().filter { it.isNotBlank() }
+        set(v) = prefs.edit().putString("plan", v.joinToString("\n")).apply()
+
     var lastError: String
         get() = prefs.getString("last_error", "").orEmpty()
         set(v) = prefs.edit().putString("last_error", v).apply()
