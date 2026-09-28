@@ -48,8 +48,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Wie weit die Bestellansicht voraus laedt, wenn "alle" gewuenscht sind. */
-const val ORDER_HORIZON_ALL_DAYS = 28
+/**
+ * Wie weit die Bestellansicht voraus laedt, wenn "alle" gewuenscht sind.
+ * IBS5 stellt Speiseplaene etwa 4–5 Wochen im Voraus ein; eine Woche ohne Plan
+ * kostet nur eine Abfrage, und eine Ferienwoche dazwischen schneidet nichts ab.
+ */
+const val ORDER_HORIZON_ALL_DAYS = 56
 
 /**
  * Bestellen aus der App (PoC).
@@ -164,7 +168,7 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
         result?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
 
         if (!loading && error == null && days.isEmpty()) {
-            Text("Keine offenen Tage in den nächsten $daysAhead Tagen.")
+            Text("Keine offenen Tage, soweit Speisepläne vorliegen.")
         }
 
         days.forEach { day ->

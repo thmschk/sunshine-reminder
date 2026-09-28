@@ -220,7 +220,7 @@ fun AppScreen(
             OutlinedButton(
                 onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS) },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Alle bestellbaren Tage (4 Wochen)") }
+            ) { Text("Alle bestellbaren Tage") }
             // Der Griff, den man nach einer Erinnerung braucht — bisher gab es
             // ihn nur in der Benachrichtigung, also genau dann nicht, wenn man
             // sie schon weggewischt hatte.
