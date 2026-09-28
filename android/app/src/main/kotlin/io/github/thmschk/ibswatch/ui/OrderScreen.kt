@@ -13,7 +13,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
@@ -72,7 +71,6 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var days by remember { mutableStateOf<List<DayStatus>>(emptyList()) }
     val choice = remember { mutableStateMapOf<LocalDate, MenuEntry>() }
-    var dryRun by remember { mutableStateOf(true) }
     var confirm by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
@@ -100,18 +98,11 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
     if (confirm) {
         AlertDialog(
             onDismissRequest = { confirm = false },
-            title = { Text(if (dryRun) "Probelauf" else "Verbindlich bestellen?") },
+            title = { Text("Verbindlich bestellen?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     choice.entries.sortedBy { it.key }.forEach { (date, entry) ->
                         Text("${De.short(date)}: ${entry.name}", maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    if (dryRun) {
-                        Text(
-                            "Legt alles in den Warenkorb, prüft und nimmt es wieder heraus. " +
-                                "Es wird nichts bestellt.",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
                     }
                 }
             },
@@ -125,15 +116,13 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
                             val outcome = withContext(Dispatchers.IO) {
                                 OrderPlacer(client).place(
                                     selection,
-                                    dryRun,
+                                    dryRun = false,
                                     previouslyInCart = days.flatMap { d -> d.entries.filter { it.quantityInCart.isNotEmpty() } },
                                 ) { checker.fetch(it) }
                             }
                             result = when (outcome) {
                                 is PlaceResult.Ordered -> "Bestellt: " + outcome.dates.joinToString { De.short(it) }
-                                is PlaceResult.DryRunOk ->
-                                    "Probelauf ok — hätte bestellt werden können: " +
-                                        outcome.dates.joinToString { De.short(it) }
+                                is PlaceResult.DryRunOk -> "Probelauf ok"
                                 is PlaceResult.Aborted -> "Nicht bestellt: ${outcome.reason}"
                                 is PlaceResult.Unconfirmed ->
                                     "Abgeschickt, aber nicht bestätigt (${outcome.reason}) — bitte auf der " +
@@ -147,7 +136,7 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
                             busy = false
                         }
                     },
-                ) { Text(if (dryRun) "Probelauf starten" else "Jetzt bestellen") }
+                ) { Text("Jetzt bestellen") }
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Abbrechen") } },
         )
@@ -194,22 +183,12 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
         }
 
         if (days.isNotEmpty()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.clickable { dryRun = !dryRun },
-            ) {
-                Checkbox(checked = dryRun, onCheckedChange = { dryRun = it })
-                Text("Nur Probelauf (nichts abschicken)")
-            }
             Button(
                 onClick = { confirm = true },
                 enabled = choice.isNotEmpty() && !busy && !loading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                val n = choice.size
-                Text(
-if (dryRun) "Probelauf mit $n Essen" else "$n Essen bestellen"
-                )
+                Text("${choice.size} Essen bestellen")
             }
         }
     }
