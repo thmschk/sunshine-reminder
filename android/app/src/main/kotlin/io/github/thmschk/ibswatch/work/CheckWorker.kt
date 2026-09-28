@@ -54,6 +54,7 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         // Beiwerk, und deshalb streng abgeschirmt: ein Fehler beim
         // Update-Blick darf den Bestellstand weder faerben noch aufhalten.
         runCatching { checkForUpdate(results) }
+        runCatching { SduiCheck.run(applicationContext, today) }
 
         // Tagesliste in beiden Erfolgsfaellen sichern — sie ist der Inhalt,
         // den die Oberflaeche anzeigt, unabhaengig davon ob etwas fehlt.

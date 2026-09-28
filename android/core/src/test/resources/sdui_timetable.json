@@ -1,0 +1,244 @@
+{
+ "data": {
+  "lessons": [
+   {
+    "id": 1,
+    "begins_at": 1790834400,
+    "ends_at": 1790837100,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "1",
+     "displayname": "Sport",
+     "shortname": "Sp"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1790837400,
+    "ends_at": 1790840100,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "2",
+     "displayname": "Sport",
+     "shortname": "Sp"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1790841900,
+    "ends_at": 1790844600,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "3",
+     "displayname": "Deutsch",
+     "shortname": "De"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1790844900,
+    "ends_at": 1790847600,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "4",
+     "displayname": "Lebenskunde",
+     "shortname": "Le"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1790844900,
+    "ends_at": 1790847600,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "4",
+     "displayname": "isl. Religion",
+     "shortname": "is"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1790920800,
+    "ends_at": 1790923500,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "1",
+     "displayname": "Deutsch",
+     "shortname": "De"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1790931300,
+    "ends_at": 1790934000,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "4",
+     "displayname": "Englisch",
+     "shortname": "En"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1791180000,
+    "ends_at": 1791182700,
+    "kind": null,
+    "comment": "",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "1",
+     "displayname": "Schwimmen",
+     "shortname": "Sc"
+    }
+   },
+   {
+    "id": 1,
+    "begins_at": 1791183000,
+    "ends_at": 1791185700,
+    "kind": null,
+    "comment": "Bus 7:45",
+    "teachers": [
+     {
+      "id": 1,
+      "name": "Xy",
+      "shortcut": "Xy"
+     }
+    ],
+    "grades": [
+     {
+      "id": 1,
+      "name": "3b",
+      "shortcut": "3b"
+     }
+    ],
+    "meta": {
+     "displayname_hour": "2",
+     "displayname": "Schwimmen",
+     "shortname": "Sc"
+    }
+   }
+  ],
+  "last_updated_at": "2026-09-03T17:37:23+02:00"
+ },
+ "meta": {
+  "errors": []
+ }
+}

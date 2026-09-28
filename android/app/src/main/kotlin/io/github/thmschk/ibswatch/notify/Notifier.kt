@@ -23,6 +23,7 @@ object Notifier {
     const val CHANNEL_REMINDER = "reminder"
     const val CHANNEL_PROBLEM = "problem"
     const val CHANNEL_UPDATE = "update"
+    const val CHANNEL_TIMETABLE = "timetable"
 
     /** Oeffnet die Bestellansicht der App (PoC). */
     const val ACTION_ORDER = "io.github.thmschk.ibswatch.ORDER"
@@ -30,6 +31,7 @@ object Notifier {
     private const val ID_REMINDER = 1
     private const val ID_PROBLEM = 2
     private const val ID_UPDATE = 3
+    private const val ID_TIMETABLE = 4
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -48,6 +50,15 @@ object Notifier {
                 "Probleme bei der Pruefung",
                 NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "Meldet, wenn der Bestellstand nicht geprueft werden konnte." },
+        )
+        manager.createNotificationChannel(
+            // Eigener Kanal: wer den Stundenplan-Hinweis nicht will, schaltet
+            // ihn ab, ohne die Essenserinnerung stillzulegen.
+            NotificationChannel(
+                CHANNEL_TIMETABLE,
+                "Stundenplan",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply { description = "Erinnert am Vortag an ausgewählte Fächer (Sdui)." },
         )
         manager.createNotificationChannel(
             // Noch leiser, und als eigener Kanal, damit man genau das
@@ -107,6 +118,12 @@ object Notifier {
     fun clearReminder(context: Context) =
         NotificationManagerCompat.from(context).cancel(ID_REMINDER)
 
+    /** Erinnerung an ein Fach am naechsten Schultag — tippt man sie an, oeffnet sich die App. */
+    fun timetable(context: Context, title: String, body: String) = show(
+        context, CHANNEL_TIMETABLE, ID_TIMETABLE, title, body,
+        appTarget = true,
+    )
+
     fun problem(context: Context, title: String, body: String) =
         show(context, CHANNEL_PROBLEM, ID_PROBLEM, title, body)
 
@@ -138,6 +155,7 @@ object Notifier {
         actionLabel: String = "Bestellseite oeffnen",
         alert: Boolean = true,
         orderAction: PendingIntent? = null,
+        appTarget: Boolean = false,
     ) {
         // Ohne Berechtigung wuerde notify() still verpuffen — dann lieber nichts
         // tun, als so zu wirken, als sei benachrichtigt worden.
@@ -153,7 +171,11 @@ object Notifier {
             // Eigener Request-Code je Meldung, damit sich die Ziele nicht
             // gegenseitig ueberschreiben.
             id,
-            Intent(Intent.ACTION_VIEW, Uri.parse(url)),
+            if (appTarget) {
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            } else {
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
@@ -168,7 +190,7 @@ object Notifier {
             .setAutoCancel(true)
             .setOnlyAlertOnce(!alert)
             .apply { if (orderAction != null) addAction(0, "Jetzt bestellen", orderAction) }
-            .addAction(0, actionLabel, openTarget)
+            .apply { if (!appTarget) addAction(0, actionLabel, openTarget) }
             .build()
 
         NotificationManagerCompat.from(context).notify(id, notification)

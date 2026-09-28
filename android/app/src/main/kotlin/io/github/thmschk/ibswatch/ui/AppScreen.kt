@@ -75,6 +75,7 @@ import io.github.thmschk.ibswatch.core.OrderState
 import io.github.thmschk.ibswatch.core.UpdateCheck
 import io.github.thmschk.ibswatch.data.CredentialStore
 import io.github.thmschk.ibswatch.data.DayLine
+import io.github.thmschk.ibswatch.data.SduiStore
 import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.data.ResultStore
 import io.github.thmschk.ibswatch.work.CheckScheduler
@@ -120,6 +121,9 @@ fun AppScreen(
     var configured by remember { mutableStateOf(credentials.isConfigured) }
     var showSettings by remember { mutableStateOf(false) }
     var showDonate by remember { mutableStateOf(false) }
+    var showSdui by remember { mutableStateOf(false) }
+    // Zaehlt hoch, wenn der Sdui-Dialog etwas speichert — die Karte liest dann neu.
+    var sduiVersion by remember { mutableStateOf(0) }
 
     if (showSettings) {
         SettingsDialog(
@@ -132,7 +136,14 @@ fun AppScreen(
                 configured = false
                 showSettings = false
             },
+            onOpenSdui = {
+                showSettings = false
+                showSdui = true
+            },
         )
+    }
+    if (showSdui) {
+        SduiSetupDialog(onDismiss = { showSdui = false }, onChanged = { sduiVersion++ })
     }
     if (showDonate) {
         DonateDialog(onDismiss = { showDonate = false })
@@ -300,6 +311,8 @@ fun AppScreen(
                 }
             }
 
+            SduiCard(refreshKey = workInfos to sduiVersion, onEdit = { showSdui = true })
+
             TextButton(
                 onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS) },
                 modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -398,6 +411,7 @@ private fun SettingsDialog(
     settings: SettingsStore,
     onDismiss: () -> Unit,
     onDeleteCredentials: () -> Unit,
+    onOpenSdui: () -> Unit,
 ) {
     val context = LocalContext.current
     var daysAhead by remember { mutableStateOf(settings.daysAhead) }
@@ -442,6 +456,14 @@ private fun SettingsDialog(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 TimeInput(state = timeState)
+
+                HorizontalDivider()
+
+                // Optionaler Bereich: wer Sdui nicht nutzt, sieht nur diese Zeile.
+                val sduiConfigured = remember { SduiStore(context).isConfigured }
+                TextButton(onClick = onOpenSdui) {
+                    Text(if (sduiConfigured) "Stundenplan (Sdui) bearbeiten …" else "Stundenplan (Sdui) einrichten …")
+                }
 
                 HorizontalDivider()
 
