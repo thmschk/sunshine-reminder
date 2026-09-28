@@ -44,6 +44,17 @@ object SduiCheck {
                     if (m.notes.isNotEmpty()) append(" (").append(m.notes.joinToString("; ")).append(")")
                 }
             }
+            store.nextLessons = lessons.filter { it.begins.toLocalDate().isEqual(day) }
+                .groupBy { it.hour to it.begins }
+                .map { (key, ls) ->
+                    val (hour, begins) = key
+                    listOf(
+                        if (hour.isBlank()) "" else "$hour.",
+                        "%02d:%02d".format(begins.hour, begins.minute),
+                        ls.map { it.subject }.distinct().joinToString(" / "),
+                        ls.flatMap { listOfNotNull(it.kind, it.comment.ifBlank { null }) }.distinct().joinToString("; "),
+                    ).joinToString("|") { it.replace("|", "/").replace("\n", " ") }
+                }
             store.lastError = ""
 
             val key = "$day:" + matches.joinToString(",") { it.subject }
