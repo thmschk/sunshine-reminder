@@ -47,7 +47,7 @@ sh = 505
 top = y
 # Ausschnitt je Bild: Startseite bis unter "Alle bestellbaren Tage", Einstellungen bis unter den Dialog.
 for path, x, box in (
-    ("screenshot-status.png", M + 70, (0, 120, 1080, 1990)),
+    ("screenshot-status.png", M + 70, (0, 120, 1080, 1700)),
     ("screenshot-einstellungen.png", W - M - 70 - 340, (0, 120, 1080, 2060)),
 ):
     s = Image.open(HERE / path).convert("RGB").crop(box)
