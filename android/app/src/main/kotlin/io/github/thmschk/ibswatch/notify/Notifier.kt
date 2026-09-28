@@ -96,6 +96,8 @@ object Notifier {
         show(
             context, CHANNEL_REMINDER, ID_REMINDER, title, body, alert = alert,
             orderAction = if (orderable) orderIntent(context) else null,
+            // Bestellt wird in der App; die Webseite ist dort nur noch ein Symbol.
+            appTarget = true,
         )
 
     /** Die App mit offener Bestellansicht — ein Gericht muss dort noch gewaehlt werden. */
