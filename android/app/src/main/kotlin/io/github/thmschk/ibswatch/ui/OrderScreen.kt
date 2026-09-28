@@ -104,7 +104,7 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
     LaunchedEffect(Unit) { load() }
 
     val changes = days
-        .map { day -> DayChange(day.date, current = day.ordered(), target = picks[day.date]?.entry ?: day.ordered()) }
+        .map { day -> DayChange(day.date, current = day.ordered(), target = chosen(picks, day)) }
         .filter { it.kind != DayChange.Kind.NONE }
 
     if (confirm) {
@@ -179,7 +179,7 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
 
         days.forEach { day ->
             val current = day.ordered()
-            val chosen = picks[day.date]?.entry ?: current
+            val chosen = chosen(picks, day)
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text(
@@ -226,6 +226,14 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
 
 /** Gewaehlte Linie eines Tages; `entry == null` heisst "nichts" bzw. "abbestellen". */
 private data class Pick(val entry: MenuEntry?)
+
+/**
+ * Gewaehlte Linie eines Tages. Ohne Eintrag gilt der Ist-Stand; ein Eintrag mit
+ * `entry == null` ist eine bewusste Wahl ("abbestellen") und darf nicht auf den
+ * Ist-Stand zurueckfallen.
+ */
+private fun chosen(picks: Map<LocalDate, Pick>, day: DayStatus): MenuEntry? =
+    if (day.date in picks) picks.getValue(day.date).entry else day.ordered()
 
 /** Die bestellte Linie, falls sie sich noch aendern laesst. */
 private fun DayStatus.ordered(): MenuEntry? = entries.firstOrNull { it.isOrdered && it.selectable }
