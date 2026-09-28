@@ -532,8 +532,8 @@ private fun LoginCard(onSave: (String, String) -> Unit) {
     }
 }
 
-/** So viele Tage zeigt die Liste auf der Startseite — mehr wirkt gequetscht. */
-private const val DAY_LIST_LENGTH = 3
+/** So viele Tage zeigt die Liste auf der Startseite. */
+private const val DAY_LIST_LENGTH = 5
 
 /** Gelb = offen, Gruen = erledigt, Rot = zu spaet oder unklar. */
 private val OkGreen = Color(0xFF2E7D32)
@@ -648,14 +648,6 @@ private fun HeroCard(
                 else -> {
                     Text("Alles bestellt ✓", style = big)
                     Text("bis ${De.long(days.last().date)}", style = MaterialTheme.typography.bodyMedium)
-                    // Was als Naechstes auf den Tisch kommt — der taeglich genutzte Teil.
-                    val next = days.first()
-                    Text(
-                        "Als Nächstes · ${De.chip(next.date)}",
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                    Text(next.item, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -761,7 +753,7 @@ private fun Footer(lastRun: Long, settings: SettingsStore, onHeart: () -> Unit) 
         // Eine Zeile: "gegen" ist hier entbehrlich, die Uhrzeit ist ohnehin ein Richtwert.
         val next = CheckSchedule.nextRunLabel(now, settings.checkTime).replace(" gegen ", " ")
         Text(
-            last + "nächste $next",
+            last + "wieder $next",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
