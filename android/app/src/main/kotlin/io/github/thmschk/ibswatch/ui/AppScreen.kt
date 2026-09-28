@@ -663,7 +663,9 @@ private fun DayRow(day: DayLine, onOrder: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { if (open) onOrder() else expanded = !expanded }
+            // Offene und bestellte Tage fuehren in die Bestellansicht (dort auch
+            // Umbestellen/Abbestellen); nur Unaenderliches klappt den Namen auf.
+            .clickable { if (open || day.state == OrderState.ORDERED) onOrder() else expanded = !expanded }
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),

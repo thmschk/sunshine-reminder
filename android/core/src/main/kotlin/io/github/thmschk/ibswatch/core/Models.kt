@@ -62,6 +62,9 @@ data class MenuEntry(
     companion object {
         const val STATUS_ORDERED = "2"
         const val STATUS_NOT_ORDERED = "0"
+
+        /** Bestellt, Abbestellung liegt im Warenkorb (noch nicht abgeschickt). */
+        const val STATUS_CANCEL_IN_CART = "3"
     }
 }
 

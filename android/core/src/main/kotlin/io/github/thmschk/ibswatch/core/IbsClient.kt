@@ -118,7 +118,16 @@ class IbsClient(
      * im Wochenplan (`addToCartWithGroup`, Typ `I` = neu bestellen). Bestellt
      * ist damit noch nichts, siehe [submitCart].
      */
-    fun addToCart(entry: MenuEntry): CartResponse = CartResponse.from(
+    fun addToCart(entry: MenuEntry): CartResponse = saveOrder(entry, 1, "I")
+
+    /**
+     * Abbestellung einer bestellten Menuelinie in den Warenkorb legen (Typ `D`,
+     * Menge −1). Wirksam erst mit [submitCart]; bis dahin macht [clearCart]
+     * sie rueckgaengig.
+     */
+    fun cancelInCart(entry: MenuEntry): CartResponse = saveOrder(entry, -1, "D")
+
+    private fun saveOrder(entry: MenuEntry, quantity: Int, type: String): CartResponse = CartResponse.from(
         post(
             path("Mealplan", "SaveOrder"),
             buildJsonObject {
@@ -127,8 +136,8 @@ class IbsClient(
                     put("ServeDate", entry.date.toString())
                     put("MenuGroupId", entry.menuGroupId)
                     put("MenuLineId", entry.menuLineId)
-                    put("QuantityInShoppingCart", 1)
-                    put("ShoppingCartOrderType", "I")
+                    put("QuantityInShoppingCart", quantity)
+                    put("ShoppingCartOrderType", type)
                 }
             },
         ),

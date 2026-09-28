@@ -2,32 +2,54 @@ package io.github.thmschk.ibswatch.core
 
 import java.time.LocalDate
 
+/**
+ * Gewuenschte Aenderung an einem Tag.
+ *
+ * `current` = die bestellte Linie (oder null), `target` = die gewuenschte
+ * (oder null fuer "nichts"). Daraus ergibt sich, was zu tun ist.
+ */
+data class DayChange(val date: LocalDate, val current: MenuEntry?, val target: MenuEntry?) {
+    enum class Kind { ORDER, SWITCH, CANCEL, NONE }
+
+    val kind: Kind
+        get() = when {
+            current == null && target != null -> Kind.ORDER
+            current != null && target == null -> Kind.CANCEL
+            current != null && target != null && current.menuLineId != target.menuLineId -> Kind.SWITCH
+            else -> Kind.NONE
+        }
+}
+
 /** Ergebnis eines Bestellversuchs. */
 sealed interface PlaceResult {
-    /** Abgeschickt und im Wochenplan als bestellt wiedergefunden. */
-    data class Ordered(val dates: List<LocalDate>) : PlaceResult
+    /** Abgeschickt und im Wochenplan so wiedergefunden wie gewuenscht. */
+    data class Done(val changes: List<DayChange>) : PlaceResult
 
     /** Nur Probelauf: alles lag korrekt im Warenkorb und wurde wieder entfernt. */
-    data class DryRunOk(val dates: List<LocalDate>) : PlaceResult
+    data class DryRunOk(val changes: List<DayChange>) : PlaceResult
 
     /** Nichts abgeschickt; was hinzugefuegt wurde, ist wieder entfernt. */
     data class Aborted(val reason: String) : PlaceResult
 
     /**
-     * Abgeschickt, aber der Wochenplan zeigt nicht alles als bestellt — das
+     * Abgeschickt, aber der Wochenplan zeigt nicht alles wie gewuenscht — das
      * muss der Nutzer selbst ansehen, die App darf hier nichts behaupten.
      */
     data class Unconfirmed(val reason: String, val missing: List<LocalDate>) : PlaceResult
 }
 
 /**
- * Bestellt ausgewaehlte Menuelinien: Warenkorb fuellen, pruefen, abschicken.
+ * Bestellt, bestellt um oder bestellt ab: Warenkorb fuellen, pruefen, abschicken.
  *
  * `Cart/Order` schickt den ganzen Warenkorb ab. Deshalb wird je Tag erst die
  * Gruppe geleert (ersetzt einen liegengebliebenen Warenkorb-Eintrag desselben
  * Tages) und vor dem Abschicken verglichen, ob exakt die Auswahl im Warenkorb
  * liegt. Weicht die Zahl ab, liegt dort etwas Fremdes — dann wird nicht
  * abgeschickt.
+ *
+ * Umbestellen ist wie auf der Webseite nur ein Eintrag: die neue Linie mit
+ * Typ `I`, waehrend die alte bestellt ist. Ob der Server die alte dabei
+ * wirklich abbestellt, prueft die Nachkontrolle je Tag.
  */
 class OrderPlacer(private val client: IbsClient) {
 
@@ -37,52 +59,57 @@ class OrderPlacer(private val client: IbsClient) {
      * @param reload laedt nach dem Abschicken den Wochenplan-Stand der Tage neu.
      */
     fun place(
-        selection: List<MenuEntry>,
+        requested: List<DayChange>,
         dryRun: Boolean,
         previouslyInCart: List<MenuEntry> = emptyList(),
         reload: (List<LocalDate>) -> List<DayStatus>,
     ): PlaceResult {
-        if (selection.isEmpty()) return PlaceResult.Aborted("Nichts ausgewählt.")
-        if (selection.map { it.date }.distinct().size != selection.size) {
-            return PlaceResult.Aborted("Je Tag nur ein Essen.")
+        val changes = requested.filter { it.kind != DayChange.Kind.NONE }
+        if (changes.isEmpty()) return PlaceResult.Aborted("Nichts geändert.")
+        if (changes.map { it.date }.distinct().size != changes.size) {
+            return PlaceResult.Aborted("Je Tag nur eine Änderung.")
         }
-        selection.firstOrNull { !it.selectable }?.let {
-            return PlaceResult.Aborted("${De.short(it.date)}: nicht bestellbar.")
+        changes.firstOrNull { c -> listOfNotNull(c.current, c.target).any { !it.selectable } }?.let {
+            return PlaceResult.Aborted("${De.short(it.date)}: nicht mehr änderbar.")
         }
 
         val touched = mutableListOf<MenuEntry>()
         fun rollback() {
             touched.forEach { runCatching { client.clearCart(it.customerId, it.date, it.menuGroupId) } }
-            previouslyInCart.filter { old -> touched.any { it.date == old.date } }
+            previouslyInCart.filter { old -> touched.any { it.date.isEqual(old.date) } }
                 .forEach { runCatching { client.addToCart(it) } }
         }
 
         try {
             var total: Int? = null
-            for (entry in selection) {
-                touched += entry
-                client.clearCart(entry.customerId, entry.date, entry.menuGroupId)
-                val added = client.addToCart(entry)
+            for (change in changes) {
+                val anchor = checkNotNull(change.target ?: change.current)
+                touched += anchor
+                client.clearCart(anchor.customerId, anchor.date, anchor.menuGroupId)
+                val added = when (change.kind) {
+                    DayChange.Kind.CANCEL -> client.cancelInCart(checkNotNull(change.current))
+                    else -> client.addToCart(checkNotNull(change.target))
+                }
                 if (!added.ok) {
                     rollback()
                     return PlaceResult.Aborted(
-                        "${De.short(entry.date)}: ${added.message ?: "vom Bestellsystem abgelehnt"}",
+                        "${De.short(change.date)}: ${added.message ?: "vom Bestellsystem abgelehnt"}",
                     )
                 }
                 total = added.totalItemsInCart
             }
 
-            if (total != selection.size) {
+            if (total != changes.size) {
                 rollback()
                 return PlaceResult.Aborted(
-                    "Im Warenkorb liegen ${total ?: "?"} statt ${selection.size} Einträge — " +
+                    "Im Warenkorb liegen ${total ?: "?"} statt ${changes.size} Einträge — " +
                         "vermutlich noch etwas anderes. Nichts abgeschickt.",
                 )
             }
 
             if (dryRun) {
                 rollback()
-                return PlaceResult.DryRunOk(selection.map { it.date })
+                return PlaceResult.DryRunOk(changes)
             }
 
             val sent = client.submitCart()
@@ -95,17 +122,27 @@ class OrderPlacer(private val client: IbsClient) {
             return PlaceResult.Aborted(exc.message ?: exc.toString())
         }
 
-        val dates = selection.map { it.date }
+        val dates = changes.map { it.date }
         val after = try {
             reload(dates)
         } catch (exc: IbsException) {
             return PlaceResult.Unconfirmed("Nachprüfung fehlgeschlagen: ${exc.message}", dates)
         }
-        val missing = dates.filter { d -> after.none { it.date == d && it.state == OrderState.ORDERED } }
+        val missing = changes.filter { c -> !asRequested(c, after.firstOrNull { it.date.isEqual(c.date) }) }.map { it.date }
         return if (missing.isEmpty()) {
-            PlaceResult.Ordered(dates)
+            PlaceResult.Done(changes)
         } else {
-            PlaceResult.Unconfirmed("Nicht alle Tage erscheinen als bestellt.", missing)
+            PlaceResult.Unconfirmed("Nicht alle Tage stehen so im Wochenplan wie gewünscht.", missing)
+        }
+    }
+
+    /** Genau die Ziel-Linie bestellt — bzw. beim Abbestellen gar keine. */
+    private fun asRequested(change: DayChange, day: DayStatus?): Boolean {
+        // Eine Linie mit liegengebliebener Abbestellung (Status 3) gilt weiter als bestellt.
+        val ordered = day?.entries.orEmpty().filter { it.isOrdered }
+        return when (val target = change.target) {
+            null -> ordered.isEmpty()
+            else -> ordered.map { it.menuLineId } == listOf(target.menuLineId)
         }
     }
 }

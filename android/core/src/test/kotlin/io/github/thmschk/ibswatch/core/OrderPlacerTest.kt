@@ -39,6 +39,10 @@ class OrderPlacerTest {
     private fun line(date: LocalDate, line: String) =
         plan.statusFor(date).entries.single { it.menuLineId == line }
 
+    private fun order(e: MenuEntry) = DayChange(e.date, current = null, target = e)
+
+    private val wed = LocalDate.of(2026, 10, 14)
+
     @Test
     fun `Parser liest Gruppe, Linie und Kundennummer aus dem Markup`() {
         val e = line(mon, "828")
@@ -77,7 +81,7 @@ class OrderPlacerTest {
         server.enqueue(cart(1)) // alter Di-Eintrag zurueck
 
         val result = OrderPlacer(client).place(
-            listOf(line(mon, "828"), line(tue, "829")),
+            listOf(order(line(mon, "828")), order(line(tue, "829"))),
             dryRun = true,
             previouslyInCart = listOf(line(tue, "828")),
         ) { emptyList() }
@@ -97,7 +101,7 @@ class OrderPlacerTest {
         server.enqueue(cart(3)) // 3 statt 1: da liegt noch etwas
         server.enqueue(cart(2))
 
-        val result = OrderPlacer(client).place(listOf(line(mon, "828")), dryRun = false) { emptyList() }
+        val result = OrderPlacer(client).place(listOf(order(line(mon, "828"))), dryRun = false) { emptyList() }
 
         assertIs<PlaceResult.Aborted>(result)
         val paths = (1..3).map { server.takeRequest().path }
@@ -111,7 +115,7 @@ class OrderPlacerTest {
         server.enqueue(cart(0, "ERROR", "Die Bestellfrist für diesen Tag ist abgelaufen."))
         server.enqueue(cart(0))
 
-        val result = OrderPlacer(client).place(listOf(line(mon, "828")), dryRun = false) { emptyList() }
+        val result = OrderPlacer(client).place(listOf(order(line(mon, "828"))), dryRun = false) { emptyList() }
 
         assertIs<PlaceResult.Aborted>(result)
         assertTrue(result.reason.contains("Bestellfrist"), result.reason)
@@ -124,10 +128,60 @@ class OrderPlacerTest {
         server.enqueue(cart(1))
         server.enqueue(MockResponse().setBody("""{"MessageStatus":"OK","Message":null}"""))
 
-        val ok = OrderPlacer(client).place(listOf(line(mon, "828")), dryRun = false) {
-            listOf(DayStatus(mon, OrderState.ORDERED))
+        val ok = OrderPlacer(client).place(listOf(order(line(mon, "828"))), dryRun = false) {
+            listOf(DayStatus(mon, OrderState.ORDERED, entries = listOf(line(mon, "828").copy(status = "2", quantityOrdered = "1"))))
         }
-        assertIs<PlaceResult.Ordered>(ok)
+        assertIs<PlaceResult.Done>(ok)
         assertEquals("/ibs5/Cart/Order", (1..3).map { server.takeRequest() }.last().path)
+    }
+
+    @Test
+    fun `Abbestellen legt Typ D mit Menge minus eins in den Warenkorb`() {
+        val client = loggedInClient()
+        server.enqueue(cart(0))
+        server.enqueue(cart(1))
+        server.enqueue(MockResponse().setBody("""{"MessageStatus":"OK"}"""))
+
+        val ordered = line(wed, "828")
+        val result = OrderPlacer(client).place(listOf(DayChange(wed, current = ordered, target = null)), dryRun = false) {
+            listOf(DayStatus(wed, OrderState.NOT_ORDERED, entries = listOf(ordered.copy(status = "0", quantityOrdered = ""))))
+        }
+
+        assertIs<PlaceResult.Done>(result)
+        server.takeRequest()
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"QuantityInShoppingCart\":-1") && body.contains("\"ShoppingCartOrderType\":\"D\""), body)
+    }
+
+    @Test
+    fun `Umbestellung, bei der die alte Linie bestellt bleibt, wird nicht als erledigt gemeldet`() {
+        val client = loggedInClient()
+        server.enqueue(cart(0))
+        server.enqueue(cart(1))
+        server.enqueue(MockResponse().setBody("""{"MessageStatus":"OK"}"""))
+
+        val old = line(wed, "828")
+        val new = line(wed, "827")
+        val result = OrderPlacer(client).place(listOf(DayChange(wed, current = old, target = new)), dryRun = false) {
+            // Server hat beide bestellt — genau das darf nicht als "erledigt" durchgehen.
+            listOf(
+                DayStatus(
+                    wed, OrderState.ORDERED,
+                    entries = listOf(old, new.copy(status = "2", quantityOrdered = "1")),
+                ),
+            )
+        }
+
+        assertIs<PlaceResult.Unconfirmed>(result)
+        assertEquals(listOf(wed), result.missing)
+    }
+
+    @Test
+    fun `unveraenderte Tage schicken nichts ab`() {
+        val client = loggedInClient()
+        val kept = line(wed, "828")
+        val result = OrderPlacer(client).place(listOf(DayChange(wed, kept, kept)), dryRun = false) { emptyList() }
+        assertIs<PlaceResult.Aborted>(result)
+        assertEquals(1, server.requestCount) // nur der Login
     }
 }
