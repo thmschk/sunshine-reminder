@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import io.github.thmschk.ibswatch.MainActivity
 import io.github.thmschk.ibswatch.R
 import io.github.thmschk.ibswatch.core.IbsClient
 import io.github.thmschk.ibswatch.core.UpdateCheck
@@ -22,6 +23,9 @@ object Notifier {
     const val CHANNEL_REMINDER = "reminder"
     const val CHANNEL_PROBLEM = "problem"
     const val CHANNEL_UPDATE = "update"
+
+    /** Oeffnet die Bestellansicht der App (PoC). */
+    const val ACTION_ORDER = "io.github.thmschk.ibswatch.ORDER"
 
     private const val ID_REMINDER = 1
     private const val ID_PROBLEM = 2
@@ -77,8 +81,21 @@ object Notifier {
      * Meldung still auf den neuen Stand gebracht — so bleibt sie aktuell, ohne
      * bei jedem Lauf erneut zu vibrieren.
      */
-    fun reminder(context: Context, title: String, body: String, alert: Boolean) =
-        show(context, CHANNEL_REMINDER, ID_REMINDER, title, body, alert = alert)
+    fun reminder(context: Context, title: String, body: String, alert: Boolean, orderable: Boolean = false) =
+        show(
+            context, CHANNEL_REMINDER, ID_REMINDER, title, body, alert = alert,
+            orderAction = if (orderable) orderIntent(context) else null,
+        )
+
+    /** Die App mit offener Bestellansicht — ein Gericht muss dort noch gewaehlt werden. */
+    private fun orderIntent(context: Context): PendingIntent = PendingIntent.getActivity(
+        context,
+        ID_REMINDER + 100,
+        Intent(context, MainActivity::class.java)
+            .setAction(ACTION_ORDER)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     /**
      * Meldung zuruecknehmen.
@@ -120,6 +137,7 @@ object Notifier {
         url: String = IbsClient.WEB_URL,
         actionLabel: String = "Bestellseite oeffnen",
         alert: Boolean = true,
+        orderAction: PendingIntent? = null,
     ) {
         // Ohne Berechtigung wuerde notify() still verpuffen — dann lieber nichts
         // tun, als so zu wirken, als sei benachrichtigt worden.
@@ -149,6 +167,7 @@ object Notifier {
             .setContentIntent(openTarget)
             .setAutoCancel(true)
             .setOnlyAlertOnce(!alert)
+            .apply { if (orderAction != null) addAction(0, "Jetzt bestellen", orderAction) }
             .addAction(0, actionLabel, openTarget)
             .build()
 

@@ -39,7 +39,20 @@ data class MenuEntry(
     val quantityInCart: String,
     /** false, wenn der Button `readonly` traegt — Bestellschluss ist vorbei. */
     val orderable: Boolean,
+    /** Aus der Button-ID `menu_quantity_<Datum>_<Gruppe>_<Linie>` — noetig zum Bestellen. */
+    val menuGroupId: String = "",
+    val menuLineId: String = "",
+    /** 6. Argument von `clickMenuCheckbox(...)`; fehlt, wo die Seite keinen Klick anbietet. */
+    val customerId: String = "",
 ) {
+    /**
+     * Kann diese Linie in den Warenkorb? Kaltverpflegung ist z. B. auch an
+     * offenen Tagen `readonly` und ohne onclick — readonly heisst also nicht
+     * nur "Frist vorbei", sondern auch "fuer dieses Konto nicht vorgesehen".
+     */
+    val selectable: Boolean
+        get() = orderable && customerId.isNotEmpty() && menuGroupId.isNotEmpty() && menuLineId.isNotEmpty()
+
     val isOrdered: Boolean
         get() = status == STATUS_ORDERED || quantityOrdered.isNotEmpty()
 
@@ -58,6 +71,7 @@ data class DayStatus(
     val orderedItems: List<String> = emptyList(),
     val offeredItems: List<String> = emptyList(),
     val orderable: Boolean = false,
+    val entries: List<MenuEntry> = emptyList(),
 ) {
     /** Zustaende, in denen Handeln moeglich UND sinnvoll ist. */
     val isActionable: Boolean

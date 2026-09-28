@@ -96,6 +96,7 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                     AlarmText.title(outcome, firstName),
                     AlarmText.body(outcome),
                     alert = fresh || lastChance,
+                    orderable = outcome.actionable.isNotEmpty(),
                 )
                 results.notifiedDates = NotifiedDays.remember(alreadyNotified, affected, today)
             }

@@ -8,8 +8,16 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.time.LocalDate
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 open class IbsException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
@@ -100,6 +108,92 @@ class IbsClient(
         return get(url)
     }
 
+    /** Stand des Warenkorbs (`UpdateBalanceAndCart`). */
+    fun cart(): CartResponse = CartResponse.from(
+        parseJson(get(path("Mealplan", "UpdateBalanceAndCart")), "UpdateBalanceAndCart"),
+    )
+
+    /**
+     * Eine Menuelinie fuer einen Tag in den Warenkorb legen — wie ein Klick
+     * im Wochenplan (`addToCartWithGroup`, Typ `I` = neu bestellen). Bestellt
+     * ist damit noch nichts, siehe [submitCart].
+     */
+    fun addToCart(entry: MenuEntry): CartResponse = CartResponse.from(
+        post(
+            path("Mealplan", "SaveOrder"),
+            buildJsonObject {
+                putJsonObject("mealOrderQuantity") {
+                    put("CustomerId", entry.customerId)
+                    put("ServeDate", entry.date.toString())
+                    put("MenuGroupId", entry.menuGroupId)
+                    put("MenuLineId", entry.menuLineId)
+                    put("QuantityInShoppingCart", 1)
+                    put("ShoppingCartOrderType", "I")
+                }
+            },
+        ),
+    )
+
+    /** Warenkorb-Eintraege eines Tages (und einer Gruppe) entfernen. */
+    fun clearCart(customerId: String, date: LocalDate, menuGroupId: String): CartResponse =
+        CartResponse.from(
+            post(
+                path("Mealplan", "ClearCart"),
+                buildJsonObject {
+                    putJsonObject("mealOrderQuantity") {
+                        put("CustomerId", customerId)
+                        put("ServeDate", date.toString())
+                        put("MenuGroupId", menuGroupId)
+                    }
+                },
+            ),
+        )
+
+    /**
+     * Den **gesamten** Warenkorb verbindlich bestellen (Knopf "Bestaetigen").
+     * Der Server kennt kein "nur diese Eintraege" — deshalb prueft
+     * [OrderPlacer] vorher, dass nur das Gewollte drinliegt.
+     */
+    fun submitCart(): CartResponse = CartResponse.from(post(path("Cart", "Order"), JsonNull))
+
+    private fun path(vararg segments: String): HttpUrl =
+        base.newBuilder().apply { segments.forEach { addPathSegment(it) } }.build()
+
+    private fun parseJson(text: String, what: String): JsonObject = try {
+        json.parseToJsonElement(text).jsonObject
+    } catch (exc: Exception) {
+        throw IbsException("$what lieferte kein JSON", exc)
+    }
+
+    /** JSON-POST wie `infrastructure.doAjaxCall` der Webseite. */
+    private fun post(url: HttpUrl, payload: kotlinx.serialization.json.JsonElement): JsonObject {
+        val bearer = token ?: throw IbsAuthException("Nicht eingeloggt — erst login() aufrufen")
+
+        val request = Request.Builder()
+            .url(url)
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("User-Agent", USER_AGENT)
+            .header("Accept-Language", ACCEPT_LANGUAGE)
+            .header("Authorization", "Bearer $bearer")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .build()
+
+        val text = try {
+            http.newCall(request).execute().use { response ->
+                when {
+                    response.code == 401 || response.code == 403 ->
+                        throw IbsAuthException("${url.encodedPath}: Token abgelehnt (HTTP ${response.code})")
+                    !response.isSuccessful ->
+                        throw IbsException("${url.encodedPath}: HTTP ${response.code}")
+                    else -> response.body?.string().orEmpty()
+                }
+            }
+        } catch (exc: IOException) {
+            throw IbsException("Request an ${url.encodedPath} fehlgeschlagen: ${exc.message}", exc)
+        }
+        return parseJson(text, url.encodedPath)
+    }
+
     private fun get(url: HttpUrl): String {
         val bearer = token ?: throw IbsAuthException("Nicht eingeloggt — erst login() aufrufen")
 
@@ -134,6 +228,7 @@ class IbsClient(
 
         const val USER_AGENT = "sunshine-reminder (+https://github.com/thmschk/sunshine-reminder)"
         const val ACCEPT_LANGUAGE = "de-DE,de;q=0.9"
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
@@ -145,3 +240,28 @@ class IbsClient(
 /** `JsonPrimitive.content` liefert bei JSON-null den String "null". */
 private fun kotlinx.serialization.json.JsonPrimitive.contentOrNullSafe(): String? =
     content.takeIf { it.isNotEmpty() && it != "null" }
+
+/**
+ * Antwort der Warenkorb-Endpunkte.
+ *
+ * Die `Mealplan`-Endpunkte antworten in camelCase (`messageStatus`), `Cart/Order` laut
+ * Seiten-JS in PascalCase (`MessageStatus`) — beides wird gelesen.
+ */
+data class CartResponse(
+    val ok: Boolean,
+    val message: String?,
+    val totalItemsInCart: Int?,
+) {
+    companion object {
+        fun from(obj: JsonObject): CartResponse {
+            fun field(name: String) = (obj[name] ?: obj[name.replaceFirstChar { it.uppercase() }])
+                ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+            val status = field("messageStatus")?.contentOrNullSafe()
+            return CartResponse(
+                ok = status == null || status.equals("OK", ignoreCase = true),
+                message = field("message")?.contentOrNullSafe(),
+                totalItemsInCart = field("totalItemsInCart")?.contentOrNullSafe()?.toIntOrNull(),
+            )
+        }
+    }
+}

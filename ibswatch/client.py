@@ -14,6 +14,7 @@ Two non-obvious server quirks are handled once, here:
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import requests
 
@@ -119,6 +120,34 @@ class IbsClient:
             raise IbsError(f"{path}: HTTP {resp.status_code}")
         return resp
 
+    def post(self, path: str, payload) -> dict:
+        """JSON-POST like ``infrastructure.doAjaxCall``; ``payload=None`` sends literal ``null``."""
+        if not self.token:
+            raise IbsAuthError("Nicht eingeloggt — erst login() aufrufen")
+
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/{path.lstrip('/')}",
+                data=json.dumps(payload),
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Content-Type": "application/json; charset=utf-8",
+                },
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise IbsError(f"Request an {path} fehlgeschlagen: {exc}") from exc
+
+        if resp.status_code in (401, 403):
+            raise IbsAuthError(f"{path}: Token abgelehnt (HTTP {resp.status_code})")
+        if resp.status_code != 200:
+            raise IbsError(f"{path}: HTTP {resp.status_code} {resp.text[:200]}")
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise IbsError(f"{path}: kein JSON") from exc
+
     # -- the endpoints we actually care about ------------------------------
 
     def weekplan(self, year: int | None = None, week: int | None = None) -> str:
@@ -139,3 +168,20 @@ class IbsClient:
 
     def balance_and_cart(self) -> str:
         return self.get("/Mealplan/UpdateBalanceAndCart").text
+
+    # -- ordering (PoC) -----------------------------------------------------
+    # Bestellen = Warenkorb füllen (SaveOrder) + Warenkorb abschicken (Cart/Order).
+    # Cart/Order schickt den GANZEN Warenkorb ab, nicht nur das eben Hinzugefügte.
+
+    def add_to_cart(self, customer_id: str, date: dt.date, group_id: str, line_id: str) -> dict:
+        return self.post("/Mealplan/SaveOrder", {"mealOrderQuantity": {
+            "CustomerId": customer_id, "ServeDate": date.isoformat(),
+            "MenuGroupId": group_id, "MenuLineId": line_id,
+            "QuantityInShoppingCart": 1, "ShoppingCartOrderType": "I"}})
+
+    def clear_cart(self, customer_id: str, date: dt.date, group_id: str) -> dict:
+        return self.post("/Mealplan/ClearCart", {"mealOrderQuantity": {
+            "CustomerId": customer_id, "ServeDate": date.isoformat(), "MenuGroupId": group_id}})
+
+    def submit_cart(self) -> dict:
+        return self.post("/Cart/Order", None)

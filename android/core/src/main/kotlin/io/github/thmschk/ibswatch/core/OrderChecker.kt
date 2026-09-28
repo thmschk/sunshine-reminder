@@ -100,6 +100,9 @@ class OrderChecker(
         }
     }
 
+    /** Tagesstand ohne Auswertung — fuer die Bestellansicht; Login muss vorher erfolgt sein. */
+    fun fetch(dates: List<LocalDate>): List<DayStatus> = collect(dates)
+
     /** Jede betroffene Kalenderwoche einmal laden und den Tagen zuordnen. */
     private fun collect(dates: List<LocalDate>): List<DayStatus> {
         val weekFields = WeekFields.ISO

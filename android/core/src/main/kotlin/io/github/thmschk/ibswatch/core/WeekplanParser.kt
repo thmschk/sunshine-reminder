@@ -29,6 +29,8 @@ class ParserNotCalibratedException(message: String) : IbsException(message)
 object WeekplanParser {
 
     private val ID_DATE = Regex("""_(\d{4}-\d{2}-\d{2})_""")
+    private val ID_FULL = Regex("""^menu_quantity_(\d{4}-\d{2}-\d{2})_(\d+)_(\d+)$""")
+    private val ONCLICK_ARGS = Regex("""clickMenuCheckbox\(([^)]*)\)""")
     private val DE_DATE = Regex("""^(\d{2})\.(\d{2})\.(\d{4})$""")
     private val KW = Regex("""\bKW\s*(\d{1,2})\b""")
 
@@ -57,6 +59,9 @@ object WeekplanParser {
                     quantityOrdered = tag.attr("data-quantity-ordered").trim(),
                     quantityInCart = tag.attr("data-quantity-in-shopping-cart").trim(),
                     orderable = !tag.hasAttr("readonly"),
+                    menuGroupId = ID_FULL.find(tag.id())?.groupValues?.get(2).orEmpty(),
+                    menuLineId = ID_FULL.find(tag.id())?.groupValues?.get(3).orEmpty(),
+                    customerId = customerId(tag),
                 ),
             )
         }
@@ -68,10 +73,17 @@ object WeekplanParser {
                 orderedItems = entries.filter { it.isOrdered }.map { it.name },
                 offeredItems = entries.map { it.name },
                 orderable = entries.any { it.orderable },
+                entries = entries,
             )
         }
 
         return WeekPlan(days = days, displayedWeek = displayedWeek)
+    }
+
+    /** `clickMenuCheckbox(status, prev, ordered, permitted, elementId, customerId, …)` */
+    private fun customerId(tag: Element): String {
+        val args = ONCLICK_ARGS.find(tag.attr("onclick"))?.groupValues?.get(1) ?: return ""
+        return args.split(",").getOrNull(5)?.trim()?.trim('\'').orEmpty()
     }
 
     private fun entryDate(tag: Element): LocalDate? {

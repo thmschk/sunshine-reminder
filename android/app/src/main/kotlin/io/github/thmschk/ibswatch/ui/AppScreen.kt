@@ -106,6 +106,7 @@ private val DonatePink = Color(0xFFCA7A98)
 fun AppScreen(
     remindersReachUser: Boolean = true,
     onOpenNotificationSettings: () -> Unit = {},
+    onOpenOrder: (daysAhead: Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val credentials = remember { CredentialStore(context) }
@@ -205,6 +206,21 @@ fun AppScreen(
             }
 
             StatusCard(results, settings, running = running, refreshKey = workInfos)
+
+            // PoC: Idee 1 = die gemeldeten offenen Tage, Idee 2 = alles, was bestellbar ist.
+            val hasOpen = remember(workInfos) {
+                results.lastDays.any { it.state == OrderState.NOT_ORDERED || it.state == OrderState.IN_CART }
+            }
+            if (hasOpen) {
+                Button(
+                    onClick = { onOpenOrder(settings.daysAhead) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Offene Tage bestellen") }
+            }
+            OutlinedButton(
+                onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Alle bestellbaren Tage (4 Wochen)") }
             // Der Griff, den man nach einer Erinnerung braucht — bisher gab es
             // ihn nur in der Benachrichtigung, also genau dann nicht, wenn man
             // sie schon weggewischt hatte.

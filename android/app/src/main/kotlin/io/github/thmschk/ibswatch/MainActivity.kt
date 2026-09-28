@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
@@ -15,7 +16,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
 import io.github.thmschk.ibswatch.notify.Notifier
+import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.ui.AppScreen
+import io.github.thmschk.ibswatch.ui.OrderScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -27,6 +30,9 @@ class MainActivity : ComponentActivity() {
      * gelesen statt einmal beim Start.
      */
     private val remindersReachUser = mutableStateOf(true)
+
+    /** Offene Bestellansicht: Anzahl Tage voraus, oder null fuer die Startseite. */
+    private val orderHorizon = mutableStateOf<Int?>(null)
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -47,15 +53,36 @@ class MainActivity : ComponentActivity() {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
+        handleOrderIntent(intent)
+
         setContent {
             IbsWatchTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    AppScreen(
-                        remindersReachUser = remindersReachUser.value,
-                        onOpenNotificationSettings = ::openNotificationSettings,
-                    )
+                    val horizon = orderHorizon.value
+                    if (horizon != null) {
+                        BackHandler { orderHorizon.value = null }
+                        OrderScreen(daysAhead = horizon, onClose = { orderHorizon.value = null })
+                    } else {
+                        AppScreen(
+                            remindersReachUser = remindersReachUser.value,
+                            onOpenNotificationSettings = ::openNotificationSettings,
+                            onOpenOrder = { orderHorizon.value = it },
+                        )
+                    }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleOrderIntent(intent)
+    }
+
+    /** Aktion "Jetzt bestellen" aus der Erinnerung. */
+    private fun handleOrderIntent(intent: Intent?) {
+        if (intent?.action == Notifier.ACTION_ORDER) {
+            orderHorizon.value = SettingsStore(this).daysAhead
         }
     }
 
