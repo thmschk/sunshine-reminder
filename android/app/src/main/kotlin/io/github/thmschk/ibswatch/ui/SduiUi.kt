@@ -90,6 +90,10 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
     }
     var childId by remember { mutableStateOf(store.childId) }
     var known by remember { mutableStateOf(store.knownSubjects.sortedWith(String.CASE_INSENSITIVE_ORDER)) }
+    // Fach → Kuerzel fuer die Auswahl, aus dem gespeicherten Plan bzw. dem letzten Verbinden.
+    var shorts by remember {
+        mutableStateOf(parsePlan(store.plan).values.flatMap { it.values.flatten() }.associate { it.subject to it.short })
+    }
     var chosen by remember { mutableStateOf(store.subjects) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -105,15 +109,17 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
         scope.launch {
             try {
                 val slink = SduiStore.parseSlink(school)
-                val (kids, subjects) = withContext(Dispatchers.IO) {
+                val (kids, lessons) = withContext(Dispatchers.IO) {
                     val client = SduiClient()
                     client.login(identifier.trim(), password, slink)
                     val kids = client.children()
                     val first = kids.firstOrNull { it.id == childId } ?: kids.firstOrNull()
                     val today = LocalDate.now()
                     val lessons = first?.let { client.timetable(it.id, today, today.plusDays(14)) }.orEmpty()
-                    kids to SubjectReminder.knownSubjects(lessons)
+                    kids to lessons
                 }
+                val subjects = SubjectReminder.knownSubjects(lessons)
+                shorts = shorts + lessons.associate { it.subject to it.short }
                 school = slink
                 children = kids
                 if (kids.none { it.id == childId }) childId = kids.firstOrNull()?.id ?: 0
@@ -214,7 +220,7 @@ fun SduiSetupDialog(onDismiss: () -> Unit, onChanged: () -> Unit) {
 
                 if (known.isNotEmpty()) {
                     HorizontalDivider()
-                    SubjectDropdown(known, chosen) { chosen = it }
+                    SubjectDropdown(known, shorts, chosen) { chosen = it }
                 }
 
                 if (store.isConfigured) {
@@ -263,7 +269,7 @@ fun parsePlan(lines: List<String>): Map<LocalDate, Map<Int, List<PlanCell>>> =
         val p = line.split("|")
         val date = runCatching { LocalDate.parse(p[0]) }.getOrNull() ?: return@mapNotNull null
         val hour = p.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
-        Triple(date, hour, PlanCell(p.getOrElse(2) { "" }, p.getOrElse(3) { "" }, p.getOrElse(4) { "" }))
+        Triple(date, hour, PlanCell(SubjectReminder.shortLabel(p.getOrElse(2) { "" }), p.getOrElse(3) { "" }, p.getOrElse(4) { "" }))
     }
         .groupBy { it.first }
         .mapValues { (_, v) -> v.groupBy({ it.second }, { it.third }) }
@@ -323,11 +329,17 @@ fun TimetableStrip(slots: Map<Int, List<PlanCell>>, maxHour: Int, selected: Set<
 /** Mehrfachauswahl als Dropdown mit Haken; bleibt beim Antippen offen. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SubjectDropdown(known: List<String>, chosen: Set<String>, onChange: (Set<String>) -> Unit) {
+private fun SubjectDropdown(
+    known: List<String>,
+    shorts: Map<String, String>,
+    chosen: Set<String>,
+    onChange: (Set<String>) -> Unit,
+) {
+    fun label(subject: String) = shorts[subject]?.let { "$subject ($it)" } ?: subject
     var open by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
         OutlinedTextField(
-            value = known.filter { it in chosen }.joinToString(", ").ifBlank { "keins" },
+            value = known.filter { it in chosen }.joinToString(", ") { shorts[it] ?: it }.ifBlank { "keins" },
             onValueChange = {},
             readOnly = true,
             label = { Text("Erinnern an") },
@@ -337,7 +349,7 @@ private fun SubjectDropdown(known: List<String>, chosen: Set<String>, onChange: 
         ExposedDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             known.forEach { subject ->
                 DropdownMenuItem(
-                    text = { Text(subject) },
+                    text = { Text(label(subject)) },
                     leadingIcon = {
                         Checkbox(checked = subject in chosen, onCheckedChange = null)
                     },
