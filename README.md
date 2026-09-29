@@ -1,11 +1,16 @@
-# sunshine reminder
+# happy sunshine
+
+*(bis 0.1.20: „sunshine reminder“ — Repository und Download-Link heißen weiter so)*
 
 Erinnert auf dem Handy daran, wenn im Schulessen-Bestellsystem **IBS5**
-(`ibs.sunshine-catering.de`) für die nächsten Tage nichts bestellt ist.
+(`ibs.sunshine-catering.de`) für die nächsten Tage nichts bestellt ist — und
+bestellt, bestellt um oder bestellt ab direkt aus der App. Wer mag, holt sich
+dazu den **Stundenplan aus Sdui** und wird am Vortag an Fächer wie Sport
+erinnert.
 
 Die App prüft **auf dem Gerät**. Es gibt keinen Server, keine Anmeldung bei
 einem Dienst, kein Konto. Die Zugangsdaten verlassen das Handy nur in Richtung
-des Bestellsystems selbst.
+des Bestellsystems bzw. von Sdui selbst.
 
 ## Nur für Android — es gibt keine iPhone-Version
 
@@ -25,12 +30,12 @@ tadellos, nur auslösen muss sie jemand anders. Dafür ist die
 [Python-Variante](#die-python-variante) in diesem Repository da.
 
 > **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
-> Sunshine Catering oder zum Hersteller von IBS5. Es benutzt dieselbe
-> Schnittstelle wie deren Webseite, mit den Zugangsdaten des jeweiligen
-> Nutzers. Bestellt wird nur, wenn man in der App ausdrücklich Gerichte wählt
+> Sunshine Catering, zum Hersteller von IBS5 oder zur Sdui GmbH. Es benutzt
+> dieselben Schnittstellen wie deren Webseiten, mit den Zugangsdaten des
+> jeweiligen Nutzers. Bestellt wird nur, wenn man in der App ausdrücklich Gerichte wählt
 > und bestätigt — von selbst bestellt oder ändert sie nichts.
-> Der Anbieter kann die Webseite jederzeit ändern; dann funktioniert die App
-> nicht mehr. Nutzung auf eigene Verantwortung.
+> Sdui wird nur gelesen. Die Anbieter können ihre Webseiten jederzeit ändern;
+> dann funktioniert die App nicht mehr. Nutzung auf eigene Verantwortung.
 
 ## Was sie tut
 
@@ -47,18 +52,43 @@ Bestellen ist noch möglich:
 In der App steht zusätzlich der Wochenplan mit den Gerichten — praktisch, wenn
 man nur kurz wissen will, was es gibt.
 
-Bestellen geht auch direkt aus der App: „Jetzt bestellen" in der Erinnerung
-oder „Offene Tage bestellen" zeigt die offenen Tage mit ihren Gerichten, „Alle
-bestellbaren Tage" die nächsten vier Wochen. Man wählt je Tag ein Gericht und
-bestätigt. Abgeschickt wird nur, wenn im Warenkorb genau diese Auswahl liegt;
-danach prüft die App im Wochenplan nach, ob alles als bestellt erscheint.
+### Bestellen, umbestellen, abbestellen
 
-Wahlweise gibt es einen Bereich für den **Stundenplan aus Sdui**
-(Einstellungen → „Stundenplan (Sdui) einrichten"). Dort wählt man Fächer wie
-Sport oder Schwimmen; beim täglichen Prüfen erinnert die App dann am Vortag
-daran. Wer Sdui nicht nutzt, lässt den Bereich einfach leer. Auch hier gilt:
-keine offizielle Schnittstelle von Sdui, die App liest nur mit den eigenen
-Zugangsdaten mit, die auf dem Gerät bleiben.
+Bestellt wird direkt in der App: „Jetzt bestellen" in der Erinnerung, ein Tipp
+auf einen Tag der Startseite (die Bestellansicht springt zu genau diesem Tag)
+oder „Alle bestellbaren Tage" für alles, wofür schon ein Speiseplan vorliegt
+(die App schaut acht Wochen voraus). Offene Tage stehen dort mit „nichts"
+vorausgewählt, bestellte mit ihrem Gericht. Wer ein anderes Gericht wählt,
+bestellt um, wer „abbestellen" wählt, bestellt ab.
+
+Abgeschickt wird nur, was geändert wurde, und nur, wenn im Warenkorb genau
+diese Auswahl liegt — sonst liegt dort etwas Fremdes, und die App schickt
+nichts ab. Danach prüft sie im Wochenplan nach, ob jeder Tag so dasteht wie
+gewünscht, und sagt es, wenn nicht.
+
+### Stundenplan aus Sdui (freiwillig)
+
+Wer Sdui nicht nutzt, sieht davon nur einen Eintrag in den Einstellungen.
+Eingerichtet wird er unter Einstellungen → **Stundenplan (Sdui)** →
+„Einrichten …": Schule (die Login-Adresse `sdui.app/<schule>/login` oder nur
+das Kürzel), E-Mail und Passwort, dann „Verbinden". Danach wählt man unter
+„Erinnern an" die Fächer, an die erinnert werden soll, z. B. Sport und
+Schwimmen.
+
+* **Auf der Startseite** bekommt jeder Tag eine Zeitleiste: eine gleich breite
+  Zelle je Schulstunde mit dem Fachkürzel (einheitlich groß, höchstens drei
+  Zeichen), ausgewählte Fächer dunkel. Freistunden bleiben als Lücke stehen.
+* **Beim täglichen Prüfen** schaut die App in den Plan des nächsten Schultags
+  (freitags: Montag) und meldet sich mit „Morgen Sport — 1.–2. Stunde", wenn
+  ein ausgewähltes Fach ansteht. Die Meldung hat einen eigenen Kanal und lässt
+  sich getrennt von der Essenserinnerung abschalten.
+* Lehnt Sdui die Anmeldung ab, meldet die App das einmal und versucht es erst
+  nach erneutem Speichern wieder — Fehlversuche könnten das Konto sperren.
+
+Nicht bekannt ist, wie Sdui Ausfall und Vertretung kennzeichnet; die App
+gleicht nur Fachnamen ab und hängt Hinweise zur Stunde an. Bei Wahlfächern in
+derselben Stunde (z. B. Lebenskunde / Religion) weiß Sdui nicht, welches das
+Kind besucht.
 
 Unterschieden werden sechs Zustände je Tag, damit die Meldung stimmt:
 
@@ -142,6 +172,9 @@ fremder Hand sollte niemand blind durchwinken.
 * **Kundennummer und Passwort** liegen im privaten Speicherbereich der App, auf
   den andere Apps keinen Zugriff haben. Sie werden ausschließlich an
   `ibs.sunshine-catering.de` geschickt, über HTTPS.
+* **Sdui-Zugangsdaten** (nur wenn eingerichtet) liegen getrennt davon im selben
+  privaten Bereich und gehen ausschließlich an `api.sdui.app`, über HTTPS.
+  „Sdui entfernen" löscht sie samt Stundenplan.
 * **Es gibt keinen Server dieses Projekts.** Niemand außer dir und dem
   Bestellsystem sieht irgendetwas.
 * **Keine Statistik, keine Werbung, keine Fremdbibliotheken zur Auswertung.**
@@ -150,7 +183,7 @@ Die App fordert diese Berechtigungen an:
 
 | Berechtigung | Wofür |
 |---|---|
-| `INTERNET` | das Bestellsystem abfragen |
+| `INTERNET` | das Bestellsystem (und ggf. Sdui) abfragen |
 | `POST_NOTIFICATIONS` | die Erinnerung anzeigen |
 | `ACCESS_NETWORK_STATE`, `WAKE_LOCK`, `RECEIVE_BOOT_COMPLETED`, `FOREGROUND_SERVICE` | bringt Androids WorkManager mit, um die Prüfung im Hintergrund einzuplanen und einen Neustart zu überstehen |
 
@@ -158,7 +191,8 @@ Die App fordert diese Berechtigungen an:
 
 Gegen das echte System geprüft: Anmeldung, Abruf, Auswertung, Anzeige und die
 Erinnerung selbst — inklusive eines Tests mit einer absichtlich stornierten
-Bestellung.
+Bestellung. Bestellen, Um- und Abbestellen aus der App sowie Anmeldung und
+Stundenplan bei Sdui sind an einem echten Konto ausprobiert.
 
 Bis 0.1.0 hat der Hintergrundlauf **nie** ausgelöst, solange die App
 geschlossen war: sie hat sich den geplanten Job beim Prozessstart selbst
@@ -171,7 +205,7 @@ Ehrlich dazu, was **nicht** geprüft ist:
 
 * Wie zuverlässig der Hintergrundlauf über Wochen auslöst. Manche Hersteller
   (Xiaomi, Huawei, teils Samsung) beenden Hintergrundarbeit aggressiv. Falls die
-  Erinnerung ausbleibt: Einstellungen → Apps → sunshine reminder → Akku →
+  Erinnerung ausbleibt: Einstellungen → Apps → happy sunshine → Akku →
   „Uneingeschränkt". Dass sie ausbleibt, steht dann in der App.
 * Das Verhalten in Schulferien, wenn gar keine Wochenpläne veröffentlicht sind.
 * Alles außerhalb einer einzigen Einrichtung — ob andere Schulen dieselbe
@@ -255,6 +289,28 @@ POST /ibs5/Login/Login
   -> {"token": …, "name1": …, "institutionName1": …}
 
 GET  /ibs5/Mealplan/Weekplan?year=&week=     Authorization: Bearer <token>
+```
+
+Bestellt wird wie auf der Webseite in zwei Schritten — erst der Warenkorb, dann
+das Abschicken des **ganzen** Warenkorbs:
+
+```
+POST /ibs5/Mealplan/SaveOrder   {"mealOrderQuantity": {CustomerId, ServeDate,
+                                 MenuGroupId, MenuLineId,
+                                 QuantityInShoppingCart, ShoppingCartOrderType}}
+       Typ "I" mit Menge 1  = bestellen (bei bestelltem Tag: umbestellen,
+                              der Server legt die Abbestellung selbst dazu)
+       Typ "D" mit Menge −1 = abbestellen
+POST /ibs5/Mealplan/ClearCart   {"mealOrderQuantity": {CustomerId, ServeDate, MenuGroupId}}
+POST /ibs5/Cart/Order           null
+```
+
+Sdui (`api.sdui.app/v1`, ebenfalls JSON mit Bearer-Token, nur lesend):
+
+```
+POST /auth/login                          {"identifier", "password", "slink"}
+GET  /users/self                          -> child_pivot[].user_id
+GET  /timetables/users/<id>/timetable?begins_at=YYYY-MM-DD&ends_at=YYYY-MM-DD
 ```
 
 Im Wochenplan steht pro angebotener Menülinie und Tag ein Button:
