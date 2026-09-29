@@ -55,7 +55,7 @@ class SduiClientTest {
         assertEquals("Bearer tok", req.getHeader("Authorization"))
         assertEquals(9, lessons.size)
         assertEquals(8, lessons.first().begins.hour)
-        assertEquals("Sp", lessons.first().short)
+        assertEquals("SP", lessons.first().short)
     }
 
     @Test
@@ -84,6 +84,14 @@ class SduiClientTest {
             listOf("Deutsch", "Englisch", "Ethik", "Lebenskunde", "Schwimmen", "Sport"),
             SubjectReminder.knownSubjects(lessons),
         )
+    }
+
+    @Test
+    fun `Kuerzel sind gross und hoechstens drei Zeichen`() {
+        assertEquals("SOL", SubjectReminder.shortLabel("SoL"))
+        assertEquals("DSL", SubjectReminder.shortLabel("D/SL"))
+        assertEquals("ER", SubjectReminder.shortLabel("eR"))
+        assertEquals("SPO", SubjectReminder.shortLabel("Sport"))
     }
 
     @Test

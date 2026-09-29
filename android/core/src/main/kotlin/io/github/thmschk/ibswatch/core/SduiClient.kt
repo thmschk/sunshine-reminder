@@ -106,7 +106,7 @@ class SduiClient(
             begins = time(o["begins_at"]),
             ends = time(o["ends_at"]),
             subject = s(meta, "displayname").ifBlank { s(meta, "shortname") },
-            short = s(meta, "shortname").ifBlank { s(meta, "displayname").take(2) },
+            short = SubjectReminder.shortLabel(s(meta, "shortname").ifBlank { s(meta, "displayname") }),
             hour = s(meta, "displayname_hour"),
             kind = s(o, "kind").ifBlank { null },
             comment = s(o, "comment"),
@@ -175,6 +175,13 @@ class SduiClient(
 
 /** Was fuer den naechsten Schultag an ausgewaehlten Faechern ansteht. */
 object SubjectReminder {
+
+    /**
+     * Einheitliches Kuerzel: nur Buchstaben/Ziffern, gross, hoechstens drei
+     * Zeichen ("SoL" → "SOL", "D/SL" → "DSL", "Sport" → "SPO").
+     */
+    fun shortLabel(raw: String): String =
+        raw.filter { it.isLetterOrDigit() }.uppercase().take(3).ifBlank { raw.trim().uppercase().take(3) }
 
     /** Naechster Werktag nach `today` — am Freitag also der Montag. */
     fun nextSchoolDay(today: LocalDate): LocalDate {

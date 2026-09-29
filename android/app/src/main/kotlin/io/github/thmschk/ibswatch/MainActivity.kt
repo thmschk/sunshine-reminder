@@ -15,6 +15,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
+import java.time.LocalDate
 import io.github.thmschk.ibswatch.notify.Notifier
 import io.github.thmschk.ibswatch.data.SettingsStore
 import io.github.thmschk.ibswatch.ui.AppScreen
@@ -31,8 +32,8 @@ class MainActivity : ComponentActivity() {
      */
     private val remindersReachUser = mutableStateOf(true)
 
-    /** Offene Bestellansicht: Anzahl Tage voraus, oder null fuer die Startseite. */
-    private val orderHorizon = mutableStateOf<Int?>(null)
+    /** Offene Bestellansicht (Tage voraus + angetippter Tag), oder null fuer die Startseite. */
+    private val orderRequest = mutableStateOf<Pair<Int, LocalDate?>?>(null)
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -59,15 +60,19 @@ class MainActivity : ComponentActivity() {
         setContent {
             IbsWatchTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    val horizon = orderHorizon.value
-                    if (horizon != null) {
-                        BackHandler { orderHorizon.value = null }
-                        OrderScreen(daysAhead = horizon, onClose = { orderHorizon.value = null })
+                    val request = orderRequest.value
+                    if (request != null) {
+                        BackHandler { orderRequest.value = null }
+                        OrderScreen(
+                            daysAhead = request.first,
+                            focusDate = request.second,
+                            onClose = { orderRequest.value = null },
+                        )
                     } else {
                         AppScreen(
                             remindersReachUser = remindersReachUser.value,
                             onOpenNotificationSettings = ::openNotificationSettings,
-                            onOpenOrder = { orderHorizon.value = it },
+                            onOpenOrder = { days, focus -> orderRequest.value = days to focus },
                         )
                     }
                 }
@@ -83,7 +88,7 @@ class MainActivity : ComponentActivity() {
     /** Aktion "Jetzt bestellen" aus der Erinnerung. */
     private fun handleOrderIntent(intent: Intent?) {
         if (intent?.action == Notifier.ACTION_ORDER) {
-            orderHorizon.value = SettingsStore(this).daysAhead
+            orderRequest.value = SettingsStore(this).daysAhead to null
         }
     }
 

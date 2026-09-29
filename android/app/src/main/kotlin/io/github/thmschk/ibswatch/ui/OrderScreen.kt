@@ -28,6 +28,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,7 +71,7 @@ const val ORDER_HORIZON_ALL_DAYS = 56
  * `readonly` selbst sagt, ob noch geaendert werden darf.
  */
 @Composable
-fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
+fun OrderScreen(daysAhead: Int, focusDate: LocalDate? = null, onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentials = remember { CredentialStore(context) }
@@ -82,6 +84,17 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
     var confirm by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
+    val scroll = rememberScrollState()
+    // Position des angetippten Tages; einmal hinscrollen, danach frei.
+    var focusY by remember { mutableStateOf<Int?>(null) }
+    var focused by remember { mutableStateOf(focusDate == null) }
+    LaunchedEffect(focusY) {
+        val y = focusY ?: return@LaunchedEffect
+        if (!focused) {
+            scroll.animateScrollTo(y)
+            focused = true
+        }
+    }
 
     // Ein Client fuer Laden und Bestellen: der Token aus dem Login gilt fuer beides.
     val client = remember { IbsClient() }
@@ -156,7 +169,7 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .safeDrawingPadding()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scroll)
             .padding(start = 24.dp, end = 24.dp, bottom = 24.dp, top = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -180,7 +193,17 @@ fun OrderScreen(daysAhead: Int, onClose: () -> Unit) {
         days.forEach { day ->
             val current = day.ordered()
             val chosen = chosen(picks, day)
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (!focused && focusDate != null && day.date.isEqual(focusDate)) {
+                            Modifier.onGloballyPositioned { focusY = it.positionInParent().y.toInt() }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     Text(
                         De.long(day.date) + when {

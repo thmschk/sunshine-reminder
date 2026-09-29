@@ -29,7 +29,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Slider
-import androidx.compose.material3.TimeInput
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -112,7 +112,7 @@ private val DonatePink = Color(0xFFCA7A98)
 fun AppScreen(
     remindersReachUser: Boolean = true,
     onOpenNotificationSettings: () -> Unit = {},
-    onOpenOrder: (daysAhead: Int) -> Unit = {},
+    onOpenOrder: (daysAhead: Int, focus: LocalDate?) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val credentials = remember { CredentialStore(context) }
@@ -264,7 +264,7 @@ fun AppScreen(
                 checked = lastRun > 0L,
                 failedReason = summary.takeIf { failed },
                 firstName = firstName,
-                onOrder = { onOpenOrder(settings.daysAhead) },
+                onOrder = { onOpenOrder(settings.daysAhead, null) },
             )
 
             // Die App kann nicht merken, dass Android sie nicht mehr weckt —
@@ -318,14 +318,14 @@ fun AppScreen(
                             timetable = sdui?.let { it.plan[day.date].orEmpty() },
                             maxHour = sdui?.maxHour ?: 0,
                             selected = sdui?.subjects.orEmpty(),
-                            onOrder = { onOpenOrder(settings.daysAhead) },
+                            onOrder = { onOpenOrder(settings.daysAhead, day.date) },
                         )
                     }
                 }
             }
 
             TextButton(
-                onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS) },
+                onClick = { onOpenOrder(ORDER_HORIZON_ALL_DAYS, null) },
                 modifier = Modifier.align(Alignment.CenterHorizontally),
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.secondary),
             ) { Text("Alle bestellbaren Tage →") }
@@ -426,11 +426,28 @@ private fun SettingsDialog(
 ) {
     val context = LocalContext.current
     var daysAhead by remember { mutableStateOf(settings.daysAhead) }
-    val timeState = rememberTimePickerState(
-        initialHour = settings.checkTime.hour,
-        initialMinute = settings.checkTime.minute,
-        is24Hour = true,
-    )
+    var checkTime by remember { mutableStateOf(settings.checkTime) }
+    var pickTime by remember { mutableStateOf(false) }
+
+    // Zifferblatt statt TimeInput: das Eingabefeld holt sofort die Tastatur.
+    if (pickTime) {
+        val timeState = rememberTimePickerState(
+            initialHour = checkTime.hour,
+            initialMinute = checkTime.minute,
+            is24Hour = true,
+        )
+        AlertDialog(
+            onDismissRequest = { pickTime = false },
+            text = { TimePicker(state = timeState) },
+            confirmButton = {
+                TextButton(onClick = {
+                    checkTime = LocalTime.of(timeState.hour, timeState.minute)
+                    pickTime = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { pickTime = false }) { Text("Abbrechen") } },
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -438,16 +455,30 @@ private fun SettingsDialog(
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                SectionTitle("Prüfung")
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Werktags gegen %02d:%02d".format(Locale.ROOT, checkTime.hour, checkTime.minute),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { pickTime = true }) { Text("Ändern") }
+                }
+                Text(
+                    "Ein Richtwert: Android darf den Lauf verschieben, wenn das Gerät gerade schläft.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                SectionTitle("Schulessen (Sunshine)")
                 Text(
                     "Vorwarnzeit: " + if (daysAhead == 1) "1 Tag" else "$daysAhead Tage",
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(
-                    "So weit schaut die App voraus. Ein grosses Fenster meldet auch " +
-                        "Tage, deren Bestellschluss noch weit weg ist — erinnert wird " +
-                        "aber nur einmal je Tag.",
+                    "So weit schaut die App voraus; erinnert wird nur einmal je Tag.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Slider(
@@ -457,39 +488,26 @@ private fun SettingsDialog(
                     // Rastet auf ganze Tage — Zwischenwerte gaebe es sonst nur optisch.
                     steps = SettingsStore.MAX_DAYS_AHEAD - SettingsStore.MIN_DAYS_AHEAD - 1,
                 )
-
-                HorizontalDivider()
-
-                Text("Wann geprüft wird", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    "Werktags zu dieser Zeit. Ein Richtwert: Android darf den Lauf " +
-                        "verschieben, wenn das Gerät gerade schläft.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                TimeInput(state = timeState)
-
-                HorizontalDivider()
-
-                // Optionaler Bereich: wer Sdui nicht nutzt, sieht nur diese Zeile.
-                val sduiConfigured = remember { SduiStore(context).isConfigured }
-                TextButton(onClick = onOpenSdui) {
-                    Text(if (sduiConfigured) "Stundenplan (Sdui) bearbeiten …" else "Stundenplan (Sdui) einrichten …")
-                }
-
-                HorizontalDivider()
-
                 // Selten und endgueltig — deshalb hier und nicht auf der Startseite.
                 TextButton(
                     onClick = onDeleteCredentials,
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("Zugangsdaten löschen") }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                // Optionaler Bereich: wer Sdui nicht nutzt, sieht nur diesen Eintrag.
+                SectionTitle("Stundenplan (Sdui)")
+                val sduiConfigured = remember { SduiStore(context).isConfigured }
+                TextButton(onClick = onOpenSdui) {
+                    Text(if (sduiConfigured) "Fächer und Zugang bearbeiten …" else "Einrichten …")
+                }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
                     settings.daysAhead = daysAhead
-                    settings.checkTime = LocalTime.of(timeState.hour, timeState.minute)
+                    settings.checkTime = checkTime
                     // Der schon eingeplante Lauf zielt sonst weiter auf die alte
                     // Zeit — hier ist REPLACE genau richtig.
                     CheckScheduler.scheduleNext(context, ExistingWorkPolicy.REPLACE)
@@ -498,6 +516,15 @@ private fun SettingsDialog(
             ) { Text("Speichern") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
+    )
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.secondary,
     )
 }
 
