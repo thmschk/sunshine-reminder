@@ -51,11 +51,6 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
         results.lastRunEpochMillis = System.currentTimeMillis()
 
-        // Beiwerk, und deshalb streng abgeschirmt: ein Fehler beim
-        // Update-Blick darf den Bestellstand weder faerben noch aufhalten.
-        runCatching { checkForUpdate(results) }
-        runCatching { SduiCheck.run(applicationContext, today) }
-
         // Tagesliste in beiden Erfolgsfaellen sichern — sie ist der Inhalt,
         // den die Oberflaeche anzeigt, unabhaengig davon ob etwas fehlt.
         when (outcome) {
@@ -66,7 +61,7 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         results.lastFailed = outcome is CheckResult.Failed
         checker.lastProfile?.let { results.firstName = it.firstName }
 
-        when (outcome) {
+        val result = when (outcome) {
             is CheckResult.Ok -> {
                 results.lastSummary = if (outcome.days.isEmpty()) {
                     "Keine relevanten Tage im Pruefzeitraum."
@@ -79,6 +74,7 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 // Falsches.
                 results.notifiedDates = emptySet()
                 Notifier.clearReminder(applicationContext)
+                Result.success()
             }
 
             is CheckResult.Alarm -> {
@@ -102,6 +98,7 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                     orderable = outcome.actionable.isNotEmpty(),
                 )
                 results.notifiedDates = NotifiedDays.remember(alreadyNotified, affected, today)
+                Result.success()
             }
 
             is CheckResult.Failed -> {
@@ -115,31 +112,35 @@ class CheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                         "Anmeldung fehlgeschlagen",
                         "${outcome.reason}\n\nZugangsdaten in der App prüfen.",
                     )
-                    CheckScheduler.scheduleNext(applicationContext, ExistingWorkPolicy.REPLACE)
-                    return@withContext Result.success()
-                }
-
-                // Sonst meist ein Funkloch: ein paar Mal still wiederholen und
-                // erst dann melden — sonst piept die App bei jedem U-Bahn-Tunnel.
-                if (runAttemptCount < MAX_ATTEMPTS) {
+                    Result.success()
+                } else if (runAttemptCount < MAX_ATTEMPTS) {
+                    // Sonst meist ein Funkloch: ein paar Mal still wiederholen und
+                    // erst dann melden — sonst piept die App bei jedem U-Bahn-Tunnel.
+                    // Ohne Beiwerk: das laeuft erst im letzten Versuch.
                     return@withContext Result.retry()
+                } else {
+                    Notifier.problem(
+                        applicationContext,
+                        "Bestellstand unbekannt",
+                        "Der Bestellstand konnte nicht geprüft werden:\n${outcome.reason}",
+                    )
+                    Result.failure()
                 }
-                Notifier.problem(
-                    applicationContext,
-                    "Bestellstand unbekannt",
-                    "Der Bestellstand konnte nicht geprüft werden:\n${outcome.reason}",
-                )
-                CheckScheduler.scheduleNext(applicationContext, ExistingWorkPolicy.REPLACE)
-                return@withContext Result.failure()
             }
         }
 
-        // REPLACE und nicht KEEP: der eigene Lauf gilt hier noch als "nicht
-        // abgeschlossen", KEEP wuerde deshalb nichts einplanen und die Kette
-        // bliebe stehen. Dass REPLACE dabei den eigenen, praktisch fertigen
-        // Lauf abbricht, ist folgenlos — Meldung und Speichern sind durch.
+        // Beiwerk, und deshalb streng abgeschirmt: ein Fehler darf den
+        // Bestellstand weder faerben noch aufhalten. Erst NACH der
+        // Essenserinnerung: Android 15+ daempft die zweite von kurz
+        // aufeinanderfolgenden Meldungen derselben App — sie poppt dann nicht auf.
+        runCatching { checkForUpdate(results) }
+        runCatching { SduiCheck.run(applicationContext, today) }
+
+        // Ganz am Ende, auch nach dem Beiwerk: REPLACE bricht den eigenen,
+        // noch "nicht abgeschlossenen" Lauf ab — alles danach liefe nicht mehr.
+        // KEEP waere falsch, es plante gar nichts ein und die Kette bliebe stehen.
         CheckScheduler.scheduleNext(applicationContext, ExistingWorkPolicy.REPLACE)
-        Result.success()
+        result
     }
 
     /**
