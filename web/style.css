@@ -352,3 +352,6 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 
 .pbar-run span { width: 35%; animation: slide 1.1s ease-in-out infinite; position: relative; }
 .ok-text { color: var(--ok); }
+
+/* Kopfzeile ohne Überschrift: nur die Symbole, rechtsbündig */
+header { justify-content: flex-end; min-height: 56px; }

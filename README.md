@@ -1,5 +1,3 @@
-# theoretisch satt
-
 *satt … theoretisch.*
 
 *(früher „immerhin.satt“ und „happy sunshine“, bis 0.1.20 „sunshine reminder“ — Repository und Download-Link heißen weiter so)*

@@ -35,7 +35,7 @@ def block(t, f, fill, lh, gap=0, maxw=W - 2*M, x=M):
 d.text((M, y), "Och nö, Schulessen vergessen!", font=font("Bold", 60), fill=BERRY); y += 76
 d.text((M, y), "Muss doch nicht sein …", font=font("Light", 46), fill=INK); y += 86
 
-block("theoretisch satt sieht werktags von allein nach, ob für die nächsten Tage "
+block("Die Anwendung sieht werktags von allein nach, ob für die nächsten Tage "
       "etwas bestellt ist, meldet sich, wenn noch etwas offen ist — und bestellt "
       "direkt aus der App.",
       font("Regular", 33), INK, 46, gap=24)
