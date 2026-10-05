@@ -395,8 +395,8 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
  * Jede betroffene Kalenderwoche einmal laden; Login muss vorher erfolgt sein.
  * Liefert IBS5 statt der Woche eine Tagesansicht (Handy), wird je Tag geladen.
  */
-export async function collect(client, dates) {
-  if (client.dayView) return collectByDay(client, dates);
+export async function collect(client, dates, { fresh = false } = {}) {
+  if (client.dayView) return collectByDay(client, dates, fresh);
   const weeks = new Map();
   for (const d of dates) {
     const [y, w] = isoWeek(d);
@@ -410,7 +410,7 @@ export async function collect(client, dates) {
     const plan = parseWeekplan(await client.weekplan(y, w));
     if (plan.view === "day") {
       client.dayView = true;
-      return collectByDay(client, dates);
+      return collectByDay(client, dates, fresh);
     }
     if (plan.displayedWeek != null && plan.displayedWeek !== w) {
       throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${plan.displayedWeek}`);
@@ -420,22 +420,31 @@ export async function collect(client, dates) {
   return result.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-const DAY_PARALLEL = 4;
+// Die Tagesansicht kostet eine Anfrage je Tag. Zu viele in kurzer Zeit quittiert
+// IBS5 mit einer IP-Sperre (HTTP 406 auf alles, auch die eigene Startseite) —
+// deshalb strikt nacheinander, mit Pause, und kurz zwischengespeichert.
+const DAY_GAP_MS = 400;
+const DAY_CACHE_MS = 3 * 60 * 1000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function collectByDay(client, dates) {
-  const out = new Array(dates.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < dates.length) {
-      const i = next++;
-      const d = dates[i];
-      const plan = parseWeekplan(await client.dayplan(d));
-      const other = [...plan.days.keys()].find((k) => k !== d);
-      if (other) throw new IbsError(`Angefragt war ${De.short(d)}, geliefert wurde ${De.short(other)}`);
-      out[i] = plan.days.get(d) ?? new DayStatus(d, OrderState.NO_OFFER);
+async function collectByDay(client, dates, fresh) {
+  client.dayCache ??= new Map();
+  const out = [];
+  for (const d of dates) {
+    const hit = client.dayCache.get(d);
+    if (!fresh && hit && Date.now() - hit.at < DAY_CACHE_MS) {
+      out.push(hit.day);
+      continue;
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(DAY_PARALLEL, dates.length) }, worker));
+    if (client.lastDayFetch) await sleep(Math.max(0, client.lastDayFetch + DAY_GAP_MS - Date.now()));
+    client.lastDayFetch = Date.now();
+    const plan = parseWeekplan(await client.dayplan(d));
+    const other = [...plan.days.keys()].find((k) => k !== d);
+    if (other) throw new IbsError(`Angefragt war ${De.short(d)}, geliefert wurde ${De.short(other)}`);
+    const day = plan.days.get(d) ?? new DayStatus(d, OrderState.NO_OFFER);
+    client.dayCache.set(d, { at: Date.now(), day });
+    out.push(day);
+  }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 

@@ -127,7 +127,7 @@ const currentCreds = () => loadCreds() ?? sessionCreds;
 
 // ---------------------------------------------------------------- Startseite
 
-async function showHome() {
+async function showHome(fresh = false) {
   const creds = currentCreds();
   if (!creds) return showSetup();
   chrome(true);
@@ -137,7 +137,7 @@ async function showHome() {
   let days;
   try {
     const cfg = { ...DEFAULT_CHECK, daysAhead: loadDaysAhead() };
-    days = await withLogin(creds, () => collect(client, targetDates(today, cfg)));
+    days = await withLogin(creds, () => collect(client, targetDates(today, cfg), { fresh }));
   } catch (e) {
     if (e instanceof IbsAuthError && !client.token) return showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
     $app.innerHTML = `
@@ -147,7 +147,7 @@ async function showHome() {
         <p class="small">Ein Netzfehler ist keine Aussage darüber, ob bestellt ist.</p>
         <button id="b-retry" class="block">Nochmal versuchen</button>
       </div>`;
-    document.getElementById("b-retry").onclick = showHome;
+    document.getElementById("b-retry").onclick = () => showHome(true);
     return;
   }
 
@@ -241,21 +241,28 @@ async function showOrder(focusDate = null) {
   const creds = currentCreds();
   if (!creds) return showSetup();
   $footer.hidden = true;
-  busy(`Speisepläne der nächsten ${ORDER_WEEKS} Wochen werden geladen …`);
+  busy("Speisepläne werden geladen …");
 
+  // Woche für Woche laden und aufhören, sobald nach einer Woche mit Speiseplan
+  // eine ohne kommt: weiter voraus hat IBS5 noch nichts eingestellt.
   const today = todayBerlin();
-  const dates = [];
-  for (let i = 0; i < ORDER_WEEKS * 7; i++) {
-    const d = addDays(today, i);
-    if (weekdayNo(d) <= 5) dates.push(d);
-  }
-  let all;
+  let all = [];
   try {
-    all = await withLogin(creds, () => collect(client, dates));
+    for (let w = 0; w < ORDER_WEEKS; w++) {
+      const dates = [];
+      for (let i = w * 7; i < (w + 1) * 7; i++) {
+        const d = addDays(today, i);
+        if (weekdayNo(d) <= 5) dates.push(d);
+      }
+      const week = await withLogin(creds, () => collect(client, dates));
+      const offered = week.some((d) => d.state !== OrderState.NO_OFFER);
+      all = all.concat(week);
+      if (!offered && all.some((d) => d.state !== OrderState.NO_OFFER)) break;
+    }
   } catch (e) {
     $app.innerHTML = `<div class="card hero bad"><h2>Laden fehlgeschlagen</h2><p>${esc(e.message)}</p></div>
       <div class="row"><button id="b-back" class="text">← Zurück</button></div>`;
-    document.getElementById("b-back").onclick = showHome;
+    document.getElementById("b-back").onclick = () => showHome();
     return;
   }
 
@@ -270,7 +277,7 @@ async function showOrder(focusDate = null) {
   if (!days.length) {
     $app.innerHTML = `<div class="card"><p>Keine Tage, die sich noch ändern lassen.</p></div>
       <div class="row"><button id="b-back" class="text">← Zurück</button></div>`;
-    document.getElementById("b-back").onclick = showHome;
+    document.getElementById("b-back").onclick = () => showHome();
     return;
   }
 
@@ -301,7 +308,7 @@ async function showOrder(focusDate = null) {
       </div>
     </form>`;
 
-  document.getElementById("b-back").onclick = showHome;
+  document.getElementById("b-back").onclick = () => showHome();
   const form = document.getElementById("f-order");
   const submit = document.getElementById("b-submit");
 
@@ -335,7 +342,7 @@ async function showOrder(focusDate = null) {
 
     busy(dryRun ? "Probelauf …" : "Wird abgeschickt …");
     const result = await withLogin(creds, () =>
-      placeOrders(client, changes, { dryRun, previouslyInCart, reload: (ds) => collect(client, ds) }),
+      placeOrders(client, changes, { dryRun, previouslyInCart, reload: (ds) => collect(client, ds, { fresh: true }) }),
     ).catch((e) => ({ kind: "aborted", reason: e.message }));
 
     const html = {
@@ -346,7 +353,7 @@ async function showOrder(focusDate = null) {
         <p class="small">Bitte auf der Bestellseite nachsehen: ${esc((result.missing || []).map(De.short).join(", "))}</p></div>`,
     }[result.kind];
     $app.innerHTML = `${html}<div class="row"><button id="b-home" class="block">Zur Übersicht</button></div>`;
-    document.getElementById("b-home").onclick = showHome;
+    document.getElementById("b-home").onclick = () => showHome();
   });
 
   if (focusDate) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start" });
@@ -374,7 +381,7 @@ function showSettings() {
         aus deinem Browser mit dem Bestellsystem; über unseren Server laufen keine Zugangsdaten.</p>
       <div class="row" style="justify-content:flex-end"><button id="b-back" class="text">Schließen</button></div>
     </div>`;
-  document.getElementById("b-back").onclick = showHome;
+  document.getElementById("b-back").onclick = () => showHome();
   const range = document.getElementById("days-ahead");
   const showVal = () => {
     const n = Number(range.value);
@@ -394,7 +401,7 @@ function showSettings() {
   };
 }
 
-$reload.onclick = showHome;
+$reload.onclick = () => showHome(true);
 $settings.onclick = showSettings;
 
 if ("serviceWorker" in navigator) {
