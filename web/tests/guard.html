@@ -56,11 +56,14 @@ try {
 
   // 4. Stundenbudget.
   await reset();
-  await kvSet("ibsBudget", Array.from({ length: 60 }, () => Date.now()));
+  const oldest = Date.now() - 50 * 60 * 1000;
+  await kvSet("ibsBudget", [oldest, ...Array.from({ length: 149 }, () => Date.now())]);
   window.fetch = async () => { calls++; return new Response("{}"); };
   let e4 = null;
   try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch (e) { e4 = e; }
-  check("mehr als 60 Anfragen je Stunde pausiert", e4 instanceof IbsPausedError && calls === 0);
+  check("volles Stundenkontingent bremst", e4 instanceof IbsPausedError && calls === 0);
+  check("… nur bis die älteste Anfrage herausfällt, ohne Dauerpause",
+    Math.abs(e4.until - (oldest + 3600 * 1000)) < 1000 && !(await paused()));
 
   // 5. Eingeschleustes HTML im Gerichtsnamen landet nur als Text auf der Seite.
   await reset();

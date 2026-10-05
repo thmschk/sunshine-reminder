@@ -2,14 +2,15 @@
 // ohne CORS-Freigabe, im Browser kommt davon nur „Failed to fetch“ an — nicht von
 // einem Netzfehler zu unterscheiden. Scheitert deshalb selbst der Login so (oder
 // kommt 403/429), ruht jede Abfrage einige Stunden, statt die Sperre durch
-// Wiederholungen zu verlängern. Dazu eine Obergrenze je Stunde und Gerät.
+// Wiederholungen zu verlängern. Dazu eine Obergrenze je Stunde und Gerät, die
+// nur bremst, bis wieder Platz im Stundenfenster ist.
 // Seite und Service Worker teilen den Zustand über IndexedDB.
 
 import { IbsError } from "./ibs.js";
 import { kvDel, kvGet, kvSet } from "./idb.js";
 
 const PAUSE_MS = 3 * 3600 * 1000;
-const HOUR_CAP = 60;
+const HOUR_CAP = 150;
 
 export class IbsPausedError extends IbsError {
   constructor(until, reason) {
@@ -43,10 +44,9 @@ export const guardHooks = {
     if (p) throw new IbsPausedError(p.until, p.reason);
     const now = Date.now();
     const recent = ((await kvGet("ibsBudget")) || []).filter((t) => now - t < 3600 * 1000);
+    // Volles Kontingent ist keine Sperre: nur warten, bis die älteste Anfrage aus der Stunde fällt.
     if (recent.length >= HOUR_CAP) {
-      await pause(`mehr als ${HOUR_CAP} Anfragen in einer Stunde`);
-      const q = await paused();
-      throw new IbsPausedError(q.until, q.reason);
+      throw new IbsPausedError(Math.min(...recent) + 3600 * 1000, `mehr als ${HOUR_CAP} Anfragen in einer Stunde`);
     }
     recent.push(now);
     await kvSet("ibsBudget", recent);

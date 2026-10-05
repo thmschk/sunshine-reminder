@@ -165,7 +165,7 @@ Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
 quittiert IBS5 mit einer Sperre der IP-Adresse (dann geht auch die normale
 Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Tage
 nacheinander mit Pausen und etwas Zufall, drei Minuten zwischengespeichert, die
-Erinnerung höchstens die nächsten fünf Schultage, insgesamt höchstens 60
+Erinnerung höchstens die nächsten fünf Schultage, insgesamt höchstens 150
 Anfragen je Stunde und Gerät. Kommt beim Anmelden gar keine Antwort (so sieht
 die Sperre im Browser aus) oder ein 429, ruht die App drei Stunden und sagt das,
 statt die Sperre durch Wiederholungen zu verlängern. Die Erinnerung auf dem

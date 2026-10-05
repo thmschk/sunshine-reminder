@@ -13,7 +13,7 @@ es geprüft ist. Stand: 2026-10-05.
 | F5 | Zugangsdaten, XSS | IBS5-Passwort gespeichert (nötig für die Hintergrundprüfung), Fremddaten überall maskiert | **behoben**: „Abmelden“ löscht alles samt Schlüssel und Abo, README ehrlich. **geprüft**: präpariertes `<img onerror>` bleibt Text. **nicht umgesetzt**: DOMParser, Trusted Types (siehe unten) |
 | F6 | Sdui-Relay härten | Pfad-Liste, numerische IDs, fester Host, Header-Auswahl, Limit, Timeout gab es | **behoben**: keine Kodierungs-/Traversal-Tricks, Login-Body streng geprüft und neu serialisiert. **nicht umgesetzt**: eigene Subdomain (siehe unten) |
 | F7 | Impressum, Datenschutz, Anbieterbedingungen | fehlte | **offen**: Entwürfe liegen vor, Angaben des Betreibers fehlen. Bis dahin bleibt die Web-Version im geschlossenen Test |
-| F8 | IP-Sperre durch Last | nacheinander, Pausen, Cache gab es. **Fehler**: bei Sperre meldete sich die Seite erneut an | **behoben**: Schutzschalter (3 h Pause nach Netzfehler beim Login oder 429), 60 Anfragen je Stunde und Gerät, Zufall in den Pausen, Anzeige in App und Meldung |
+| F8 | IP-Sperre durch Last | nacheinander, Pausen, Cache gab es. **Fehler**: bei Sperre meldete sich die Seite erneut an | **behoben**: Schutzschalter (3 h Pause nach Netzfehler beim Login oder 429), 150 Anfragen je Stunde und Gerät (bremst nur, bis wieder Platz ist), Zufall in den Pausen, Anzeige in App und Meldung |
 | F9 | Stilles Versagen | Fehler beim Weckruf meldeten sich schon | **behoben**: letzte erfolgreiche Prüfung sichtbar, Warnung nach vier Tagen ohne Erfolg, tägliche Selbstprüfung des Servers mit Alarm an den Betreiber (`/api/health`) |
 
 ## Tests
@@ -21,7 +21,7 @@ es geprüft ist. Stand: 2026-10-05.
 | Befund | Test |
 |---|---|
 | F3, F6 | `server/push/test_app.py`: abgelehnte Endpoints (`http://`, `localhost`, `169.254.169.254`, fremder Host, Benutzerinfo, Port, Länge), Schlüsselformat, Begrenzung, Sdui-Pfade (`../`, `%2e%2e`, `12a`, `//`, `\`), Login-Body |
-| F5, F8 | `web/tests/guard.html`: Pause nach Netzfehler, keine Anfrage während der Pause, genau ein Folgeversuch, 429, 403, Stundenbudget, Parser gibt HTML als Text. `web/tests/xss.html`: echte Startseite mit präpariertem Gerichtsnamen |
+| F5, F8 | `web/tests/guard.html`: Pause nach Netzfehler, keine Anfrage während der Pause, genau ein Folgeversuch, 429, 403, Stundenkontingent, Parser gibt HTML als Text. `web/tests/xss.html`: echte Startseite mit präpariertem Gerichtsnamen |
 | F4 | Header am Live-Server geprüft, kein CSP-Verstoß in der Konsole; Prüfbefehl aus dem README gegen den Live-Server: alle Dateien gleich |
 | F9 | Selbstprüfung beim Start und täglich 06:30, Ergebnis unter `/api/health` |
 
