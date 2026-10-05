@@ -6,7 +6,7 @@ import {
 } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
 
-const VERSION = "v8";
+const VERSION = "v9";
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "manifest.webmanifest"];
 
 self.addEventListener("install", (ev) => {

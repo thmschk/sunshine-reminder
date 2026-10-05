@@ -80,7 +80,13 @@ export class IbsClient {
     this.token = null;
   }
 
-  /** Bewusst ohne Wiederholung: die Sperrpolitik des Anbieters ist unbekannt. */
+  /**
+   * Bewusst ohne Wiederholung: die Sperrpolitik des Anbieters ist unbekannt.
+   *
+   * Ohne X-Requested-With, damit der Login eine einfache CORS-Anfrage ohne
+   * Preflight bleibt: der Service Worker schickt Preflights ohne Accept-Language,
+   * und darauf antwortet IBS5 bei /Login/Login mit 302 statt 200.
+   */
   async login(customerNo, password) {
     const body = new URLSearchParams({
       identifierValue: customerNo,
@@ -88,11 +94,7 @@ export class IbsClient {
       identifierType: "0",
       secretType: "0",
     });
-    const text = await this.#send("/Login/Login", {
-      method: "POST",
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-      body,
-    }, false);
+    const text = await this.#send("/Login/Login", { method: "POST", body }, false);
     let obj;
     try {
       obj = JSON.parse(text);
@@ -165,7 +167,8 @@ export class IbsClient {
   }
 
   async #send(path, init, auth = true) {
-    const headers = { ...(init.headers || {}) };
+    // Ausdrücklich gesetzt: Anfragen aus dem Service Worker tragen es sonst nicht immer.
+    const headers = { "Accept-Language": "de-DE,de;q=0.9", ...(init.headers || {}) };
     if (auth) {
       if (!this.token) throw new IbsAuthError("Nicht eingeloggt");
       headers.Authorization = `Bearer ${this.token}`;
