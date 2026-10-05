@@ -104,7 +104,14 @@ function busy(text) {
 
 // ---------------------------------------------------------------- Einrichten
 
+/**
+ * Zähler der zuletzt geöffneten Ansicht. Lädt die Übersicht noch, während schon
+ * eine andere Ansicht offen ist, darf sie danach nicht mehr zeichnen.
+ */
+let viewSeq = 0;
+
 function showSetup(message = "", prefill = {}) {
+  viewSeq++;
   chrome(false);
   $app.innerHTML = `
     <div class="card hero open intro">
@@ -201,6 +208,7 @@ const currentCreds = () => loadCreds() ?? sessionCreds;
 async function showHome(fresh = false) {
   const creds = currentCreds();
   if (!creds) return showSetup();
+  const my = ++viewSeq;
   chrome(true);
   busy("Wochenplan wird geladen …");
 
@@ -210,6 +218,7 @@ async function showHome(fresh = false) {
     const cfg = { ...DEFAULT_CHECK, daysAhead: loadDaysAhead() };
     days = await withLogin(creds, () => collect(client, targetDates(today, cfg), { fresh }));
   } catch (e) {
+    if (my !== viewSeq) return;
     if (e instanceof IbsAuthError && !client.token) return showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
     const isPause = e instanceof IbsPausedError;
     $app.innerHTML = `
@@ -232,6 +241,7 @@ async function showHome(fresh = false) {
   const sdui = await Sdui.cachedPlan().catch(() => null);
   const cfg = sdui ? await Sdui.sduiConfig() : null;
   const strip = sdui ? stripMaker(sdui.lessons, cfg?.subjects || []) : null;
+  if (my !== viewSeq) return;
 
   $app.innerHTML = `
     ${heroCard(days, profile?.firstName || "")}
@@ -255,6 +265,7 @@ async function showHome(fresh = false) {
 
   await kvSet("lastOk", { at: Date.now(), via: "app" }).catch(() => {});
   store.lastPushOk = await kvGet("lastPushOk").catch(() => null);
+  if (my !== viewSeq) return;
   const stale = pushStale();
   if (stale) $app.insertAdjacentHTML("afterbegin", stale);
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" }).format(new Date());
@@ -407,6 +418,7 @@ function dayRow(d, strip = null) {
 async function showOrder(focusDate = null) {
   const creds = currentCreds();
   if (!creds) return showSetup();
+  viewSeq++;
   chrome(false);
   $header.hidden = true; // wie OrderScreen der App: nur „Bestellen“ und „Zurück“
   $app.innerHTML = `
@@ -593,54 +605,53 @@ function confirmDialog(title, lines) {
 
 // ---------------------------------------------------------------- Einstellungen
 
+// Einfarbige Symbole (Material, 24er Raster), wie in der Kopfzeile.
+const ICON = {
+  bell: "M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
+  clock: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
+  calendar: "M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z",
+  play: "M8 5v14l11-7z",
+  school: "M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3L1 9l11 6 9-4.91V17h2V9L12 3z",
+  star: "M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z",
+  person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+  logout: "M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z",
+  key: "M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z",
+};
+const ico = (name) => `<svg class="s-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
+
+/** Eine Zeile der Einstellungen: Symbol, Titel, Untertitel, rechts ein Bedienelement. */
+const srow = (icon, title, sub = "", right = "", cls = "") => `
+  <div class="srow ${cls}">${ico(icon)}<div class="srow-txt"><div class="srow-t">${title}</div>${
+    sub ? `<div class="srow-s">${sub}</div>` : ""}</div>${right}</div>`;
+
+/** Einstellungen nach Entwurf A: Gruppen mit kurzen Zeilen statt Fließtext. */
 function showSettings() {
+  viewSeq++;
   const creds = currentCreds();
   chrome(false);
   $header.hidden = true;
   $app.innerHTML = `
-    <div class="back-head"><button id="b-back" class="text">← Zurück</button></div>
-    <div class="card settings">
-      <h2>Einstellungen</h2>
-      <h4>Erinnerung</h4>
-      <div id="push-box">${pushBoxHtml()}</div>
-      <hr>
-      <h4>Schulessen (Sunshine)</h4>
-      <!-- Plus/Minus statt Schieberegler: ein Regler verstellt sich beim Scrollen über ihn hinweg. -->
-      <div class="stepper">
-        <span>Vorwarnzeit: <b id="days-ahead-val"></b></span>
-        <button type="button" id="days-minus" class="step" aria-label="einen Tag weniger">−</button>
-        <button type="button" id="days-plus" class="step" aria-label="einen Tag mehr">+</button>
-      </div>
-      <p class="small muted u-my48">So weit schaut die Übersicht voraus, ab morgen gerechnet.
-        Die Erinnerung prüft davon höchstens die nächsten 5 Schultage.</p>
-      <p class="small muted u-mb0">${esc(profile?.name || "")}${profile?.institution ? ` · ${esc(profile.institution)}` : ""}<br>
-        Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}</p>
-      <button id="b-logout" class="danger">Abmelden und alles löschen</button>
-      <hr>
-      <h4>Stundenplan (Sdui)</h4>
-      <div id="sdui-box"></div>
-      <hr>
-      <h4>Über diese Seite</h4>
-      <p class="small muted u-mt0"><b>Testversion.</b> Die Erinnerung prüft auf diesem Gerät. Unser Server weckt
-        es dafür nur und kennt weder IBS5-Zugangsdaten noch Bestellungen. Nur die Sdui-Anbindung läuft durch ihn
-        (siehe dort). Auf dem iPhone ist die Erinnerung noch nicht ausprobiert.</p>
-      <p class="small muted">Kein offizielles Angebot von Sunshine Catering oder dem Hersteller von IBS5. Die Seite spricht direkt
-        aus deinem Browser mit dem Bestellsystem.</p>
-    </div>`;
+    <div class="s-head"><button id="b-back" class="icon" aria-label="Zurück" title="Zurück">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+    </button><h2>Einstellungen</h2></div>
+
+    <div class="group-title">Erinnerung</div>
+    <div class="group" id="push-box"></div>
+
+    <div class="group-title">Stundenplan (Sdui)</div>
+    <div class="group" id="sdui-box"></div>
+
+    <div class="group-title">Konto</div>
+    <div class="group">
+      ${srow("person", esc(profile?.name || "Angemeldet"),
+        `Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}`)}
+      <button id="b-logout" class="srow srow-btn danger-row">${ico("logout")}<div class="srow-txt"><div class="srow-t">Abmelden und alles löschen</div></div></button>
+    </div>
+
+    <p class="foot-note">Testversion · <a href="https://github.com/thmschk/sunshine-reminder#architektur" target="_blank" rel="noopener">So funktioniert's</a>
+      · <button id="b-about" class="linklike">Über die App</button></p>`;
   document.getElementById("b-back").onclick = () => showHome();
-  const showVal = () => {
-    const n = loadDaysAhead();
-    document.getElementById("days-ahead-val").textContent = n === 1 ? "1 Tag" : `${n} Tage`;
-    document.getElementById("days-minus").disabled = n <= DAYS_AHEAD.min;
-    document.getElementById("days-plus").disabled = n >= DAYS_AHEAD.max;
-  };
-  const step = (d) => () => {
-    saveDaysAhead(Math.min(DAYS_AHEAD.max, Math.max(DAYS_AHEAD.min, loadDaysAhead() + d)));
-    showVal();
-  };
-  document.getElementById("days-minus").onclick = step(-1);
-  document.getElementById("days-plus").onclick = step(1);
-  showVal();
+  document.getElementById("b-about").onclick = showAbout;
   wirePushBox();
   wireSduiBox();
   document.getElementById("b-logout").onclick = async () => {
@@ -655,37 +666,60 @@ function showSettings() {
   };
 }
 
+/** Vorwarnzeit mit −/+: ein Schieberegler verstellt sich beim Scrollen über ihn hinweg. */
+function daysAheadRow() {
+  const n = loadDaysAhead();
+  return srow("calendar", "Vorwarnzeit", "so weit schaut die Übersicht voraus", `
+    <div class="stepper">
+      <button type="button" id="days-minus" class="step" aria-label="einen Tag weniger" ${n <= DAYS_AHEAD.min ? "disabled" : ""}>−</button>
+      <b id="days-ahead-val">${n}</b>
+      <button type="button" id="days-plus" class="step" aria-label="einen Tag mehr" ${n >= DAYS_AHEAD.max ? "disabled" : ""}>+</button>
+    </div>`);
+}
+
+function wireDaysAhead() {
+  const step = (d) => () => {
+    saveDaysAhead(Math.min(DAYS_AHEAD.max, Math.max(DAYS_AHEAD.min, loadDaysAhead() + d)));
+    const n = loadDaysAhead();
+    document.getElementById("days-ahead-val").textContent = n;
+    document.getElementById("days-minus").disabled = n <= DAYS_AHEAD.min;
+    document.getElementById("days-plus").disabled = n >= DAYS_AHEAD.max;
+  };
+  document.getElementById("days-minus").onclick = step(-1);
+  document.getElementById("days-plus").onclick = step(1);
+}
+
 // ---------------------------------------------------------------- Sdui
 
 const SDUI_NOTE = `Sdui lässt Webseiten nicht direkt zu, deshalb laufen Anmeldung und Abruf über unseren Server. Er reicht
-  sie nur durch und speichert nichts. Dein Sdui-Passwort geht dabei einmal hindurch; auf dem Gerät bleibt nur ein
+  sie nur durch und speichert nichts. Dein Sdui-Passwort geht dabei einmal hindurch. Auf dem Gerät bleibt nur ein
   Zugangsschlüssel, der ein Jahr gilt.`;
 
 async function wireSduiBox(message = "") {
   const box = document.getElementById("sdui-box");
   if (!box) return;
   const cfg = await Sdui.sduiConfig();
-  const msg = message ? `<p class="small error">${esc(message)}</p>` : "";
+  const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
   if (!cfg) {
-    box.innerHTML = `${msg}<p class="small muted u-mb6">Wer mag, holt sich den Stundenplan dazu: Die
-      Startseite zeigt je Tag die Stunden, und die Erinnerung meldet am Vortag gewählte Fächer wie Sport.</p>
-      <button id="b-sdui-setup" class="text u-pl0">Einrichten …</button>`;
+    box.innerHTML = `${msg}
+      <button id="b-sdui-setup" class="srow srow-btn">${ico("school")}<div class="srow-txt"><div class="srow-t">Stundenplan einrichten</div>
+        <div class="srow-s">Zeitleiste je Tag, Erinnerung an Fächer wie Sport</div></div><span class="chev">›</span></button>`;
     document.getElementById("b-sdui-setup").onclick = () => sduiSetupForm();
     return;
   }
   const known = (await kvGet("sduiKnown")) || [];
   const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
   box.innerHTML = `${msg}
-    <div>${esc(cfg.childName || "")}${cfg.slink ? ` <span class="small muted">· ${esc(cfg.slink)}</span>` : ""}</div>
-    <p class="small muted u-my64">Am Vortag mit der Essenserinnerung melden:</p>
-    ${known.length ? `
-    <details class="dropdown">
-      <summary><span class="dd-label">Erinnern an</span><span class="dd-value"></span></summary>
-      <div class="subjects">${known.map((sub) => `
-        <label class="check"><input type="checkbox" value="${esc(sub)}" ${cfg.subjects.includes(sub) ? "checked" : ""}>
-          ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")}</div>
-    </details>` : `<p class="small muted">Noch kein Plan geladen.</p>`}
-    <button id="b-sdui-off" class="danger">Sdui entfernen</button>`;
+    ${srow("school", esc(cfg.childName || "verbunden"), `verbunden${cfg.slink ? ` · ${esc(cfg.slink)}` : ""}`)}
+    ${srow("star", "Erinnern an", "am Vortag, mit der Essenserinnerung")}
+    <div class="group-pad">${known.length ? `
+      <details class="dropdown">
+        <summary><span class="dd-label">Fächer</span><span class="dd-value"></span></summary>
+        <div class="subjects">${known.map((sub) => `
+          <label class="check"><input type="checkbox" value="${esc(sub)}" ${cfg.subjects.includes(sub) ? "checked" : ""}>
+            ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")}</div>
+      </details>` : `<p class="small muted u-m0">Noch kein Plan geladen.</p>`}</div>
+    <button id="b-sdui-off" class="srow srow-btn danger-row small-row"><div class="srow-txt"><div class="srow-t">Sdui entfernen</div></div></button>`;
   // Im zugeklappten Feld stehen die Kürzel der gewählten Fächer, wie in der App.
   const showChosen = () => {
     const chosen = [...box.querySelectorAll(".subjects input:checked")].map((x) => x.value);
@@ -706,7 +740,7 @@ async function wireSduiBox(message = "") {
 
 function sduiSetupForm(message = "") {
   const box = document.getElementById("sdui-box");
-  box.innerHTML = `
+  box.innerHTML = `<div class="group-pad">
     ${message ? `<p class="small error">${esc(message)}</p>` : ""}
     <p class="small muted u-m0">${SDUI_NOTE}</p>
     <form id="f-sdui">
@@ -720,14 +754,14 @@ function sduiSetupForm(message = "") {
         <button type="submit" class="block">Verbinden</button>
       </div>
       <div class="row u-mt4"><button type="button" id="b-sdui-cancel" class="text">Abbrechen</button></div>
-    </form>`;
+    </form></div>`;
   document.getElementById("b-sdui-cancel").onclick = () => wireSduiBox();
   document.getElementById("f-sdui").onsubmit = async (ev) => {
     ev.preventDefault();
     const slink = Sdui.parseSlink(document.getElementById("s-school").value);
     const identifier = document.getElementById("s-id").value.trim();
     const password = document.getElementById("s-pw").value;
-    box.innerHTML = `<p class="small muted">Verbinde mit Sdui …</p>`;
+    box.innerHTML = `<p class="small muted group-pad">Verbinde mit Sdui …</p>`;
     try {
       const { token, expires } = await Sdui.login(identifier, password, slink);
       const kids = await Sdui.children(token);
@@ -747,9 +781,9 @@ function sduiSetupForm(message = "") {
 function chooseChild(kids) {
   return new Promise((resolve) => {
     const box = document.getElementById("sdui-box");
-    box.innerHTML = `<p class="small muted u-mb6">Für welches Kind?</p>
+    box.innerHTML = `<div class="group-pad"><p class="small muted u-mb6">Für welches Kind?</p>
       ${kids.map((k, i) => `<button class="text kid u-block u-pl0" data-i="${i}">${esc(k.name)}</button>`).join("")}
-      <button class="text u-pl0" id="b-kid-cancel">Abbrechen</button>`;
+      <button class="text u-pl0" id="b-kid-cancel">Abbrechen</button></div>`;
     box.querySelectorAll(".kid").forEach((b) => { b.onclick = () => resolve(kids[Number(b.dataset.i)]); });
     document.getElementById("b-kid-cancel").onclick = () => resolve(null);
   });
@@ -761,43 +795,39 @@ const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent);
 const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const pushSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 
+const toggle = (id, on, label) =>
+  `<button type="button" id="${id}" class="switch${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="${label}"></button>`;
+
 function pushBoxHtml(message = "") {
-  const msg = message ? `<p class="small error">${esc(message)}</p>` : "";
+  const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
   if (!pushSupported) {
-    return `<p class="small muted u-m0">${isIos && !standalone
-      ? "Auf dem iPhone gibt es Erinnerungen nur, wenn die Seite über Teilen → „Zum Home-Bildschirm“ installiert ist und von dort geöffnet wird."
-      : "Dieser Browser kann keine Erinnerungen empfangen."}</p>`;
+    return srow("bell", "Erinnerung", isIos && !standalone
+      ? "Auf dem iPhone nur, wenn die Seite über Teilen → „Zum Home-Bildschirm“ installiert ist und von dort geöffnet wird."
+      : "Dieser Browser kann keine Erinnerungen empfangen.") + daysAheadRow();
   }
-  if (!store.push) {
-    return `${msg}<p class="small muted u-mb6">Werktags zur gewählten Zeit prüft dieses Gerät selbst und meldet sich,
-      wenn etwas offen ist. Unser Server weckt es dafür nur — er kennt weder Zugangsdaten noch Bestellstand.</p>
-      <label class="u-normal" for="push-time">Uhrzeit</label>
-      <input id="push-time" type="time" value="${DEFAULT_PUSH_TIME}" step="300">
-      <div class="row"><button id="b-push-on" class="block">Erinnerung einschalten</button></div>`;
-  }
+  const on = !!store.push;
+  const time = on ? store.push.time : DEFAULT_PUSH_TIME;
   // Betreiber-Gerät markieren: nur sichtbar über …/#betreiber, braucht den Schlüssel vom Server.
-  const admin = location.hash === "#betreiber" ? `
-    <hr><p class="small muted u-m0">Betreiber: Dieses Gerät bekommt dann die Alarme der täglichen Selbstprüfung.</p>
-    ${passwordField("admin-key", 'placeholder="Betreiber-Schlüssel"')}
-    <div class="row"><button id="b-push-admin" class="text u-pl0">Als Betreiber-Gerät markieren</button></div>` : "";
-  return `${msg}<div>Werktags gegen ${esc(store.push.time)}</div>
-    <p class="small muted u-m0">Die Meldung kommt im Lauf der halben Stunde danach, damit nicht alle Geräte
-      gleichzeitig beim Bestellsystem anfragen.</p>
-    <label class="u-normal" for="push-time">Uhrzeit ändern</label>
-    <input id="push-time" type="time" value="${esc(store.push.time)}" step="300">
-    <div class="row">
-      <button id="b-push-test" class="text">Jetzt testen</button>
-      <button id="b-push-off" class="danger">Ausschalten</button>
-    </div>${admin}
-`;
+  const admin = on && location.hash === "#betreiber" ? `
+    ${srow("key", "Betreiber-Gerät", "bekommt die Alarme der täglichen Selbstprüfung")}
+    <div class="group-pad">${passwordField("admin-key", 'placeholder="Betreiber-Schlüssel"')}
+      <div class="row"><button id="b-push-admin" class="text u-pl0">Als Betreiber-Gerät markieren</button></div></div>` : "";
+  return `${msg}
+    ${srow("bell", "Erinnerung", on ? "werktags, prüft auf diesem Gerät" : "aus", toggle("push-switch", on, "Erinnerung"))}
+    ${srow("clock", "Uhrzeit", "kommt bis zu 30 Minuten später",
+      `<input id="push-time" class="time-pill" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit">`)}
+    ${daysAheadRow()}
+    ${on ? `<button id="b-push-test" class="srow srow-btn">${ico("play")}<div class="srow-txt"><div class="srow-t">Jetzt testen</div>
+      <div class="srow-s">zeigt sofort die Meldung von heute</div></div></button>` : ""}
+    ${admin}`;
 }
 
 function wirePushBox(message = "") {
   const box = document.getElementById("push-box");
   if (!box) return;
   box.innerHTML = pushBoxHtml(message);
-  const on = document.getElementById("b-push-on");
-  const off = document.getElementById("b-push-off");
+  wireDaysAhead();
+  const sw = document.getElementById("push-switch");
   const test = document.getElementById("b-push-test");
   const time = document.getElementById("push-time");
   const guard = (fn) => async () => {
@@ -808,8 +838,7 @@ function wirePushBox(message = "") {
       wirePushBox(e.message);
     }
   };
-  if (on) on.onclick = guard(() => pushEnable(time.value || DEFAULT_PUSH_TIME));
-  if (off) off.onclick = guard(pushDisable);
+  if (sw) sw.onclick = guard(() => (store.push ? pushDisable() : pushEnable(time?.value || DEFAULT_PUSH_TIME)));
   if (test) test.onclick = guard(pushTest);
   const adm = document.getElementById("b-push-admin");
   if (adm) adm.onclick = guard(async () => {
@@ -817,6 +846,7 @@ function wirePushBox(message = "") {
       { "X-Admin-Key": document.getElementById("admin-key").value });
     alert("Dieses Gerät ist jetzt Betreiber-Gerät.");
   });
+  // Ohne Abo merkt sich das Feld nur die Wahl fürs Einschalten.
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
 }
 
