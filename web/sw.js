@@ -1,6 +1,6 @@
 // Service Worker: hält die App-Hülle für den Start vom Home-Bildschirm vor.
 // Anfragen an das Bestellsystem gehen nie über den Cache.
-const VERSION = "v5";
+const VERSION = "v6";
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "style.css", "icon.svg", "manifest.webmanifest"];
 
 self.addEventListener("install", (ev) => {
