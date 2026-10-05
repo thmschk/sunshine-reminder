@@ -57,6 +57,9 @@ header h1 { font-size: 1.85rem; font-weight: 400; margin: 0; flex: 1; letter-spa
 
 main { width: 100%; max-width: 640px; margin: 0 auto; padding: 4px 16px 24px; flex: 1; }
 footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 100%;
   max-width: 640px;
   margin: 0 auto;
@@ -201,3 +204,12 @@ dialog.dialog::backdrop { background: rgba(0, 0, 0, .32); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .dialog-actions .text { color: var(--secondary); }
 pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
+
+.back-head { margin: 22px 0 0 -8px; }
+.icon.heart { color: #CA7A98; padding: 6px; }
+.icon.heart svg { width: 18px; height: 18px; }
+.about { text-align: center; }
+.about-heart { width: 28px; height: 28px; fill: #CA7A98; display: block; margin: 0 auto 12px; }
+.about p { display: block; -webkit-line-clamp: unset; text-align: left; line-height: 1.5; }
+.about a { color: var(--secondary); text-decoration: underline; }
+.about .dialog-actions { justify-content: flex-end; }

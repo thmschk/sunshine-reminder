@@ -12,9 +12,6 @@ Die App prüft **auf dem Gerät**. Es gibt keinen Server, keine Anmeldung bei
 einem Dienst, kein Konto. Die Zugangsdaten verlassen das Handy nur in Richtung
 des Bestellsystems bzw. von Sdui selbst.
 
-Für iPhone und alle anderen Geräte gibt es eine **Web-Version** zum Testen:
-**<https://sunshine.thomschke.info>** — siehe [unten](#web-version-für-iphone-und-andere-test).
-
 ## Web-Version für iPhone und andere (Test)
 
 Eine native iPhone-App gibt es nicht und wird es nicht geben: iOS entscheidet
@@ -22,7 +19,8 @@ selbst, ob und wann eine App im Hintergrund rechnen darf. Eine Prüfung mit
 Frist kann Stunden zu spät kommen oder ausfallen. Empfangen kann das iPhone
 eine Erinnerung aber tadellos — nur auslösen muss sie jemand anders.
 
-Genau das macht die Web-Version unter **<https://sunshine.thomschke.info>**:
+Genau das macht eine Web-Version, die gerade erprobt wird (die Adresse folgt,
+sobald sie allgemein offen ist):
 
 * Sie kann, was die App kann: Übersicht der nächsten Tage, bestellen,
   umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit

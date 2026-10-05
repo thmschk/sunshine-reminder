@@ -194,8 +194,12 @@ async function showHome(fresh = false) {
   if (now) now.onclick = () => showOrder(days.find((d) => d.isActionable).date);
 
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" }).format(new Date());
-  $footer.textContent = `Geprüft ${t}`;
+  $footer.innerHTML = `<span>Geprüft ${t}</span>
+    <button id="b-heart" class="icon heart" title="Über diese App" aria-label="Über diese App">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART}"/></svg>
+    </button>`;
   $footer.hidden = false;
+  document.getElementById("b-heart").onclick = showAbout;
 }
 
 /** Die eine Aussage der Startseite, wie HeroCard der App: Dringendes zuerst. */
@@ -408,6 +412,31 @@ async function showOrder(focusDate = null) {
   if (focusDate) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
+const REPO_URL = "https://github.com/thmschk/sunshine-reminder";
+const DONATE_URL = "https://paypal.me/LorenzThomschke";
+// ic_heart der App (Material favorite_border).
+const HEART = "M16.5,3c-1.74,0 -3.41,0.81 -4.5,2.09C10.91,3.81 9.24,3 7.5,3 4.42,3 2,5.42 2,8.5c0,3.78 3.4,6.86 8.55,11.54L12,21.35l1.45,-1.32C18.6,15.36 22,12.28 22,8.5 22,5.42 19.58,3 16.5,3zM12.1,18.55l-0.1,0.1 -0.1,-0.1C7.14,14.24 4,11.39 4,8.5 4,6.5 5.5,5 7.5,5c1.54,0 3.04,0.99 3.57,2.36h1.87C13.46,5.99 14.96,5 16.5,5c2,0 3.5,1.5 3.5,3.5 0,2.89 -3.14,5.74 -7.9,10.05z";
+
+/** Wie DonateDialog der App: erst der Satz, dann der Griff nach draußen. */
+function showAbout() {
+  const dlg = document.createElement("dialog");
+  dlg.className = "dialog about";
+  dlg.innerHTML = `
+    <svg class="about-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART}"/></svg>
+    <h3>Über diese App</h3>
+    <p>Diese App wurde mithilfe eines KI-Agenten in meiner Freizeit entwickelt. Ich freue mich über Feedback.
+      Wer will, darf gerne auch <a href="${REPO_URL}" target="_blank" rel="noopener">mitcoden</a>.
+      Wer mir unbedingt einen Espresso spendieren möchte, darf das per
+      <a href="${DONATE_URL}" target="_blank" rel="noopener">PayPal.Me</a> machen.</p>
+    <div class="dialog-actions"><button type="button" class="text">Schließen</button></div>`;
+  document.body.append(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener("cancel", close);
+  dlg.querySelector("button").onclick = close;
+  dlg.querySelectorAll("a").forEach((a) => a.addEventListener("click", close));
+  dlg.showModal();
+}
+
 /** Rückfrage wie AlertDialog der App; true = „Abschicken“. */
 function confirmDialog(title, lines) {
   return new Promise((resolve) => {
@@ -432,8 +461,10 @@ function confirmDialog(title, lines) {
 
 function showSettings() {
   const creds = currentCreds();
-  $footer.hidden = true;
+  chrome(false);
+  $header.hidden = true;
   $app.innerHTML = `
+    <div class="back-head"><button id="b-back" class="text">← Zurück</button></div>
     <div class="card settings">
       <h2>Einstellungen</h2>
       <h4>Erinnerung</h4>
@@ -449,10 +480,10 @@ function showSettings() {
       <button id="b-logout" class="danger">Zugangsdaten löschen</button>
       <hr>
       <h4>Über diese Seite</h4>
-      <p class="small muted" style="margin-top:0"><b>Prototyp.</b> Es gibt noch keine Erinnerung — die Seite prüft nur, wenn sie offen ist.</p>
+      <p class="small muted" style="margin-top:0"><b>Testversion.</b> Die Erinnerung prüft auf diesem Gerät; unser Server weckt
+        es dafür nur und kennt weder Zugangsdaten noch Bestellungen. Auf dem iPhone ist sie noch nicht ausprobiert.</p>
       <p class="small muted">Kein offizielles Angebot von Sunshine Catering oder dem Hersteller von IBS5. Die Seite spricht direkt
-        aus deinem Browser mit dem Bestellsystem; über unseren Server laufen keine Zugangsdaten.</p>
-      <div class="row" style="justify-content:flex-end"><button id="b-back" class="text">Schließen</button></div>
+        aus deinem Browser mit dem Bestellsystem.</p>
     </div>`;
   document.getElementById("b-back").onclick = () => showHome();
   const range = document.getElementById("days-ahead");
@@ -501,10 +532,9 @@ function pushBoxHtml(message = "") {
     <input id="push-time" type="time" value="${esc(store.push.time)}" step="300">
     <div class="row">
       <button id="b-push-test" class="text">Jetzt testen</button>
-      <button id="b-push-diag" class="text">Diagnose</button>
       <button id="b-push-off" class="danger">Ausschalten</button>
     </div>
-    <pre id="diag" class="msg small muted" hidden></pre>`;
+`;
 }
 
 function wirePushBox(message = "") {
@@ -526,35 +556,6 @@ function wirePushBox(message = "") {
   if (on) on.onclick = guard(() => pushEnable(time.value || DEFAULT_PUSH_TIME));
   if (off) off.onclick = guard(pushDisable);
   if (test) test.onclick = guard(pushTest);
-  const diag = document.getElementById("b-push-diag");
-  if (diag) diag.onclick = async () => {
-    const out = document.getElementById("diag");
-    out.hidden = false;
-    out.textContent = "läuft …";
-    const reg = await navigator.serviceWorker.ready;
-    const answer = new Promise((resolve) => {
-      const onMsg = (ev) => {
-        if (!ev.data?.diag) return;
-        navigator.serviceWorker.removeEventListener("message", onMsg);
-        resolve(ev.data.diag);
-      };
-      navigator.serviceWorker.addEventListener("message", onMsg);
-      setTimeout(() => resolve("keine Antwort vom Service Worker (20 s)"), 20000);
-    });
-    reg.active.postMessage("diag");
-    // Zum Vergleich dieselbe leere Anfrage aus der Seite: scheitert sie auch, ist
-    // das Netz bzw. die IP gesperrt, nicht der Service Worker.
-    let page;
-    try {
-      const r = await fetch("https://ibs.sunshine-catering.de/ibs5/Login/Login", {
-        method: "POST", body: new URLSearchParams({ identifierValue: "", secretValue: "" }), credentials: "omit", redirect: "manual",
-      });
-      page = `ok   Seite: Login-Endpunkt erreichbar (HTTP ${r.status} ${r.type})`;
-    } catch (e) {
-      page = `FEHL Seite: Login-Endpunkt: ${e.name} ${e.message}`;
-    }
-    out.textContent = `${await answer}\n${page}`;
-  };
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
 }
 
