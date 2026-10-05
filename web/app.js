@@ -1,6 +1,6 @@
 import {
   DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
-  addDays, changeKind, collect, placeOrders, targetDates, todayBerlin, weekdayNo,
+  addDays, changeKind, collect, isoWeek, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
 import * as Sdui from "./sdui.js";
@@ -120,7 +120,7 @@ function showSetup(message = "", prefill = {}) {
         <label for="cn">Kundennummer</label>
         <input id="cn" name="username" type="text" inputmode="numeric" autocomplete="username" required value="${esc(prefill.customerNo)}">
         <label for="pw">Passwort</label>
-        <input id="pw" name="password" type="password" autocomplete="current-password" required>
+        ${passwordField("pw", 'name="password"')}
         <label class="check"><input id="remember" type="checkbox" checked> Auf diesem Gerät merken</label>
         <div class="row"><button type="submit" class="block">Speichern und prüfen</button></div>
       </form>
@@ -163,6 +163,31 @@ function installTip() {
     </div>`;
 }
 
+const EYE = "M12,4.5C7,4.5 2.73,7.61 1,12c1.73,4.39 6,7.5 11,7.5s9.27,-3.11 11,-7.5c-1.73,-4.39 -6,-7.5 -11,-7.5zM12,17c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5zM12,9c-1.66,0 -3,1.34 -3,3s1.34,3 3,3 3,-1.34 3,-3 -1.34,-3 -3,-3z";
+const EYE_OFF = "M12,7c2.76,0 5,2.24 5,5 0,0.65 -0.13,1.26 -0.36,1.83l2.92,2.92c1.51,-1.26 2.7,-2.89 3.43,-4.75 -1.73,-4.39 -6,-7.5 -11,-7.5 -1.4,0 -2.740,0.25 -3.98,0.7l2.16,2.16C10.74,7.13 11.35,7 12,7zM2,4.27l2.28,2.28 0.46,0.46C3.08,8.3 1.78,10.02 1,12c1.73,4.39 6,7.5 11,7.5 1.55,0 3.03,-0.3 4.38,-0.84l0.42,0.42L19.73,22 21,20.73 3.27,3 2,4.27zM7.53,9.8l1.55,1.55c-0.05,0.21 -0.08,0.43 -0.08,0.65 0,1.66 1.34,3 3,3 0.22,0 0.44,-0.03 0.65,-0.08l1.55,1.55c-0.67,0.33 -1.41,0.53 -2.2,0.53 -2.76,0 -5,-2.24 -5,-5 0,-0.79 0.2,-1.53 0.53,-2.2zM11.84,9.02l3.15,3.15 0.02,-0.16c0,-1.66 -1.34,-3 -3,-3l-0.17,0.01z";
+
+/** Passwortfeld mit Auge zum Anzeigen, wie in der App (ic_visibility / ic_visibility_off). */
+function passwordField(id, extra = "") {
+  return `<div class="pw-field">
+    <input id="${id}" ${extra} type="password" autocomplete="current-password" required>
+    <button type="button" class="icon pw-eye" data-for="${id}" aria-label="Passwort anzeigen" title="Passwort anzeigen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${EYE}"/></svg>
+    </button>
+  </div>`;
+}
+
+// Ein Klickhandler für alle Augen, auch in später eingefügten Formularen.
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest?.(".pw-eye");
+  if (!btn) return;
+  const input = document.getElementById(btn.dataset.for);
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  btn.querySelector("path").setAttribute("d", show ? EYE_OFF : EYE);
+  btn.setAttribute("aria-label", show ? "Passwort verbergen" : "Passwort anzeigen");
+  btn.title = btn.getAttribute("aria-label");
+});
+
 let sessionCreds = null;
 const currentCreds = () => loadCreds() ?? sessionCreds;
 
@@ -202,7 +227,8 @@ async function showHome(fresh = false) {
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
       <div class="section">DIE NÄCHSTEN TAGE</div>
-      <ul class="days">${days.slice(0, DAY_LIST_LENGTH).map((d) => dayRow(d, strip)).join("")}</ul>` : ""}
+      ${byWeek(days.slice(0, DAY_LIST_LENGTH)).map((week) => `
+        <ul class="days">${week.map((d) => dayRow(d, strip)).join("")}</ul>`).join("")}` : ""}
     <div class="center"><button id="b-all" class="text">Alle bestellbaren Tage →</button></div>`;
 
   for (const li of $app.querySelectorAll(".days li")) {
@@ -223,6 +249,17 @@ async function showHome(fresh = false) {
     </button>`;
   $footer.hidden = false;
   document.getElementById("b-heart").onclick = showAbout;
+}
+
+/** Tage nach Kalenderwoche gruppiert: jede Woche eine eigene Karte, damit der Montag sich absetzt. */
+function byWeek(days) {
+  const out = [];
+  for (const d of days) {
+    const key = isoWeek(d.date).join("-");
+    if (out.at(-1)?.key !== key) out.push({ key, days: [] });
+    out.at(-1).days.push(d);
+  }
+  return out.map((w) => w.days);
 }
 
 /** Die eine Aussage der Startseite, wie HeroCard der App: Dringendes zuerst. */
@@ -584,18 +621,26 @@ async function wireSduiBox(message = "") {
   const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
   box.innerHTML = `${msg}
     <div>${esc(cfg.childName || "")}${cfg.slink ? ` <span class="small muted">· ${esc(cfg.slink)}</span>` : ""}</div>
-    <p class="small muted" style="margin:6px 0 4px">Erinnern an (am Vortag, mit der Essenserinnerung):</p>
-    <div class="subjects">${known.length ? known.map((sub) => `
-      <label class="check"><input type="checkbox" value="${esc(sub)}" ${cfg.subjects.includes(sub) ? "checked" : ""}>
-        ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")
-      : `<p class="small muted">Noch kein Plan geladen.</p>`}</div>
+    <p class="small muted" style="margin:6px 0 4px">Am Vortag mit der Essenserinnerung melden:</p>
+    ${known.length ? `
+    <details class="dropdown">
+      <summary><span class="dd-label">Erinnern an</span><span class="dd-value"></span></summary>
+      <div class="subjects">${known.map((sub) => `
+        <label class="check"><input type="checkbox" value="${esc(sub)}" ${cfg.subjects.includes(sub) ? "checked" : ""}>
+          ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")}</div>
+    </details>` : `<p class="small muted">Noch kein Plan geladen.</p>`}
     <button id="b-sdui-off" class="danger">Sdui entfernen</button>`;
+  // Im zugeklappten Feld stehen die Kürzel der gewählten Fächer, wie in der App.
+  const showChosen = () => {
+    const chosen = [...box.querySelectorAll(".subjects input:checked")].map((x) => x.value);
+    const v = box.querySelector(".dd-value");
+    if (v) v.textContent = chosen.map((sub) => shorts.get(sub) || sub).join(", ") || "keins";
+    return chosen;
+  };
   box.querySelectorAll(".subjects input").forEach((cb) => {
-    cb.onchange = async () => {
-      const chosen = [...box.querySelectorAll(".subjects input:checked")].map((x) => x.value);
-      await kvSet("sduiSubjects", chosen);
-    };
+    cb.onchange = async () => { await kvSet("sduiSubjects", showChosen()); };
   });
+  showChosen();
   document.getElementById("b-sdui-off").onclick = async () => {
     if (!confirm("Sdui-Zugang und Stundenplan auf diesem Gerät löschen?")) return;
     for (const k of ["sdui", "sduiSubjects", "sduiPlan", "sduiKnown", "sduiNotified"]) await kvDel(k);
@@ -614,7 +659,7 @@ function sduiSetupForm(message = "") {
       <label for="s-id" style="font-weight:normal">E-Mail oder Benutzername</label>
       <input id="s-id" type="text" autocomplete="username" required>
       <label for="s-pw" style="font-weight:normal">Passwort</label>
-      <input id="s-pw" type="password" autocomplete="current-password" required>
+      ${passwordField("s-pw")}
       <div class="row">
         <button type="submit" class="block">Verbinden</button>
       </div>
