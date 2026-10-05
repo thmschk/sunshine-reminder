@@ -1,4 +1,4 @@
-# Push-Wecker der Web-App; erreichbar nur über Caddy (Netz "web"), kein eigener Port.
+# Push-Wecker der Web-App; erreichbar nur über Caddy auf demselben Server.
 services:
   push:
     build: ./push
@@ -8,10 +8,6 @@ services:
       TZ: Europe/Berlin
     volumes:
       - ./data:/data
-    networks:
-      web:
-        # Eindeutiger Name im gemeinsamen Netz, andere Apps hängen dort auch.
-        aliases: [sunshine-push]
-networks:
-  web:
-    external: true
+    # Nur lokal erreichbar; Caddy läuft im Netz des Servers und reicht /api/ hierher.
+    ports:
+      - "127.0.0.1:18080:8080"

@@ -21,7 +21,7 @@ sunshine.thomschke.info {
 	header @manifest Content-Type application/manifest+json
 
 	handle /api/* {
-		reverse_proxy sunshine-push:8080
+		reverse_proxy 127.0.0.1:18080
 	}
 
 	file_server
