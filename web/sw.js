@@ -2,13 +2,14 @@
 // Weckruf des Servers selbst bei IBS5, ob etwas offen ist. Der Server erfährt
 // davon nichts; er schickt nur {"t":"check"} zur gewählten Uhrzeit.
 import {
-  AlarmText, DEFAULT_CHECK, De, IbsAuthError, IbsClient, collect, evaluate, targetDates, todayBerlin,
+  AlarmText, DEFAULT_CHECK, De, IbsAuthError, IbsClient, addDays, collect, evaluate, targetDates, todayBerlin,
 } from "./ibs.js";
 import { kvGet, kvSet, secretGet } from "./idb.js";
+import * as Sdui from "./sdui.js";
 
-const VERSION = "v18";
+const VERSION = "v19";
 const PUSH_MAX_DAYS = 5;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest"];
+const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -49,8 +50,38 @@ self.addEventListener("fetch", (ev) => {
 self.addEventListener("push", (ev) => {
   let kind = "check";
   try { kind = ev.data?.json()?.t || "check"; } catch { /* leerer Push */ }
-  ev.waitUntil(checkAndNotify(kind === "test"));
+  // Essen zuerst: Android dämpft eine zweite Meldung kurz danach, die wichtigere kommt also vorn.
+  ev.waitUntil(checkAndNotify(kind === "test").then(() => subjectReminder(kind === "test")));
 });
+
+/** Gewählte Fächer am nächsten Schultag, wie SduiCheck der App; still, wenn nichts ansteht. */
+async function subjectReminder(isTest) {
+  try {
+    const cfg = await Sdui.sduiConfig();
+    if (!cfg?.subjects.length) return;
+    const plan = await Sdui.cachedPlan();
+    if (!plan?.lessons.length) return;
+    const today = todayBerlin();
+    const day = Sdui.nextSchoolDay(today);
+    const found = Sdui.matches(plan.lessons, day, cfg.subjects);
+    if (!found.length) return;
+    const key = `${day}:${found.map((m) => m.subject).join(",")}`;
+    if (!isTest && key === (await kvGet("sduiNotified"))) return;
+    await kvSet("sduiNotified", key);
+    const when = day === addDays(today, 1) ? "Morgen" : De.weekday(day);
+    const lines = found.map((m) => m.subject + (m.label ? ` — ${m.label}` : "") + (m.notes.length ? ` (${m.notes.join("; ")})` : ""));
+    await self.registration.showNotification(`${when} ${found.map((m) => m.subject).join(" und ")}`, {
+      body: lines.join("\n") + (cfg.childName ? `\nfür ${cfg.childName}` : ""),
+      icon: "icon-192.png",
+      badge: "badge-96.png",
+      tag: "hs-sdui",
+      data: { url: "./" },
+    });
+  } catch {
+    // Der Stundenplan ist Zugabe: ein Fehler hier darf nichts weiter stören.
+  }
+}
+
 
 // Beim Test („Jetzt testen“) dieselbe Meldung wie beim echten Weckruf, nur immer laut.
 async function checkAndNotify(isTest) {

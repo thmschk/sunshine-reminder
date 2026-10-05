@@ -224,3 +224,14 @@ pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
   background: var(--primary); color: var(--on-primary); font-size: .8rem; font-weight: 700;
   display: grid; place-items: center;
 }
+
+/* Zeitleiste wie TimetableStrip der App */
+.strip { display: flex; gap: 2px; margin-top: 4px; }
+.strip .cell {
+  flex: 1 1 0; min-width: 0; height: 18px; border-radius: 4px; background: #EEF1F5; color: #4D5968;
+  font-size: 9px; line-height: 18px; text-align: center; overflow: hidden; white-space: nowrap;
+}
+.strip .cell.hl { background: #14304F; color: #fff; font-weight: 700; }
+.strip .cell.gap { background: transparent; }
+.subjects { display: grid; gap: 2px; margin: 0 0 6px; }
+.subjects .check { margin: 0; padding: 4px 0; font-size: .92rem; }

@@ -1,4 +1,4 @@
-"""Push-Wecker für die Web-App.
+"""Push-Wecker und Sdui-Durchreiche für die Web-App.
 
 Speichert je Gerät nur ein Web-Push-Abo samt Uhrzeit, Zeitzone und Wochentagen —
 keine Zugangsdaten, keinen Namen, keinen Bestellstand. Zur gewählten Zeit geht
@@ -7,6 +7,10 @@ Service Worker auf dem Gerät, der IBS5 selbst abfragt.
 
 Die id ist öffentlich, ändern oder löschen darf nur, wer das beim Anlegen
 ausgegebene Geheimnis kennt (gespeichert wird nur dessen SHA-256).
+
+/api/sdui/… reicht genau die Sdui-Aufrufe der App an api.sdui.app durch, weil
+Sdui Browserzugriffe von fremden Seiten sperrt. Nichts davon wird gespeichert
+oder protokolliert; Passwort und Token laufen nur hindurch.
 """
 
 from __future__ import annotations
@@ -22,6 +26,9 @@ import secrets
 import sqlite3
 import threading
 import time
+import urllib.error
+import urllib.request
+from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -51,6 +58,34 @@ PUSH_HOSTS = re.compile(
     r"updates\.push\.services\.mozilla\.com|([\w-]+\.)*notify\.windows\.com)$"
 )
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+SDUI_BASE = "https://api.sdui.app/v1"
+# Nur die Aufrufe der App: Login, eigenes Konto, Kind, Stundenplan.
+SDUI_ROUTES = [
+    ("POST", re.compile(r"^auth/login$")),
+    ("GET", re.compile(r"^users/(self|\d{1,12})$")),
+    ("GET", re.compile(r"^timetables/users/\d{1,12}/timetable\?begins_at=\d{4}-\d{2}-\d{2}&ends_at=\d{4}-\d{2}-\d{2}$")),
+]
+SDUI_LIMIT = (20, 600)  # höchstens 20 Aufrufe je Absender in 10 Minuten
+sdui_hits: dict[str, deque] = defaultdict(deque)
+sdui_lock = threading.Lock()
+
+
+def sdui_allowed(client: str) -> bool:
+    n, window = SDUI_LIMIT
+    now = time.monotonic()
+    with sdui_lock:
+        q = sdui_hits[client]
+        while q and now - q[0] > window:
+            q.popleft()
+        if len(q) >= n:
+            return False
+        q.append(now)
+        # Alte Absender vergessen, damit die Tabelle nicht wächst.
+        if len(sdui_hits) > 10000:
+            for k in [k for k, v in sdui_hits.items() if not v or now - v[-1] > window]:
+                del sdui_hits[k]
+        return True
 
 log = logging.getLogger("push")
 db_lock = threading.Lock()
@@ -250,12 +285,48 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/subscriptions(?:/([\w-]{16,64}))?(/test)?$", self.path.split("?")[0])
         return ("subs", m.group(1), m.group(2)) if m else (self.path.split("?")[0], None, None)
 
+    def sdui(self, method: str) -> None:
+        rest = self.path[len("/api/sdui/"):]
+        if not any(m == method and r.match(rest) for m, r in SDUI_ROUTES):
+            return self.reply(404)
+        # Absender nur flüchtig im Speicher für die Begrenzung, nie im Log.
+        client = (self.headers.get("X-Forwarded-For") or self.client_address[0]).split(",")[0].strip()
+        if not sdui_allowed(client):
+            return self.reply(429, {"error": "zu viele Anfragen, bitte später"})
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > MAX_BODY:
+            return self.reply(413)
+        headers = {"Accept": "application/json", "User-Agent": "immerhin.satt (+https://github.com/thmschk/sunshine-reminder)"}
+        if self.headers.get("Authorization", "").startswith("Bearer "):
+            headers["Authorization"] = self.headers["Authorization"]
+        data = self.rfile.read(n) if method == "POST" else None
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(f"{SDUI_BASE}/{rest}", data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                status, body = r.status, r.read()
+        except urllib.error.HTTPError as exc:
+            status, body = exc.code, exc.read()
+        except Exception:
+            return self.reply(502, {"error": "Sdui nicht erreichbar"})
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
+        if self.path.startswith("/api/sdui/"):
+            return self.sdui("GET")
         if self.path.split("?")[0] == "/api/vapid":
             return self.reply(200, {"publicKey": public_key_b64(self.vapid)})
         self.reply(404)
 
     def do_POST(self):
+        if self.path.startswith("/api/sdui/"):
+            return self.sdui("POST")
         kind, sub_id, test = self.route()
         try:
             if kind == "subs" and sub_id is None:

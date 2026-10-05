@@ -3,6 +3,7 @@ import {
   addDays, changeKind, collect, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
+import * as Sdui from "./sdui.js";
 
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
 // diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
@@ -191,11 +192,17 @@ async function showHome(fresh = false) {
     return;
   }
 
+  // Stundenplan nur, wenn eingerichtet; ein Sdui-Fehler darf den Bestellstand nicht aufhalten.
+  const sdui = await Sdui.cachedPlan().catch(() => null);
+  const cfg = sdui ? await Sdui.sduiConfig() : null;
+  const strip = sdui ? stripMaker(sdui.lessons, cfg?.subjects || []) : null;
+
   $app.innerHTML = `
     ${heroCard(days, profile?.firstName || "")}
+    ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
       <div class="section">DIE NÄCHSTEN TAGE</div>
-      <ul class="days">${days.slice(0, DAY_LIST_LENGTH).map(dayRow).join("")}</ul>` : ""}
+      <ul class="days">${days.slice(0, DAY_LIST_LENGTH).map((d) => dayRow(d, strip)).join("")}</ul>` : ""}
     <div class="center"><button id="b-all" class="text">Alle bestellbaren Tage →</button></div>`;
 
   for (const li of $app.querySelectorAll(".days li")) {
@@ -255,6 +262,31 @@ function heroCard(days, firstName) {
   </div>`;
 }
 
+/**
+ * Zeitleiste je Tag wie TimetableStrip der App: eine gleich breite Zelle je
+ * Schulstunde bis zur spätesten Stunde des ganzen Plans, gewählte Fächer dunkel,
+ * Freistunden als Lücke.
+ */
+function stripMaker(lessons, selected) {
+  const plan = Sdui.planByDay(lessons);
+  const maxHour = Math.max(0, ...[...plan.values()].flatMap((m) => [...m.keys()]));
+  if (!maxHour) return null;
+  return (date) => {
+    const day = plan.get(date);
+    if (!day) return "";
+    const cells = [];
+    for (let h = 1; h <= maxHour; h++) {
+      const ls = day.get(h) || [];
+      if (!ls.length) { cells.push(`<span class="cell gap"></span>`); continue; }
+      const hl = ls.some((l) => selected.includes(l.subject));
+      const main = ls.find((l) => selected.includes(l.subject)) || ls[0];
+      const label = main.short + (new Set(ls.map((l) => l.short)).size > 1 ? "+" : "") + (ls.some((l) => l.note) ? "*" : "");
+      cells.push(`<span class="cell${hl ? " hl" : ""}" title="${esc(ls.map((l) => l.subject).join(" / "))}">${esc(label)}</span>`);
+    }
+    return `<div class="strip">${cells.join("")}</div>`;
+  };
+}
+
 const SUB = {
   ORDERED: ["bestellt", ""],
   NOT_ORDERED: ["offen · Tippen zum Bestellen", "open"],
@@ -265,16 +297,19 @@ const SUB = {
 };
 
 /** Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts. */
-function dayRow(d) {
+function dayRow(d, strip = null) {
   const dish = d.state === OrderState.NOT_ORDERED ? "Gericht wählen"
     : d.state === OrderState.DEADLINE_PASSED ? "nicht bestellt"
     : d.orderedItems[0] || "—";
   const [sub, subCls] = SUB[d.state];
+  const timeline = strip?.(d.date) || "";
   const [sym, symCls] = d.state === OrderState.ORDERED ? ["✓", "ok"] : d.isActionable ? ["!", "open"] : ["✕", "bad"];
   return `
     <li data-date="${d.date}">
       <div class="date"><div class="wd">${esc(De.chip(d.date).slice(0, 2))}</div><div class="dom">${Number(d.date.slice(8, 10))}</div></div>
-      <div class="text"><div class="dish">${esc(dish)}</div><div class="sub ${subCls}">${esc(sub)}</div></div>
+      <div class="text"><div class="dish">${esc(dish)}</div>${
+        // Mit Zeitleiste sagt der Haken rechts schon „bestellt“, wie in der App.
+        timeline && d.state === OrderState.ORDERED ? "" : `<div class="sub ${subCls}">${esc(sub)}</div>`}${timeline}</div>
       <div class="sym ${symCls}">${sym}</div>
     </li>`;
 }
@@ -495,6 +530,9 @@ function showSettings() {
         Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}</p>
       <button id="b-logout" class="danger">Zugangsdaten löschen</button>
       <hr>
+      <h4>Stundenplan (Sdui)</h4>
+      <div id="sdui-box"></div>
+      <hr>
       <h4>Über diese Seite</h4>
       <p class="small muted" style="margin-top:0"><b>Testversion.</b> Die Erinnerung prüft auf diesem Gerät; unser Server weckt
         es dafür nur und kennt weder Zugangsdaten noch Bestellungen. Auf dem iPhone ist sie noch nicht ausprobiert.</p>
@@ -511,6 +549,7 @@ function showSettings() {
   range.onchange = () => saveDaysAhead(Number(range.value));
   showVal();
   wirePushBox();
+  wireSduiBox();
   document.getElementById("b-logout").onclick = async () => {
     if (!confirm("Zugangsdaten auf diesem Gerät löschen? Die Erinnerung wird dabei ausgeschaltet.")) return;
     await pushDisable().catch(() => {});
@@ -521,6 +560,98 @@ function showSettings() {
     loggedInAs = null;
     showSetup();
   };
+}
+
+// ---------------------------------------------------------------- Sdui
+
+const SDUI_NOTE = `Sdui lässt Webseiten nicht direkt zu, deshalb laufen Anmeldung und Abruf über unseren Server. Er reicht
+  sie nur durch und speichert nichts. Dein Sdui-Passwort geht dabei einmal hindurch; auf dem Gerät bleibt nur ein
+  Zugangsschlüssel, der ein Jahr gilt.`;
+
+async function wireSduiBox(message = "") {
+  const box = document.getElementById("sdui-box");
+  if (!box) return;
+  const cfg = await Sdui.sduiConfig();
+  const msg = message ? `<p class="small error">${esc(message)}</p>` : "";
+  if (!cfg) {
+    box.innerHTML = `${msg}<p class="small muted" style="margin:0 0 6px">Wer mag, holt sich den Stundenplan dazu: Die
+      Startseite zeigt je Tag die Stunden, und die Erinnerung meldet am Vortag gewählte Fächer wie Sport.</p>
+      <button id="b-sdui-setup" class="text" style="padding-left:0">Einrichten …</button>`;
+    document.getElementById("b-sdui-setup").onclick = () => sduiSetupForm();
+    return;
+  }
+  const known = (await kvGet("sduiKnown")) || [];
+  const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
+  box.innerHTML = `${msg}
+    <div>${esc(cfg.childName || "")}${cfg.slink ? ` <span class="small muted">· ${esc(cfg.slink)}</span>` : ""}</div>
+    <p class="small muted" style="margin:6px 0 4px">Erinnern an (am Vortag, mit der Essenserinnerung):</p>
+    <div class="subjects">${known.length ? known.map((sub) => `
+      <label class="check"><input type="checkbox" value="${esc(sub)}" ${cfg.subjects.includes(sub) ? "checked" : ""}>
+        ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")
+      : `<p class="small muted">Noch kein Plan geladen.</p>`}</div>
+    <button id="b-sdui-off" class="danger">Sdui entfernen</button>`;
+  box.querySelectorAll(".subjects input").forEach((cb) => {
+    cb.onchange = async () => {
+      const chosen = [...box.querySelectorAll(".subjects input:checked")].map((x) => x.value);
+      await kvSet("sduiSubjects", chosen);
+    };
+  });
+  document.getElementById("b-sdui-off").onclick = async () => {
+    if (!confirm("Sdui-Zugang und Stundenplan auf diesem Gerät löschen?")) return;
+    for (const k of ["sdui", "sduiSubjects", "sduiPlan", "sduiKnown", "sduiNotified"]) await kvDel(k);
+    wireSduiBox();
+  };
+}
+
+function sduiSetupForm(message = "") {
+  const box = document.getElementById("sdui-box");
+  box.innerHTML = `
+    ${message ? `<p class="small error">${esc(message)}</p>` : ""}
+    <p class="small muted" style="margin:0">${SDUI_NOTE}</p>
+    <form id="f-sdui">
+      <label for="s-school" style="font-weight:normal">Schule (Login-Adresse oder Kürzel)</label>
+      <input id="s-school" type="text" placeholder="sdui.app/meine-schule/login" required autocomplete="off">
+      <label for="s-id" style="font-weight:normal">E-Mail oder Benutzername</label>
+      <input id="s-id" type="text" autocomplete="username" required>
+      <label for="s-pw" style="font-weight:normal">Passwort</label>
+      <input id="s-pw" type="password" autocomplete="current-password" required>
+      <div class="row">
+        <button type="submit" class="block">Verbinden</button>
+      </div>
+      <div class="row" style="margin-top:4px"><button type="button" id="b-sdui-cancel" class="text">Abbrechen</button></div>
+    </form>`;
+  document.getElementById("b-sdui-cancel").onclick = () => wireSduiBox();
+  document.getElementById("f-sdui").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const slink = Sdui.parseSlink(document.getElementById("s-school").value);
+    const identifier = document.getElementById("s-id").value.trim();
+    const password = document.getElementById("s-pw").value;
+    box.innerHTML = `<p class="small muted">Verbinde mit Sdui …</p>`;
+    try {
+      const { token, expires } = await Sdui.login(identifier, password, slink);
+      const kids = await Sdui.children(token);
+      if (!kids.length) throw new Error("Am Sdui-Konto ist kein Kind hinterlegt.");
+      const pick = kids.length === 1 ? kids[0] : await chooseChild(kids);
+      if (!pick) return wireSduiBox();
+      await secretSet("sdui", { token, expires, slink, childId: pick.id, childName: pick.name });
+      await kvDel("sduiPlan");
+      const plan = await Sdui.cachedPlan({ force: true });
+      wireSduiBox(plan?.error || "");
+    } catch (e) {
+      sduiSetupForm(e.message);
+    }
+  };
+}
+
+function chooseChild(kids) {
+  return new Promise((resolve) => {
+    const box = document.getElementById("sdui-box");
+    box.innerHTML = `<p class="small muted" style="margin:0 0 6px">Für welches Kind?</p>
+      ${kids.map((k, i) => `<button class="text kid" data-i="${i}" style="display:block;padding-left:0">${esc(k.name)}</button>`).join("")}
+      <button class="text" id="b-kid-cancel" style="padding-left:0">Abbrechen</button>`;
+    box.querySelectorAll(".kid").forEach((b) => { b.onclick = () => resolve(kids[Number(b.dataset.i)]); });
+    document.getElementById("b-kid-cancel").onclick = () => resolve(null);
+  });
 }
 
 // ---------------------------------------------------------------- Erinnerung

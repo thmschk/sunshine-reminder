@@ -38,3 +38,30 @@ class IsDue(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SduiRoutes(unittest.TestCase):
+    def allowed(self, method, rest):
+        from app import SDUI_ROUTES
+        return any(m == method and r.match(rest) for m, r in SDUI_ROUTES)
+
+    def test_erlaubt(self):
+        self.assertTrue(self.allowed("POST", "auth/login"))
+        self.assertTrue(self.allowed("GET", "users/self"))
+        self.assertTrue(self.allowed("GET", "users/12345"))
+        self.assertTrue(self.allowed("GET", "timetables/users/12345/timetable?begins_at=2026-10-05&ends_at=2026-10-19"))
+
+    def test_alles_andere_nicht(self):
+        self.assertFalse(self.allowed("GET", "auth/login"))
+        self.assertFalse(self.allowed("POST", "users/self"))
+        self.assertFalse(self.allowed("GET", "users/self/../admin"))
+        self.assertFalse(self.allowed("GET", "conversations"))
+        self.assertFalse(self.allowed("GET", "timetables/users/1/timetable?begins_at=x&ends_at=y"))
+        self.assertFalse(self.allowed("GET", "timetables/users/1/timetable?begins_at=2026-10-05&ends_at=2026-10-19&x=1"))
+
+    def test_begrenzung(self):
+        import app
+        app.sdui_hits.clear()
+        results = [app.sdui_allowed("1.2.3.4") for _ in range(25)]
+        self.assertEqual(results.count(True), 20)
+        self.assertTrue(app.sdui_allowed("5.6.7.8"))

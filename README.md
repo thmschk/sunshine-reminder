@@ -13,8 +13,8 @@ Es gibt zwei Fassungen:
 | Geräte | iPhone und Android | nur Android |
 | Installation | Seite öffnen, „Zum Home-Bildschirm“ | APK-Datei, an Play Protect vorbei |
 | Erinnerung | höchstens 5 Schultage voraus | bis 14 Tage voraus |
-| Stundenplan aus Sdui | – | ja |
-| Server | ein kleiner Wecker, sieht keine Zugangsdaten | keiner |
+| Stundenplan aus Sdui | ja, über den Server durchgereicht | ja, direkt |
+| Server | Wecker, sieht keine IBS5-Zugangsdaten | keiner |
 | Stand | Test, wird weiterentwickelt | stabil, bekommt nur noch Reparaturen |
 
 > **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
@@ -39,6 +39,11 @@ offen ist.
   die Uhrzeit.
 * Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
   Schlüssel, den der Browser erzeugt und nicht herausgibt.
+* Wer mag, holt sich den **Stundenplan aus Sdui** dazu (Zeitleiste je Tag,
+  Erinnerung an gewählte Fächer am Vortag). Sdui lässt Webseiten nicht direkt
+  zu, deshalb laufen Anmeldung und Abruf über den Server, der sie nur
+  durchreicht und nichts speichert. Das Sdui-Passwort geht dabei einmal
+  hindurch. Auf dem Gerät bleibt nur ein Zugangsschlüssel, der ein Jahr gilt.
 
 ### Einrichten
 
