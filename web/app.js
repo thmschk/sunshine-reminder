@@ -387,7 +387,7 @@ function heroCard(days, firstName) {
   }
   if (!days.length) return `<div class="card hero ok"><h2>Keine Schultage im Prüfzeitraum</h2></div>`;
   return `<div class="card hero ok">
-    <h2>Alles bestellt ✓</h2>
+    <h2>satt … theoretisch ✓</h2>
     <p>bis ${esc(De.long(days.at(-1).date))}</p>
   </div>`;
 }

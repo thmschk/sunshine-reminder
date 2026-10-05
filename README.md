@@ -80,7 +80,7 @@ Was nach dem Eingeben der Zugangsdaten passiert:
        Note over H: liest die verschlüsselten<br/>Zugangsdaten vom Gerät
        H->>I: anmelden, Speiseplan abfragen
        I-->>H: Bestellstand
-       Note over H: Meldung „2 Tage offen“<br/>oder still „Alles bestellt ✓“
+       Note over H: Meldung „2 Tage offen“<br/>oder still „satt … theoretisch ✓“
    ```
 
    Der Server erfährt dabei nicht, ob bestellt ist. Er weiß nur, dass ein
