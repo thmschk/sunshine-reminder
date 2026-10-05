@@ -79,6 +79,8 @@ await test("Datum und Profil", () => {
   eq(De.long("2026-08-27"), "Donnerstag, 27.08.2026");
   eq(new Profile("Muster, Mia", "").firstName, "Mia");
   eq(/^\d{4}-\d{2}-\d{2}$/.test(todayBerlin()), true, "todayBerlin");
+  eq(todayBerlin(new Date("2026-10-05T22:30:00Z")), "2026-10-06", "todayBerlin nach Mitternacht MESZ");
+  eq(todayBerlin(new Date("2026-12-31T22:59:00Z")), "2026-12-31", "todayBerlin Silvester MEZ");
   eq(CartResponse.from({ MessageStatus: "OK", TotalItemsInCart: 2 }).totalItemsInCart, 2, "PascalCase");
   eq(CartResponse.from({ messageStatus: "Error", message: "x" }).ok, false, "Fehlerstatus");
 });

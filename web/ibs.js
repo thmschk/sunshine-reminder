@@ -29,9 +29,17 @@ export function addDays(iso, n) {
 /** 1 = Montag … 7 = Sonntag */
 export const weekdayNo = (iso) => ((toDate(iso).getUTCDay() + 6) % 7) + 1;
 
-/** Heute in Europe/Berlin, unabhängig von der Zeitzone des Geräts. */
+/**
+ * Heute in Europe/Berlin, unabhängig von der Zeitzone des Geräts. Über
+ * formatToParts statt einer Locale mit ISO-Schreibweise: Chrome auf Android
+ * bringt nur einen Teil der Locales mit und fiele sonst auf "5.10.2026" zurück.
+ */
 export function todayBerlin(now = new Date()) {
-  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Berlin" }).format(now);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Berlin", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const get = (t) => parts.find((p) => p.type === t).value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /** ISO-Kalenderwoche: [Jahr, Woche] */
