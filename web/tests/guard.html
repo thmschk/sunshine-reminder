@@ -1,0 +1,82 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Schutzschalter und HTML-Einschleusung</title>
+<!-- Mit echter Wartezeit aufrufen (Screenshot), nicht mit virtueller Zeit: IndexedDB hängt dort. -->
+<body style="font:16px monospace"><pre id="out">läuft</pre>
+<script type="module">
+import { IbsClient, collect } from "../ibs.js";
+import { guardHooks, paused, resume, IbsPausedError } from "../guard.js";
+import { kvDel, kvSet } from "../idb.js";
+
+const lines = [];
+const out = document.getElementById("out");
+const check = (name, ok, extra = "") => { lines.push(`${ok ? "ok  " : "FAIL"} ${name}${extra ? ` (${extra})` : ""}`); out.textContent = lines.join("\n") + "\n…"; };
+window.addEventListener("unhandledrejection", (e) => { lines.push("REJ " + e.reason); out.textContent = lines.join("\n"); });
+const realFetch = window.fetch;
+let calls = 0;
+const reset = async () => { calls = 0; await resume(); await kvDel("ibsBudget"); };
+
+try {
+  // 1. Gesperrt: Login scheitert wie bei IBS5 mit einem Netzfehler → Pause, danach keine Anfrage mehr.
+  await reset();
+  window.fetch = async () => { calls++; throw new TypeError("Failed to fetch"); };
+  const c = new IbsClient(undefined, guardHooks);
+  let e1 = null;
+  try { await c.login("1", "x"); } catch (e) { e1 = e; }
+  check("Netzfehler beim Login pausiert", !!(await paused()), e1?.message);
+  let e2 = null;
+  try { await c.login("1", "x"); } catch (e) { e2 = e; }
+  check("während der Pause keine Anfrage", e2 instanceof IbsPausedError && calls === 1, `Anfragen: ${calls}`);
+
+  // 2. Angemeldet, Abruf scheitert, genau ein erneuter Login, dann Pause.
+  await reset();
+  let n = 0;
+  window.fetch = async (url) => {
+    calls++;
+    if (String(url).includes("/Login/Login") && n++ === 0) return new Response(JSON.stringify({ token: "t", name1: "" }));
+    throw new TypeError("Failed to fetch");
+  };
+  const c2 = new IbsClient(undefined, guardHooks);
+  await c2.login("1", "x");
+  try { await c2.weekplan(2026, 41); } catch { /* erwartet */ }
+  try { await c2.login("1", "x"); } catch { /* erwartet: Login-Retry scheitert */ }
+  try { await c2.weekplan(2026, 41); } catch { /* erwartet: pausiert */ }
+  check("ein Folgeversuch, dann Pause", calls === 3 && !!(await paused()), `Anfragen: ${calls}`);
+
+  // 3. 429 pausiert, 403 nach Login nicht.
+  await reset();
+  window.fetch = async () => { calls++; return new Response("", { status: 429 }); };
+  try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch { /* */ }
+  check("HTTP 429 pausiert", !!(await paused()));
+  await reset();
+  window.fetch = async () => { calls++; return new Response("", { status: 403 }); };
+  const c3 = new IbsClient(undefined, guardHooks); c3.token = "t";
+  try { await c3.weekplan(2026, 41); } catch { /* */ }
+  check("HTTP 403 bei Abruf pausiert nicht", !(await paused()));
+
+  // 4. Stundenbudget.
+  await reset();
+  await kvSet("ibsBudget", Array.from({ length: 60 }, () => Date.now()));
+  window.fetch = async () => { calls++; return new Response("{}"); };
+  let e4 = null;
+  try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch (e) { e4 = e; }
+  check("mehr als 60 Anfragen je Stunde pausiert", e4 instanceof IbsPausedError && calls === 0);
+
+  // 5. Eingeschleustes HTML im Gerichtsnamen landet nur als Text auf der Seite.
+  await reset();
+  window.__xss = 0;
+  const evil = `&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;Nudeln`;
+  window.fetch = async (url) => String(url).includes("/Login/")
+    ? new Response(JSON.stringify({ token: "t", name1: "" }))
+    : new Response(`<div id="weekplan">KW 41<button class="menuplan-checkbox" data-order-status="2" data-quantity-ordered="1" data-quantity-in-shopping-cart="" data-date="06.10.2026" data-name="${evil}" id="menu_quantity_2026-10-06_16_827"></button></div>`);
+  const c5 = new IbsClient(undefined, guardHooks);
+  await c5.login("1", "x");
+  const [day] = await collect(c5, ["2026-10-06"]);
+  check("Parser liefert den Namen als Text", day.entries[0].name.startsWith("<img"));
+} catch (e) {
+  lines.push("FAIL Ausnahme: " + e);
+}
+window.fetch = realFetch;
+await resume(); await kvDel("ibsBudget");
+document.getElementById("out").textContent = lines.join("\n") + (lines.some((l) => l.startsWith("FAIL")) ? "\n\nFEHLGESCHLAGEN" : "\n\nALLE OK");
+</script>

@@ -2,8 +2,9 @@ import {
   DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
   addDays, changeKind, collect, isoWeek, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
-import { kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
+import { kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
 import * as Sdui from "./sdui.js";
+import { IbsPausedError, guardHooks, resume } from "./guard.js";
 
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
 // diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
@@ -34,6 +35,8 @@ async function loadStore() {
   const n = await kvGet("daysAhead");
   store.daysAhead = n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
   store.push = (await kvGet("push")) || null;
+  store.lastOk = (await kvGet("lastOk")) || null;
+  store.lastPushOk = (await kvGet("lastPushOk")) || null;
 }
 const loadCreds = () => store.creds;
 const loadDaysAhead = () => store.daysAhead;
@@ -56,7 +59,7 @@ function chrome(visible) {
   if (!visible) $footer.hidden = true;
 }
 
-const client = new IbsClient();
+const client = new IbsClient(undefined, guardHooks);
 let profile = null;
 let loggedInAs = null;
 
@@ -66,10 +69,11 @@ async function saveCreds(c) {
   store.creds = c;
   await secretSet("creds", c).catch(() => {});
 }
+/** Abmelden: alles, was diese Seite auf dem Gerät abgelegt hat, samt Schlüssel. */
 async function clearCreds() {
   store.creds = null;
-  await kvDel("creds");
-  await kvDel("notified");
+  await kvClear().catch(() => {});
+  store.lastOk = store.lastPushOk = null;
 }
 
 /**
@@ -107,13 +111,13 @@ function showSetup(message = "", prefill = {}) {
       <p>Zeigt, für welche Tage im Bestellsystem IBS5 noch nichts bestellt ist, und bestellt, bestellt um
         oder bestellt ab. Wer mag, wird werktags zur gewählten Zeit erinnert.</p>
       <p class="small">Deine Zugangsdaten bleiben verschlüsselt auf diesem Gerät und gehen nur an das
-        Bestellsystem. Unser Server weckt das Gerät für die Erinnerung nur, er sieht weder Zugangsdaten noch
-        Bestellungen.</p>
+        Bestellsystem. Für die Erinnerung weckt unser Server das Gerät nur. Er sieht weder deine IBS5-Zugangsdaten noch
+        deine Bestellungen. Nimmst du den Stundenplan aus Sdui dazu, laufen dessen Anmeldung und Abruf durch ihn.</p>
       <p class="small muted">Kein Angebot von Sunshine Catering oder dem Hersteller von IBS5.</p>
     </div>
     ${installTip()}
     <div class="card">
-      <h2 style="margin-top:0">Anmelden</h2>
+      <h2 class="u-mt0">Anmelden</h2>
       <p class="small muted">Mit Kundennummer und Passwort des Schulessen-Bestellsystems (IBS5).</p>
       ${message ? `<p class="error">${esc(message)}</p>` : ""}
       <form id="f-login" autocomplete="on">
@@ -206,14 +210,20 @@ async function showHome(fresh = false) {
     days = await withLogin(creds, () => collect(client, targetDates(today, cfg), { fresh }));
   } catch (e) {
     if (e instanceof IbsAuthError && !client.token) return showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
+    const isPause = e instanceof IbsPausedError;
     $app.innerHTML = `
-      <div class="card hero neutral">
-        <h2>Bestellstand unbekannt</h2>
+      <div class="card hero ${isPause ? "bad" : "neutral"}">
+        <h2>${isPause ? "Bestellsystem gesperrt oder nicht erreichbar" : "Bestellstand unbekannt"}</h2>
         <p>${esc(e.message)}</p>
-        <p class="small">Ein Netzfehler ist keine Aussage darüber, ob bestellt ist.</p>
-        <button id="b-retry" class="block">Nochmal versuchen</button>
-      </div>`;
-    document.getElementById("b-retry").onclick = () => showHome(true);
+        <p class="small">Ein Netzfehler ist keine Aussage darüber, ob bestellt ist. Über mobile Daten statt WLAN
+          geht es oft trotzdem.</p>
+        <button id="b-retry" class="block">${isPause ? "Trotzdem jetzt versuchen" : "Nochmal versuchen"}</button>
+      </div>
+      ${lastOkLine()}`;
+    document.getElementById("b-retry").onclick = async () => {
+      if (isPause) await resume();
+      showHome(true);
+    };
     return;
   }
 
@@ -242,13 +252,48 @@ async function showHome(fresh = false) {
   const now = document.getElementById("b-order-now");
   if (now) now.onclick = () => showOrder(days.find((d) => d.isActionable).date);
 
+  await kvSet("lastOk", { at: Date.now(), via: "app" }).catch(() => {});
+  store.lastPushOk = await kvGet("lastPushOk").catch(() => null);
+  const stale = pushStale();
+  if (stale) $app.insertAdjacentHTML("afterbegin", stale);
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" }).format(new Date());
-  $footer.innerHTML = `<span>Geprüft ${t}</span>
+  const pushInfo = store.push && store.lastPushOk ? ` · Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "";
+  $footer.innerHTML = `<span>Geprüft ${t}${pushInfo}</span>
     <button id="b-heart" class="icon heart" title="Über diese App" aria-label="Über diese App">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART}"/></svg>
     </button>`;
   $footer.hidden = false;
   document.getElementById("b-heart").onclick = showAbout;
+}
+
+/** „heute 12:01“, „gestern 12:01“ oder „03.10. 12:01“ — wie checkedLabel der App. */
+function when(ms) {
+  const f = (o) => new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", ...o }).format(new Date(ms));
+  const day = f({ year: "numeric", month: "2-digit", day: "2-digit" });
+  const time = f({ hour: "2-digit", minute: "2-digit" });
+  const nowDay = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", year: "numeric", month: "2-digit", day: "2-digit" });
+  if (day === nowDay.format(new Date())) return `heute ${time}`;
+  if (day === nowDay.format(new Date(Date.now() - 86400000))) return `gestern ${time}`;
+  return `${day.slice(0, 6)} ${time}`;
+}
+
+/** Letzte erfolgreiche Prüfung, für die Fehlerkarte. */
+function lastOkLine() {
+  const at = Math.max(store.lastOk?.at || 0, store.lastPushOk?.at || 0);
+  return at ? `<p class="small muted center-text">Letzte erfolgreiche Prüfung: ${esc(when(at))}</p>` : "";
+}
+
+/**
+ * Hat die Erinnerung seit über zwei Werktagen nicht mehr erfolgreich geprüft,
+ * obwohl sie eingeschaltet ist? Schweigen ist der gefährliche Zustand.
+ */
+function pushStale() {
+  if (!store.push) return "";
+  const since = store.lastPushOk?.at || store.push.created || 0;
+  if (!since || Date.now() - since < 4 * 86400000) return "";
+  return `<div class="card hero bad"><h2>Erinnerung schweigt</h2>
+    <p>Die Erinnerung hat zuletzt ${esc(since === store.lastPushOk?.at ? when(since) : "noch nie")} erfolgreich geprüft.
+      Unter ⚙ → „Jetzt testen“ ausprobieren, sonst aus- und wieder einschalten.</p></div>`;
 }
 
 /** Tage nach Kalenderwoche gruppiert: jede Woche eine eigene Karte, damit der Montag sich absetzt. */
@@ -560,19 +605,20 @@ function showSettings() {
       <hr>
       <h4>Schulessen (Sunshine)</h4>
       <div>Vorwarnzeit: <span id="days-ahead-val"></span></div>
-      <p class="small muted" style="margin:4px 0 8px">So weit schaut die Übersicht voraus, ab morgen gerechnet.
+      <p class="small muted u-my48">So weit schaut die Übersicht voraus, ab morgen gerechnet.
         Die Erinnerung prüft davon höchstens die nächsten 5 Schultage.</p>
       <input id="days-ahead" type="range" min="${DAYS_AHEAD.min}" max="${DAYS_AHEAD.max}" step="1" value="${loadDaysAhead()}" aria-label="Vorwarnzeit">
-      <p class="small muted" style="margin-bottom:0">${esc(profile?.name || "")}${profile?.institution ? ` · ${esc(profile.institution)}` : ""}<br>
+      <p class="small muted u-mb0">${esc(profile?.name || "")}${profile?.institution ? ` · ${esc(profile.institution)}` : ""}<br>
         Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}</p>
-      <button id="b-logout" class="danger">Zugangsdaten löschen</button>
+      <button id="b-logout" class="danger">Abmelden und alles löschen</button>
       <hr>
       <h4>Stundenplan (Sdui)</h4>
       <div id="sdui-box"></div>
       <hr>
       <h4>Über diese Seite</h4>
-      <p class="small muted" style="margin-top:0"><b>Testversion.</b> Die Erinnerung prüft auf diesem Gerät; unser Server weckt
-        es dafür nur und kennt weder Zugangsdaten noch Bestellungen. Auf dem iPhone ist sie noch nicht ausprobiert.</p>
+      <p class="small muted u-mt0"><b>Testversion.</b> Die Erinnerung prüft auf diesem Gerät. Unser Server weckt
+        es dafür nur und kennt weder IBS5-Zugangsdaten noch Bestellungen. Nur die Sdui-Anbindung läuft durch ihn
+        (siehe dort). Auf dem iPhone ist die Erinnerung noch nicht ausprobiert.</p>
       <p class="small muted">Kein offizielles Angebot von Sunshine Catering oder dem Hersteller von IBS5. Die Seite spricht direkt
         aus deinem Browser mit dem Bestellsystem.</p>
     </div>`;
@@ -588,7 +634,7 @@ function showSettings() {
   wirePushBox();
   wireSduiBox();
   document.getElementById("b-logout").onclick = async () => {
-    if (!confirm("Zugangsdaten auf diesem Gerät löschen? Die Erinnerung wird dabei ausgeschaltet.")) return;
+    if (!confirm("Alles auf diesem Gerät löschen? Zugangsdaten, Sdui, Einstellungen und Erinnerung.")) return;
     await pushDisable().catch(() => {});
     await clearCreds();
     sessionCreds = null;
@@ -611,9 +657,9 @@ async function wireSduiBox(message = "") {
   const cfg = await Sdui.sduiConfig();
   const msg = message ? `<p class="small error">${esc(message)}</p>` : "";
   if (!cfg) {
-    box.innerHTML = `${msg}<p class="small muted" style="margin:0 0 6px">Wer mag, holt sich den Stundenplan dazu: Die
+    box.innerHTML = `${msg}<p class="small muted u-mb6">Wer mag, holt sich den Stundenplan dazu: Die
       Startseite zeigt je Tag die Stunden, und die Erinnerung meldet am Vortag gewählte Fächer wie Sport.</p>
-      <button id="b-sdui-setup" class="text" style="padding-left:0">Einrichten …</button>`;
+      <button id="b-sdui-setup" class="text u-pl0">Einrichten …</button>`;
     document.getElementById("b-sdui-setup").onclick = () => sduiSetupForm();
     return;
   }
@@ -621,7 +667,7 @@ async function wireSduiBox(message = "") {
   const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
   box.innerHTML = `${msg}
     <div>${esc(cfg.childName || "")}${cfg.slink ? ` <span class="small muted">· ${esc(cfg.slink)}</span>` : ""}</div>
-    <p class="small muted" style="margin:6px 0 4px">Am Vortag mit der Essenserinnerung melden:</p>
+    <p class="small muted u-my64">Am Vortag mit der Essenserinnerung melden:</p>
     ${known.length ? `
     <details class="dropdown">
       <summary><span class="dd-label">Erinnern an</span><span class="dd-value"></span></summary>
@@ -652,18 +698,18 @@ function sduiSetupForm(message = "") {
   const box = document.getElementById("sdui-box");
   box.innerHTML = `
     ${message ? `<p class="small error">${esc(message)}</p>` : ""}
-    <p class="small muted" style="margin:0">${SDUI_NOTE}</p>
+    <p class="small muted u-m0">${SDUI_NOTE}</p>
     <form id="f-sdui">
-      <label for="s-school" style="font-weight:normal">Schule (Login-Adresse oder Kürzel)</label>
+      <label class="u-normal" for="s-school">Schule (Login-Adresse oder Kürzel)</label>
       <input id="s-school" type="text" placeholder="sdui.app/meine-schule/login" required autocomplete="off">
-      <label for="s-id" style="font-weight:normal">E-Mail oder Benutzername</label>
+      <label class="u-normal" for="s-id">E-Mail oder Benutzername</label>
       <input id="s-id" type="text" autocomplete="username" required>
-      <label for="s-pw" style="font-weight:normal">Passwort</label>
+      <label class="u-normal" for="s-pw">Passwort</label>
       ${passwordField("s-pw")}
       <div class="row">
         <button type="submit" class="block">Verbinden</button>
       </div>
-      <div class="row" style="margin-top:4px"><button type="button" id="b-sdui-cancel" class="text">Abbrechen</button></div>
+      <div class="row u-mt4"><button type="button" id="b-sdui-cancel" class="text">Abbrechen</button></div>
     </form>`;
   document.getElementById("b-sdui-cancel").onclick = () => wireSduiBox();
   document.getElementById("f-sdui").onsubmit = async (ev) => {
@@ -691,9 +737,9 @@ function sduiSetupForm(message = "") {
 function chooseChild(kids) {
   return new Promise((resolve) => {
     const box = document.getElementById("sdui-box");
-    box.innerHTML = `<p class="small muted" style="margin:0 0 6px">Für welches Kind?</p>
-      ${kids.map((k, i) => `<button class="text kid" data-i="${i}" style="display:block;padding-left:0">${esc(k.name)}</button>`).join("")}
-      <button class="text" id="b-kid-cancel" style="padding-left:0">Abbrechen</button>`;
+    box.innerHTML = `<p class="small muted u-mb6">Für welches Kind?</p>
+      ${kids.map((k, i) => `<button class="text kid u-block u-pl0" data-i="${i}">${esc(k.name)}</button>`).join("")}
+      <button class="text u-pl0" id="b-kid-cancel">Abbrechen</button>`;
     box.querySelectorAll(".kid").forEach((b) => { b.onclick = () => resolve(kids[Number(b.dataset.i)]); });
     document.getElementById("b-kid-cancel").onclick = () => resolve(null);
   });
@@ -708,19 +754,19 @@ const pushSupported = "serviceWorker" in navigator && "PushManager" in window &&
 function pushBoxHtml(message = "") {
   const msg = message ? `<p class="small error">${esc(message)}</p>` : "";
   if (!pushSupported) {
-    return `<p class="small muted" style="margin:0">${isIos && !standalone
+    return `<p class="small muted u-m0">${isIos && !standalone
       ? "Auf dem iPhone gibt es Erinnerungen nur, wenn die Seite über Teilen → „Zum Home-Bildschirm“ installiert ist und von dort geöffnet wird."
       : "Dieser Browser kann keine Erinnerungen empfangen."}</p>`;
   }
   if (!store.push) {
-    return `${msg}<p class="small muted" style="margin:0 0 6px">Werktags zur gewählten Zeit prüft dieses Gerät selbst und meldet sich,
+    return `${msg}<p class="small muted u-mb6">Werktags zur gewählten Zeit prüft dieses Gerät selbst und meldet sich,
       wenn etwas offen ist. Unser Server weckt es dafür nur — er kennt weder Zugangsdaten noch Bestellstand.</p>
-      <label for="push-time" style="font-weight:normal">Uhrzeit</label>
+      <label class="u-normal" for="push-time">Uhrzeit</label>
       <input id="push-time" type="time" value="${DEFAULT_PUSH_TIME}" step="300">
       <div class="row"><button id="b-push-on" class="block">Erinnerung einschalten</button></div>`;
   }
   return `${msg}<div>Werktags gegen ${esc(store.push.time)}</div>
-    <label for="push-time" style="font-weight:normal">Uhrzeit ändern</label>
+    <label class="u-normal" for="push-time">Uhrzeit ändern</label>
     <input id="push-time" type="time" value="${esc(store.push.time)}" step="300">
     <div class="row">
       <button id="b-push-test" class="text">Jetzt testen</button>
@@ -783,7 +829,7 @@ async function pushEnable(time) {
   const { id, secret } = await api("POST", "/subscriptions", {
     subscription: sub.toJSON(), time, weekdays: [1, 2, 3, 4, 5], tz: "Europe/Berlin",
   });
-  store.push = { id, secret, time };
+  store.push = { id, secret, time, created: Date.now() };
   await kvSet("push", store.push);
 }
 

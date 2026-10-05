@@ -35,6 +35,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid
+import requests
 from pywebpush import WebPushException, webpush
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
@@ -47,6 +48,8 @@ PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY = 4096
 MAX_SUBSCRIPTIONS = 5000
 PUSH_TTL = 3 * 3600
+PUSH_TIMEOUT = 10
+MAX_ENDPOINT_LEN = 1024
 # Jedes Abo wird um einen festen Zufallswert später geweckt: Handys hinter
 # derselben Mobilfunk-IP (CGNAT) sollen IBS5 nicht in derselben Minute abfragen,
 # sonst sperrt IBS5 die IP.
@@ -62,30 +65,72 @@ TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 SDUI_BASE = "https://api.sdui.app/v1"
 # Nur die Aufrufe der App: Login, eigenes Konto, Kind, Stundenplan.
 SDUI_ROUTES = [
-    ("POST", re.compile(r"^auth/login$")),
-    ("GET", re.compile(r"^users/(self|\d{1,12})$")),
-    ("GET", re.compile(r"^timetables/users/\d{1,12}/timetable\?begins_at=\d{4}-\d{2}-\d{2}&ends_at=\d{4}-\d{2}-\d{2}$")),
+    ("POST", re.compile(r"^auth/login$", re.ASCII)),
+    ("GET", re.compile(r"^users/(self|\d{1,12})$", re.ASCII)),
+    ("GET", re.compile(r"^timetables/users/\d{1,12}/timetable\?begins_at=\d{4}-\d{2}-\d{2}&ends_at=\d{4}-\d{2}-\d{2}$", re.ASCII)),
 ]
-SDUI_LIMIT = (20, 600)  # höchstens 20 Aufrufe je Absender in 10 Minuten
-sdui_hits: dict[str, deque] = defaultdict(deque)
-sdui_lock = threading.Lock()
+
+
+class RateLimit:
+    """Höchstens n Treffer je Schlüssel im Zeitfenster (Sekunden); nur im Arbeitsspeicher."""
+
+    def __init__(self, n: int, window: float):
+        self.n, self.window = n, window
+        self.hits: dict[str, deque] = defaultdict(deque)
+        self.lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        now = time.monotonic()
+        with self.lock:
+            q = self.hits[key]
+            while q and now - q[0] > self.window:
+                q.popleft()
+            if len(q) >= self.n:
+                return False
+            q.append(now)
+            # Alte Absender vergessen, damit die Tabelle nicht wächst.
+            if len(self.hits) > 10000:
+                for k in [k for k, v in self.hits.items() if not v or now - v[-1] > self.window]:
+                    del self.hits[k]
+            return True
+
+
+sdui_limit = RateLimit(20, 600)  # höchstens 20 Aufrufe je Absender in 10 Minuten
+sub_limit = RateLimit(10, 3600)  # höchstens 10 neue Abos je Absender und Stunde
+SDUI_LOGIN_KEYS = {"identifier", "password", "slink"}
+SLINK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
 def sdui_allowed(client: str) -> bool:
-    n, window = SDUI_LIMIT
-    now = time.monotonic()
-    with sdui_lock:
-        q = sdui_hits[client]
-        while q and now - q[0] > window:
-            q.popleft()
-        if len(q) >= n:
-            return False
-        q.append(now)
-        # Alte Absender vergessen, damit die Tabelle nicht wächst.
-        if len(sdui_hits) > 10000:
-            for k in [k for k, v in sdui_hits.items() if not v or now - v[-1] > window]:
-                del sdui_hits[k]
-        return True
+    return sdui_limit.allow(client)
+
+
+def sdui_route_ok(method: str, rest: str) -> bool:
+    """Pfad nach /api/sdui/ ist erlaubt: keine Kodierungs- oder Traversal-Tricks, nur bekannte Routen."""
+    if "%" in rest or ".." in rest or "\\" in rest or "//" in rest:
+        return False
+    return any(m == method and r.match(rest) for m, r in SDUI_ROUTES)
+
+
+def sdui_login_body(raw: bytes) -> bytes:
+    """Prüft den Login-Body und serialisiert ihn neu; sonst BadRequest."""
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise BadRequest("kein JSON")
+    if not isinstance(obj, dict) or set(obj) != SDUI_LOGIN_KEYS or not all(isinstance(v, str) for v in obj.values()):
+        raise BadRequest("identifier, password und slink erwartet")
+    if not (1 <= len(obj["identifier"]) <= 200 and 1 <= len(obj["password"]) <= 200):
+        raise BadRequest("identifier oder password ungültig")
+    if not SLINK_RE.match(obj["slink"]):
+        raise BadRequest("slink ungültig")
+    return json.dumps({k: obj[k] for k in ("identifier", "password", "slink")}).encode()
+
+
+def client_ip(headers, client_address) -> str:
+    """Erster X-Forwarded-For-Eintrag (Caddy), sonst die Peer-Adresse. Nur für Begrenzungen, nie im Log."""
+    return (headers.get("X-Forwarded-For") or client_address[0]).split(",")[0].strip()
+
 
 log = logging.getLogger("push")
 db_lock = threading.Lock()
@@ -145,6 +190,41 @@ class BadRequest(Exception):
     pass
 
 
+def b64url_decode(s: str) -> bytes:
+    """Strenges base64url (mit oder ohne Padding); sonst ValueError."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", s):
+        raise ValueError("kein base64url")
+    return base64.urlsafe_b64decode(s.rstrip("=") + "=" * (-len(s.rstrip("=")) % 4))
+
+
+def check_endpoint(endpoint) -> None:
+    """Nur https-URL eines bekannten Push-Dienstes, ohne Benutzerinfo und Sonderport."""
+    if not isinstance(endpoint, str) or len(endpoint) > MAX_ENDPOINT_LEN:
+        raise BadRequest("kein bekannter Push-Dienst")
+    try:
+        parts = urlsplit(endpoint)
+        port = parts.port
+    except ValueError:
+        raise BadRequest("kein bekannter Push-Dienst")
+    if (
+        parts.scheme != "https"
+        or not PUSH_HOSTS.match(parts.hostname or "")
+        or "@" in parts.netloc
+        or port not in (None, 443)
+    ):
+        raise BadRequest("kein bekannter Push-Dienst")
+
+
+def check_keys(keys) -> None:
+    """p256dh = unkomprimierter EC-Punkt (65 Bytes, 0x04), auth = 16 Bytes."""
+    try:
+        p256dh, auth = b64url_decode(keys["p256dh"]), b64url_decode(keys["auth"])
+    except (ValueError, KeyError, TypeError):
+        raise BadRequest("subscription.keys ungültig")
+    if len(p256dh) != 65 or p256dh[0] != 4 or len(auth) != 16:
+        raise BadRequest("subscription.keys ungültig")
+
+
 def parse_settings(body: dict, partial: bool = False) -> dict:
     out = {}
     if "time" in body or not partial:
@@ -169,28 +249,32 @@ def parse_settings(body: dict, partial: bool = False) -> dict:
         if not isinstance(sub, dict):
             raise BadRequest("subscription fehlt")
         endpoint = sub.get("endpoint")
-        keys = sub.get("keys") or {}
-        parts = urlsplit(endpoint or "")
-        if parts.scheme != "https" or not PUSH_HOSTS.match(parts.hostname or ""):
-            raise BadRequest("kein bekannter Push-Dienst")
-        if not isinstance(keys.get("p256dh"), str) or not isinstance(keys.get("auth"), str):
+        keys = sub.get("keys")
+        check_endpoint(endpoint)
+        if not isinstance(keys, dict):
             raise BadRequest("subscription.keys unvollständig")
+        check_keys(keys)
         out["endpoint"] = endpoint
         out["keys"] = json.dumps({"p256dh": keys["p256dh"], "auth": keys["auth"]})
     return out
 
 
-def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check") -> bool:
+def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "") -> bool:
     """True = zugestellt; ein abgelaufenes Abo wird dabei gelöscht."""
     info = {"endpoint": row["endpoint"], "keys": json.loads(row["keys"])}
+    # Umleitungen nie verfolgen (SSRF): max_redirects=0 lässt requests bei einer Umleitung abbrechen.
+    session = requests.Session()
+    session.max_redirects = 0
     try:
         webpush(
             info,
-            data=json.dumps({"t": kind}),
+            data=json.dumps({"t": kind, "m": message} if message else {"t": kind}),
             vapid_private_key=vapid,
             vapid_claims={"sub": VAPID_SUBJECT},
             ttl=PUSH_TTL,
             headers={"Urgency": "high"},
+            timeout=PUSH_TIMEOUT,
+            requests_session=session,
         )
         return True
     except WebPushException as exc:
@@ -203,9 +287,71 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check") -> bool:
         else:
             log.warning("Push fehlgeschlagen: HTTP %s", status)
         return False
+    except requests.TooManyRedirects:
+        log.warning("Push fehlgeschlagen: Umleitung nicht gefolgt")
+        return False
     except Exception:
         log.exception("Push nicht versendbar")
         return False
+
+
+# Tägliche Selbstprüfung: Gerade die Eigenheiten, von denen die Web-Version lebt,
+# können unbemerkt kippen (CORS-Freigabe von IBS5, Login ohne Preflight, Sdui).
+# Weicht etwas ab, geht eine Meldung an die Abos in ADMIN_SUBS (Kommaliste von ids).
+SELFCHECK_AT = os.environ.get("SELFCHECK_AT", "06:30")
+ADMIN_SUBS = [x for x in os.environ.get("ADMIN_SUBS", "").split(",") if x]
+ORIGIN = "https://sunshine.thomschke.info"
+selfcheck_state = {"at": None, "ok": None, "problems": []}
+
+
+def selfcheck() -> list[str]:
+    """Prüft ohne Zugangsdaten, ob IBS5 und Sdui sich noch so verhalten, wie die Web-Version es braucht."""
+    problems = []
+
+    def req(method, url, headers=None, data=None):
+        h = {"Origin": ORIGIN, "User-Agent": "immerhin.satt Selbstprüfung", **(headers or {})}
+        r = urllib.request.Request(url, data=data, method=method, headers=h)
+        try:
+            with urllib.request.urlopen(r, timeout=20) as resp:
+                return resp.status, resp.headers, resp.read(2000)
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers, b""
+
+    ibs = "https://ibs.sunshine-catering.de/ibs5"
+    try:
+        # Anmeldung mit Kundennummer 0: gibt es nicht, IBS5 antwortet mit errorMessage
+        # (leere Felder bekämen 403 und taugen nicht als Probe).
+        st, hd, body = req("POST", f"{ibs}/Login/Login", {"Accept-Language": "de-DE",
+                           "Content-Type": "application/x-www-form-urlencoded"},
+                           b"identifierValue=0&secretValue=x&identifierType=0&secretType=0")
+        if st != 200 or hd.get("Access-Control-Allow-Origin") not in ("*", ORIGIN) or b"errorMessage" not in body:
+            problems.append(f"IBS5-Login ohne Preflight: HTTP {st}, Allow-Origin={hd.get('Access-Control-Allow-Origin')}")
+        st, hd, _ = req("OPTIONS", f"{ibs}/Mealplan/WeekplanMobile", {"Access-Control-Request-Method": "GET",
+                        "Access-Control-Request-Headers": "authorization,x-requested-with", "Accept-Language": "de-DE"})
+        if st != 200 or hd.get("Access-Control-Allow-Origin") not in ("*", ORIGIN):
+            problems.append(f"IBS5-Preflight Tagesansicht: HTTP {st}, Allow-Origin={hd.get('Access-Control-Allow-Origin')}")
+    except Exception as exc:
+        problems.append(f"IBS5 nicht erreichbar: {type(exc).__name__}")
+    try:
+        st, _, _ = req("GET", f"{SDUI_BASE}/users/self")
+        if st != 401:
+            problems.append(f"Sdui ohne Token: HTTP {st} statt 401")
+    except Exception as exc:
+        problems.append(f"Sdui nicht erreichbar: {type(exc).__name__}")
+    return problems
+
+
+def run_selfcheck(vapid: Vapid) -> None:
+    problems = selfcheck()
+    selfcheck_state.update(at=dt.datetime.now().isoformat(timespec="minutes"), ok=not problems, problems=problems)
+    if problems:
+        log.warning("Selbstprüfung: %s", "; ".join(problems))
+        with db_lock:
+            rows = [CONN.execute("SELECT * FROM subs WHERE id = ?", (i,)).fetchone() for i in ADMIN_SUBS]
+        for row in filter(None, rows):
+            send(row, vapid, "alarm", "Selbstprüfung: " + "; ".join(problems))
+    else:
+        log.info("Selbstprüfung ok")
 
 
 def is_due(row, now: dt.datetime) -> bool:
@@ -239,6 +385,9 @@ def scheduler(vapid: Vapid) -> None:
                     sent += send(row, vapid)
             if sent:
                 log.info("%d Weckrufe verschickt", sent)
+            now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
+            if now.strftime("%H:%M") == SELFCHECK_AT:
+                run_selfcheck(vapid)
         except Exception:  # Der Wecker darf nie stehen bleiben.
             log.exception("Fehler im Zeitplan")
 
@@ -287,11 +436,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def sdui(self, method: str) -> None:
         rest = self.path[len("/api/sdui/"):]
-        if not any(m == method and r.match(rest) for m, r in SDUI_ROUTES):
+        if not sdui_route_ok(method, rest):
             return self.reply(404)
-        # Absender nur flüchtig im Speicher für die Begrenzung, nie im Log.
-        client = (self.headers.get("X-Forwarded-For") or self.client_address[0]).split(",")[0].strip()
-        if not sdui_allowed(client):
+        if not sdui_allowed(client_ip(self.headers, self.client_address)):
             return self.reply(429, {"error": "zu viele Anfragen, bitte später"})
         n = int(self.headers.get("Content-Length") or 0)
         if n > MAX_BODY:
@@ -300,6 +447,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization", "").startswith("Bearer "):
             headers["Authorization"] = self.headers["Authorization"]
         data = self.rfile.read(n) if method == "POST" else None
+        if data is not None:
+            try:
+                data = sdui_login_body(data)
+            except BadRequest as exc:
+                return self.reply(400, {"error": str(exc)})
         if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(f"{SDUI_BASE}/{rest}", data=data, method=method, headers=headers)
@@ -310,6 +462,7 @@ class Handler(BaseHTTPRequestHandler):
             status, body = exc.code, exc.read()
         except Exception:
             return self.reply(502, {"error": "Sdui nicht erreichbar"})
+        # Bewusst keine Access-Control-Allow-*-Header: fremde Origins können die Antwort nicht lesen.
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
@@ -320,6 +473,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/sdui/"):
             return self.sdui("GET")
+        if self.path.split("?")[0] == "/api/health":
+            return self.reply(200, {"selfcheck": selfcheck_state})
         if self.path.split("?")[0] == "/api/vapid":
             return self.reply(200, {"publicKey": public_key_b64(self.vapid)})
         self.reply(404)
@@ -331,6 +486,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if kind == "subs" and sub_id is None:
                 s = parse_settings(self.body())
+                if not sub_limit.allow(client_ip(self.headers, self.client_address)):
+                    return self.reply(429, {"error": "zu viele neue Abos, bitte später"})
                 new_id, secret = secrets.token_urlsafe(18), secrets.token_urlsafe(24)
                 with db_lock:
                     if CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0] >= MAX_SUBSCRIPTIONS:
@@ -389,6 +546,7 @@ def main() -> None:
     vapid = init()
     Handler.vapid = vapid
     threading.Thread(target=scheduler, args=(vapid,), daemon=True).start()
+    threading.Thread(target=run_selfcheck, args=(vapid,), daemon=True).start()
     log.info("lauscht auf :%d", PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

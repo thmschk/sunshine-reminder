@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>HTML-Einschleusung in der Oberfläche</title>
+<!-- Echte Startseite mit präpariertem Gerichtsnamen; mit echter Wartezeit aufrufen (Screenshot). -->
+<link rel="stylesheet" href="../style.css">
+<body><pre id="out">läuft</pre>
+<header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-settings" hidden></button></header>
+<main id="app"></main><footer id="footer" hidden></footer>
+<script type="module">
+const P = (m) => { document.getElementById("out").textContent += "\n" + m; };
+window.addEventListener("error", (e) => P("ERR " + e.message + " " + e.filename + ":" + e.lineno));
+window.addEventListener("unhandledrejection", (e) => P("REJ " + (e.reason?.stack || e.reason)));
+window.setTimeout = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => fn(); c.port2.postMessage(0); return 0; };
+const { secretSet, kvClear } = await import("../idb.js");
+await kvClear();
+await secretSet("creds", { customerNo: "1000", password: "x" });
+window.__xss = 0;
+const evil = `&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;&lt;b&gt;fett&lt;/b&gt;`;
+window.fetch = async (url) => {
+  url = String(url);
+  if (url.includes("/Login/")) return new Response(JSON.stringify({ token: "t", name1: "Muster, &lt;i&gt;Mia&lt;/i&gt;" }));
+  const d = (/date=([\d-]+)/.exec(url) || [])[1] || "2026-10-06";
+  return new Response(`<li id="dayplan"><button class="menuplan-checkbox" data-order-status="2" data-quantity-ordered="1" data-quantity-in-shopping-cart="" data-date="x" data-readonly="false" data-name="${evil}" id="menu_quantity_mobile-${d}_16_827" onclick="DayPlan.changeItemQuantity('', 1, 'x', '1000', '827', '${d}', 'u', true, '16', 'n');"></button></li>`);
+};
+await import("../app.js");
+// Ohne Timer und Animationsframes warten: beide laufen im Fotomodus des Testbrowsers nicht.
+const wait = () => new Promise((r) => { let n = 0; (function tick() { if (document.querySelector(".days") || ++n > 200000) r(); else window.setTimeout(tick); })(); });
+await wait();
+const injected = document.querySelector("#app img, #app b");
+const shown = document.querySelector(".dish")?.textContent || "";
+document.getElementById("out").textContent = [
+  `${document.querySelector(".days") ? "ok  " : "FAIL"} Startseite gerendert`,
+  `${!injected ? "ok  " : "FAIL"} kein eingeschleustes Element im DOM`,
+  `${window.__xss === 0 ? "ok  " : "FAIL"} onerror nicht ausgeführt`,
+  `${shown.includes("<img") ? "ok  " : "FAIL"} Name als Text sichtbar: ${shown.slice(0, 40)}`,
+].join("\n");
+</script>

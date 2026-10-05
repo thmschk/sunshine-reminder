@@ -6,6 +6,10 @@ services:
     environment:
       VAPID_SUBJECT: "https://sunshine.thomschke.info"
       TZ: Europe/Berlin
+    # ADMIN_SUBS (ids der Abos, die Alarme der Selbstprüfung bekommen) steht nur auf dem Server.
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - ./data:/data
     # Nur lokal erreichbar; Caddy läuft im Netz des Servers und reicht /api/ hierher.

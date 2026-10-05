@@ -24,4 +24,14 @@ fi
 docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null
 docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile
 EOF
+# Das Neuladen griff schon gelegentlich nicht: ausgelieferte CSP gegen die Datei prüfen.
+want=$(grep -o 'Content-Security-Policy "[^"]*"' server/sunshine.caddy | cut -d'"' -f2)
+for try in 1 2 3; do
+  got=$(curl -sI https://sunshine.thomschke.info/ | tr -d '\r' | sed -n 's/^content-security-policy: //Ip')
+  [ "$got" = "$want" ] && break
+  echo "Caddy hat die neue Konfiguration noch nicht, lade erneut ($try) …"
+  sleep 2
+  ssh "$HOST" 'cd /srv/caddy && docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile >/dev/null 2>&1'
+done
+[ "$got" = "$want" ] || { echo "FEHLER: ausgelieferte CSP weicht von server/sunshine.caddy ab" >&2; exit 1; }
 echo "deployt: https://sunshine.thomschke.info/"

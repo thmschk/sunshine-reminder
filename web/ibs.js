@@ -75,9 +75,11 @@ export const De = {
  * Solche Fehler bei angemeldeten Aufrufen tragen deshalb maybeAuth.
  */
 export class IbsClient {
-  constructor(baseUrl = BASE_URL) {
+  /** hooks.before() vor jeder Anfrage, hooks.failed({path, status, network}) danach (siehe guard.js). */
+  constructor(baseUrl = BASE_URL, hooks = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.token = null;
+    this.hooks = hooks;
   }
 
   /**
@@ -174,6 +176,7 @@ export class IbsClient {
       headers.Authorization = `Bearer ${this.token}`;
       headers["X-Requested-With"] = "XMLHttpRequest";
     }
+    await this.hooks.before?.();
     let resp;
     try {
       resp = await fetch(this.base + path, {
@@ -184,10 +187,12 @@ export class IbsClient {
         cache: "no-store",
       });
     } catch (e) {
+      await this.hooks.failed?.({ path, network: true });
       const err = new IbsError(`Keine Verbindung zum Bestellsystem (${path}): ${e.message}`);
       err.maybeAuth = auth;
       throw err;
     }
+    if (!resp.ok && resp.type !== "opaqueredirect") await this.hooks.failed?.({ path, status: resp.status });
     if (resp.type === "opaqueredirect" || resp.status === 401 || resp.status === 403) {
       throw new IbsAuthError(`${path}: Anmeldung abgelaufen oder abgelehnt`);
     }
@@ -439,7 +444,9 @@ async function collectByDay(client, dates, fresh) {
       out.push(hit.day);
       continue;
     }
-    if (client.lastDayFetch) await sleep(Math.max(0, client.lastDayFetch + DAY_GAP_MS - Date.now()));
+    // Mit etwas Zufall, damit Geräte hinter derselben IP nicht im Gleichtakt fragen.
+    const gap = DAY_GAP_MS + Math.floor(Math.random() * 300);
+    if (client.lastDayFetch) await sleep(Math.max(0, client.lastDayFetch + gap - Date.now()));
     client.lastDayFetch = Date.now();
     const plan = parseWeekplan(await client.dayplan(d));
     const other = [...plan.days.keys()].find((k) => k !== d);

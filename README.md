@@ -34,11 +34,19 @@ offen ist.
   umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit
   dem Bestellsystem.
 * Für die Erinnerung weckt ein kleiner Server das Gerät werktags zur gewählten
-  Uhrzeit mit einer leeren Push-Nachricht. Geprüft wird dann **auf dem Gerät**;
-  der Server kennt weder Zugangsdaten noch Bestellstand, nur das Push-Abo und
-  die Uhrzeit.
+  Uhrzeit mit einer leeren Push-Nachricht. Geprüft wird dann **auf dem Gerät**.
+  Der Server kennt weder die IBS5-Zugangsdaten noch den Bestellstand. Für die
+  Erinnerung speichert er nur das Push-Abo und die Uhrzeit. Nur wer Sdui dazunimmt,
+  schickt dessen Anmeldung und Abrufe durch ihn (siehe
+  [unten](#was-der-server-sieht-und-speichert)).
+* Jeder Weckruf zeigt eine Meldung, auch wenn alles bestellt ist — dann still,
+  ohne Ton. Browser und vor allem iOS verlangen das, sonst kündigen sie das Abo.
 * Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
-  Schlüssel, den der Browser erzeugt und nicht herausgibt.
+  Schlüssel, den der Browser erzeugt und nicht herausgibt. Das schützt davor,
+  dass jemand die Speicherdatei kopiert und ausliest, etwa aus einem Backup.
+  Gegen Schadcode, der im Namen dieser Seite läuft, hilft es nicht. Das
+  IBS5-Passwort muss gespeichert bleiben, weil sich die tägliche Prüfung ohne
+  dich anmeldet.
 * Wer mag, holt sich den **Stundenplan aus Sdui** dazu — siehe
   [unten](#stundenplan-aus-sdui-in-der-web-version).
 
@@ -74,7 +82,7 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 | | |
 |---|---|
 | Was durchläuft | beim Einrichten einmal E-Mail und Passwort, danach bei jedem Abruf der Zugangsschlüssel (Token) und der Stundenplan |
-| Was der Server speichert | nichts, auch keine Protokolle |
+| Was der Server speichert | nichts. Für die Begrenzung hält er die IP-Adresse bis zu zehn Minuten im Arbeitsspeicher. |
 | Was auf dem Gerät bleibt | nur der Token, verschlüsselt — er gilt ein Jahr, danach einmal neu verbinden. Das Passwort wird nirgends gespeichert. |
 | Was durchgelassen wird | nur Anmeldung, eigenes Konto, Kind und Stundenplan, höchstens 20 Aufrufe in 10 Minuten je Absender |
 | Wie oft abgerufen wird | höchstens alle sechs Stunden, der Plan liegt dazwischen auf dem Gerät |
@@ -82,12 +90,47 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 Wer Sdui ganz ohne fremden Server nutzen will, nimmt die Android-App: Sie fragt
 Sdui direkt.
 
+### Was der Server sieht und speichert
+
+| Anlass | sieht | speichert | wie lange |
+|---|---|---|---|
+| Seite laden | IP-Adresse, angefragte Datei | nichts; Zugriffs- und Fehlerprotokolle einzelner Anfragen sind abgeschaltet | – |
+| Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs; IP nur im Arbeitsspeicher für die Begrenzung auf 10 neue Abos je Stunde | Abo bis zum Ausschalten oder bis der Push-Dienst es als ungültig meldet; IP eine Stunde |
+| Sdui (nur wenn eingerichtet) | IP-Adresse, beim Einrichten E-Mail und Passwort, danach Token, Kind-ID im Pfad, Stundenplan | nichts; IP nur im Arbeitsspeicher für die Begrenzung auf 20 Aufrufe | IP zehn Minuten |
+| tägliche Selbstprüfung | – (fragt selbst bei IBS5 und Sdui an, ohne Nutzerdaten) | Ergebnis unter `/api/health` | bis zur nächsten Prüfung |
+
+Name, Kundennummer, Bestellungen und das IBS5-Passwort erreichen den Server nie.
+
 **Grenzen:** Handy-Browsern liefert IBS5 statt des Wochenplans nur eine
 Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
 quittiert IBS5 mit einer Sperre der IP-Adresse (dann geht auch die normale
 Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Tage
-nacheinander, kurz zwischengespeichert, die Erinnerung höchstens die nächsten
-fünf Schultage. Die Erinnerung auf dem iPhone ist noch nicht ausprobiert.
+nacheinander mit Pausen und etwas Zufall, drei Minuten zwischengespeichert, die
+Erinnerung höchstens die nächsten fünf Schultage, insgesamt höchstens 60
+Anfragen je Stunde und Gerät. Kommt beim Anmelden gar keine Antwort (so sieht
+die Sperre im Browser aus) oder ein 429, ruht die App drei Stunden und sagt das,
+statt die Sperre durch Wiederholungen zu verlängern. Die Erinnerung auf dem
+iPhone ist noch nicht ausprobiert.
+
+**Damit Schweigen auffällt:** Die Startseite zeigt, wann die Erinnerung zuletzt
+erfolgreich geprüft hat, und warnt, wenn das über vier Tage her ist. Jeder
+Fehler beim Weckruf führt zu einer Meldung. Der Server prüft zudem jeden Morgen,
+ob IBS5 und Sdui sich noch so verhalten, wie die Web-Version es braucht, und
+meldet Abweichungen an den Betreiber.
+
+**Integrität:** Anders als die signierte APK lädt die Web-Version ihren Code bei
+jedem Aufruf vom Server. Wer den Server kontrolliert, könnte also anderen Code
+ausliefern. Die Seite lädt keine fremden Skripte, und eine strenge
+Content-Security-Policy erlaubt nur Code und Verbindungen der eigenen Adresse
+und von IBS5. Ob der ausgelieferte Code dem Repository entspricht, lässt sich
+nachprüfen:
+
+```sh
+for f in index.html app.js ibs.js idb.js guard.js sdui.js sw.js style.css; do
+  curl -s "https://<adresse>/$f" | cmp -s - "web/$f" && echo "ok    $f" || echo "ANDERS $f"
+done
+```
+
 
 Die Web-Version spricht direkt aus dem Browser mit IBS5. Das geht nur, weil
 IBS5 solche Zugriffe von anderen Webseiten derzeit zulässt. Ändert der
@@ -247,8 +290,9 @@ fremder Hand sollte niemand blind durchwinken.
   privaten Bereich und gehen ausschließlich an `api.sdui.app`, über HTTPS.
   „Sdui entfernen" löscht sie samt Stundenplan.
 * **Die App braucht keinen Server dieses Projekts.** Niemand außer dir und dem
-  Bestellsystem sieht irgendetwas. (Nur die [Web-Version](#web-version)
-  nutzt einen Server, und der sieht ausschließlich Push-Abo und Uhrzeit.)
+  Bestellsystem sieht irgendetwas. (Nur die [Web-Version](#web-version) nutzt
+  einen Server, was er sieht, steht
+  [dort](#was-der-server-sieht-und-speichert).)
 * **Keine Statistik, keine Werbung, keine Fremdbibliotheken zur Auswertung.**
 
 Die App fordert diese Berechtigungen an:

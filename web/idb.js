@@ -29,6 +29,8 @@ function run(mode, fn) {
 export const kvGet = (key) => run("readonly", (s) => s.get(key)).catch(() => undefined);
 export const kvSet = (key, value) => run("readwrite", (s) => s.put(value, key));
 export const kvDel = (key) => run("readwrite", (s) => s.delete(key)).catch(() => {});
+/** Leert den ganzen Speicher dieser Seite, auch den Schlüssel der Verschlüsselung. */
+export const kvClear = () => run("readwrite", (s) => s.clear());
 
 // ---------------------------------------------------------------- verschlüsselt
 //

@@ -6,10 +6,11 @@ import {
 } from "./ibs.js";
 import { kvGet, kvSet, secretGet } from "./idb.js";
 import * as Sdui from "./sdui.js";
+import { IbsPausedError, guardHooks } from "./guard.js";
 
-const VERSION = "v20";
+const VERSION = "v22";
 const PUSH_MAX_DAYS = 5;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js"];
+const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -49,9 +50,27 @@ self.addEventListener("fetch", (ev) => {
  */
 self.addEventListener("push", (ev) => {
   let kind = "check";
-  try { kind = ev.data?.json()?.t || "check"; } catch { /* leerer Push */ }
+  let message = "";
+  try {
+    const d = ev.data?.json();
+    kind = d?.t || "check";
+    message = d?.m || "";
+  } catch { /* leerer Push */ }
+  if (kind === "alarm") {
+    // Nur an Betreiber-Abos: die tägliche Selbstprüfung des Servers hat etwas gefunden.
+    ev.waitUntil(notify("Selbstprüfung: Abweichung", message || "Details unter /api/health", { url: "/api/health" }));
+    return;
+  }
   // Essen zuerst: Android dämpft eine zweite Meldung kurz danach, die wichtigere kommt also vorn.
-  ev.waitUntil(checkAndNotify(kind === "test").then(() => subjectReminder(kind === "test")));
+  // Was auch immer schiefgeht, eine Meldung muss erscheinen — sonst kündigt iOS das Abo.
+  ev.waitUntil((async () => {
+    try {
+      await checkAndNotify(kind === "test");
+    } catch (e) {
+      await notify("Prüfung fehlgeschlagen", `${e?.message || e}\nBitte die App öffnen.`, { url: "./" }).catch(() => {});
+    }
+    await subjectReminder(kind === "test");
+  })());
 });
 
 /** Gewählte Fächer am nächsten Schultag, wie SduiCheck der App; still, wenn nichts ansteht. */
@@ -94,17 +113,19 @@ async function checkAndNotify(isTest) {
   // Höchstens die nächsten Schultage: auf dem Handy kostet jeder Tag eine
   // Anfrage, und zu viele quittiert IBS5 mit einer IP-Sperre.
   const dates = targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead }).slice(0, PUSH_MAX_DAYS);
-  const client = new IbsClient();
+  const client = new IbsClient(undefined, guardHooks);
   let days;
   let firstName = "";
   try {
     firstName = (await client.login(creds.customerNo, creds.password)).firstName;
     days = await collect(client, dates);
   } catch (e) {
-    const title = e instanceof IbsAuthError && !client.token ? "Anmeldung abgelehnt" : "Bestellstand unbekannt";
+    const title = e instanceof IbsPausedError ? "Bestellsystem gesperrt oder nicht erreichbar"
+      : e instanceof IbsAuthError && !client.token ? "Anmeldung abgelehnt" : "Bestellstand unbekannt";
     return notify(prefix + title, `${e.message}\nEin Fehler ist keine Aussage darüber, ob bestellt ist.`, { url: "./" });
   }
 
+  await kvSet("lastPushOk", { at: Date.now() });
   const alarm = evaluate(days);
   if (alarm.kind === "ok") {
     const until = days.length ? `bis ${De.long(days.at(-1).date)}` : "Keine Schultage im Prüfzeitraum";

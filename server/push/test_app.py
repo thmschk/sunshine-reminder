@@ -1,9 +1,12 @@
 """Fälligkeit der Weckrufe: python3 -m unittest test_app (im Container oder mit pywebpush installiert)."""
+import base64
 import datetime as dt
+import json
+import os
 import unittest
 from zoneinfo import ZoneInfo
 
-from app import is_due
+from app import BadRequest, RateLimit, check_endpoint, check_keys, is_due, parse_settings, sdui_login_body, sdui_route_ok
 
 TZ = ZoneInfo("Europe/Berlin")
 
@@ -61,7 +64,96 @@ class SduiRoutes(unittest.TestCase):
 
     def test_begrenzung(self):
         import app
-        app.sdui_hits.clear()
+        app.sdui_limit.hits.clear()
         results = [app.sdui_allowed("1.2.3.4") for _ in range(25)]
         self.assertEqual(results.count(True), 20)
         self.assertTrue(app.sdui_allowed("5.6.7.8"))
+
+
+def b64(raw, pad=False):
+    s = base64.urlsafe_b64encode(raw).decode()
+    return s if pad else s.rstrip("=")
+
+
+GOOD_KEYS = {"p256dh": b64(b"\x04" + os.urandom(64)), "auth": b64(os.urandom(16))}
+
+
+class PushEndpoints(unittest.TestCase):
+    def test_abgelehnt(self):
+        for url in (
+            "http://fcm.googleapis.com/x",
+            "https://localhost/x",
+            "https://169.254.169.254/x",
+            "https://evil.example/x",
+            "https://user@fcm.googleapis.com/x",
+            "https://fcm.googleapis.com:8443/x",
+            "https://fcm.googleapis.com/" + "a" * 1100,
+        ):
+            with self.subTest(url=url), self.assertRaises(BadRequest):
+                parse_settings({"subscription": {"endpoint": url, "keys": GOOD_KEYS}})
+
+    def test_angenommen(self):
+        s = parse_settings({"subscription": {"endpoint": "https://fcm.googleapis.com/fcm/send/abc", "keys": GOOD_KEYS}})
+        self.assertEqual(s["endpoint"], "https://fcm.googleapis.com/fcm/send/abc")
+        check_endpoint("https://fcm.googleapis.com:443/fcm/send/abc")
+
+
+class PushKeys(unittest.TestCase):
+    def test_gueltig(self):
+        check_keys(GOOD_KEYS)
+        check_keys({"p256dh": b64(b"\x04" + os.urandom(64), pad=True), "auth": b64(os.urandom(16), pad=True)})
+
+    def test_ungueltig(self):
+        auth = b64(os.urandom(16))
+        for keys in (
+            {"p256dh": b64(b"\x04" + os.urandom(63)), "auth": auth},  # zu kurz
+            {"p256dh": b64(b"\x02" + os.urandom(64)), "auth": auth},  # falsches erstes Byte
+            {"p256dh": b64(b"\x04" + os.urandom(64)), "auth": b64(os.urandom(15))},
+            {"p256dh": "kein base64!", "auth": auth},
+            {"p256dh": GOOD_KEYS["p256dh"]},
+            {"p256dh": 1, "auth": auth},
+        ):
+            with self.subTest(keys=keys), self.assertRaises(BadRequest):
+                check_keys(keys)
+
+
+class RateLimitTest(unittest.TestCase):
+    def test_grenze_und_schluessel(self):
+        rl = RateLimit(3, 3600)
+        self.assertEqual([rl.allow("a") for _ in range(4)], [True, True, True, False])
+        self.assertTrue(rl.allow("b"))
+
+    def test_fenster_laeuft_ab(self):
+        rl = RateLimit(1, 0.05)
+        self.assertTrue(rl.allow("a"))
+        self.assertFalse(rl.allow("a"))
+        import time
+        time.sleep(0.06)
+        self.assertTrue(rl.allow("a"))
+
+
+class SduiPfad(unittest.TestCase):
+    def test_pfadpruefung(self):
+        self.assertTrue(sdui_route_ok("GET", "users/self"))
+        for rest in ("users/../admin", "users/%2e%2e", "users/12a", "users//1", "users\\1", "users/\u0661\u0662"):
+            with self.subTest(rest=rest):
+                self.assertFalse(sdui_route_ok("GET", rest))
+
+
+class SduiLogin(unittest.TestCase):
+    def body(self, **kw):
+        d = {"identifier": "a@b.de", "password": "pw", "slink": "schule-1"}
+        d.update(kw)
+        return json.dumps(d).encode()
+
+    def test_gueltig(self):
+        out = json.loads(sdui_login_body(self.body()))
+        self.assertEqual(out, {"identifier": "a@b.de", "password": "pw", "slink": "schule-1"})
+
+    def test_abgelehnt(self):
+        extra = json.dumps({"identifier": "a", "password": "b", "slink": "x", "z": "1"}).encode()
+        cases = [extra, b"kein json", b"[]", self.body(slink="../x"), self.body(slink="Groß"), self.body(slink=""),
+                 self.body(password="x" * 201), self.body(password=""), self.body(identifier=1)]
+        for raw in cases:
+            with self.subTest(raw=raw), self.assertRaises(BadRequest):
+                sdui_login_body(raw)

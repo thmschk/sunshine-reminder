@@ -254,3 +254,15 @@ details.dropdown[open] summary::after { transform: rotate(180deg); }
 .dd-label { font-size: .75rem; color: var(--on-surface-variant); }
 .dd-value { font-size: 1rem; }
 details.dropdown .subjects { border-top: 1px solid var(--surface-variant); padding: 4px 12px 8px; margin: 0; }
+.center-text { text-align: center; }
+/* Hilfsklassen statt style-Attributen: die CSP lässt keine eingebetteten Stile zu. */
+.u-normal { font-weight: normal; }
+.u-m0 { margin: 0; }
+.u-mt0 { margin-top: 0; }
+.u-mb0 { margin-bottom: 0; }
+.u-mt4 { margin-top: 4px; }
+.u-mb6 { margin: 0 0 6px; }
+.u-my64 { margin: 6px 0 4px; }
+.u-my48 { margin: 4px 0 8px; }
+.u-pl0 { padding-left: 0; }
+.u-block { display: block; }
