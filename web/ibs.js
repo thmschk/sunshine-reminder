@@ -4,6 +4,10 @@
 // fachliche Begründungen stehen dort. Der Parser arbeitet bewusst mit regulären
 // Ausdrücken statt DOMParser, weil er auch im Service Worker laufen muss, und den
 // gibt es dort nicht.
+//
+// Handy-Browser bekommen von IBS5 am User-Agent erkannt statt des Wochenplans eine
+// Tagesansicht (id="dayplan"), auch bei Angabe von year/week. Der Client erkennt
+// das an der ersten Antwort und lädt dann je Tag über WeekplanMobile?date=.
 
 export const BASE_URL = "https://ibs.sunshine-catering.de/ibs5";
 export const WEB_URL = "https://ibs.sunshine-catering.de/IBS5";
@@ -104,6 +108,11 @@ export class IbsClient {
   weekplan(year, week) {
     const q = year != null && week != null ? `?year=${year}&week=${week}` : "";
     return this.#send(`/Mealplan/Weekplan${q}`, { method: "GET" });
+  }
+
+  /** Tagesansicht der Mobilseite für einen Tag. */
+  dayplan(date) {
+    return this.#send(`/Mealplan/WeekplanMobile?date=${date}`, { method: "GET" });
   }
 
   async cart() {
@@ -265,18 +274,35 @@ function attributes(src) {
   return out;
 }
 
-const ID_FULL = /^menu_quantity_(\d{4}-\d{2}-\d{2})_(\d+)_(\d+)$/;
-const ID_DATE = /_(\d{4}-\d{2}-\d{2})_/;
+const ID_FULL = /^menu_quantity_(?:mobile-)?(\d{4}-\d{2}-\d{2})_(\d+)_(\d+)$/;
+const ID_DATE = /[_-](\d{4}-\d{2}-\d{2})_/;
 const DE_DATE = /^(\d{2})\.(\d{2})\.(\d{4})$/;
-const ONCLICK_ARGS = /clickMenuCheckbox\(([^)]*)\)/;
+// Kundennummer: Wochenplan clickMenuCheckbox(…) 6. Argument, Tagesansicht changeItemQuantity(…) 4. Argument.
+const ONCLICK = [
+  { re: /clickMenuCheckbox\(([^)]*)\)/, index: 5 },
+  { re: /changeItemQuantity\(([^)]*)\)/, index: 3 },
+];
+/** Die Regel aus dem Seiten-JS von IBS5 (M5/KV-SPERRLOGIK). */
+const KV_NAME = /M5|KALTVERPFLEGUNG|\bKV\b/i;
+
+function customerIdFrom(onclick) {
+  for (const { re, index } of ONCLICK) {
+    const args = re.exec(onclick)?.[1];
+    if (args) return (args.split(",")[index] || "").trim().replace(/^'+|'+$/g, "");
+  }
+  return "";
+}
 
 export class MenuEntry {
   constructor(f) {
     Object.assign(this, f);
   }
-  /** Kaltverpflegung u. Ä. ist readonly und ohne onclick, auch an offenen Tagen. */
+  /**
+   * Kaltverpflegung ist nie wählbar: der Wochenplan liefert sie readonly und ohne
+   * onclick, die Tagesansicht sperrt sie nur im Seiten-JS — daher zusätzlich isKv.
+   */
   get selectable() {
-    return this.orderable && !!this.customerId && !!this.menuGroupId && !!this.menuLineId;
+    return this.orderable && !this.isKv && !!this.customerId && !!this.menuGroupId && !!this.menuLineId;
   }
   get isOrdered() { return this.status === STATUS_ORDERED || this.quantityOrdered !== ""; }
   get isUnderstood() { return this.status === STATUS_ORDERED || this.status === STATUS_NOT_ORDERED; }
@@ -302,10 +328,15 @@ function dayState(entries) {
   return OrderState.DEADLINE_PASSED;
 }
 
-/** @returns {{days: Map<string, DayStatus>, displayedWeek: number|null}} */
+/**
+ * Wochenplan oder Tagesansicht in Tage zerlegen.
+ * @returns {{days: Map<string, DayStatus>, displayedWeek: number|null, view: "week"|"day"}}
+ */
 export function parseWeekplan(html) {
   // Anker am Container: eine Ferienwoche ist legitim leer, eine Fehlerseite nie ein Plan.
-  if (!/\bid\s*=\s*["']?weekplan["'\s>]/.test(html)) {
+  const view = /\bid\s*=\s*["']?weekplan["'\s>]/.test(html) ? "week"
+    : /\bid\s*=\s*["']?dayplan["'\s>]/.test(html) ? "day" : null;
+  if (!view) {
     throw new ParserError("Antwort enthält keinen Wochenplan — vermutlich eine Fehler- oder Login-Seite.");
   }
   const text = decode(html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " "));
@@ -324,18 +355,19 @@ export function parseWeekplan(html) {
     }
     if (!date) continue;
     const full = ID_FULL.exec(id);
-    const args = ONCLICK_ARGS.exec(a.get("onclick") || "")?.[1];
-    const customerId = args ? (args.split(",")[5] || "").trim().replace(/^'+|'+$/g, "") : "";
+    const name = (a.get("data-name") || "").trim();
     const entry = new MenuEntry({
       date,
-      name: (a.get("data-name") || "").trim(),
+      name,
       status: (a.get("data-order-status") || "").trim(),
       quantityOrdered: (a.get("data-quantity-ordered") || "").trim(),
       quantityInCart: (a.get("data-quantity-in-shopping-cart") || "").trim(),
-      orderable: !a.has("readonly"),
+      // Wochenplan: Attribut readonly; Tagesansicht: data-readonly="true".
+      orderable: !a.has("readonly") && (a.get("data-readonly") || "").trim() !== "true",
+      isKv: KV_NAME.test(name),
       menuGroupId: full?.[2] || "",
       menuLineId: full?.[3] || "",
-      customerId,
+      customerId: customerIdFrom(a.get("onclick") || ""),
     });
     if (!byDate.has(date)) byDate.set(date, []);
     byDate.get(date).push(entry);
@@ -343,7 +375,7 @@ export function parseWeekplan(html) {
 
   const days = new Map();
   for (const [date, entries] of byDate) days.set(date, new DayStatus(date, dayState(entries), entries));
-  return { days, displayedWeek: kw ? parseInt(kw[1], 10) : null };
+  return { days, displayedWeek: view === "week" && kw ? parseInt(kw[1], 10) : null, view };
 }
 
 // ---------------------------------------------------------------- Prüfung
@@ -359,8 +391,12 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
   return out;
 }
 
-/** Jede betroffene Kalenderwoche einmal laden; Login muss vorher erfolgt sein. */
+/**
+ * Jede betroffene Kalenderwoche einmal laden; Login muss vorher erfolgt sein.
+ * Liefert IBS5 statt der Woche eine Tagesansicht (Handy), wird je Tag geladen.
+ */
 export async function collect(client, dates) {
+  if (client.dayView) return collectByDay(client, dates);
   const weeks = new Map();
   for (const d of dates) {
     const [y, w] = isoWeek(d);
@@ -372,12 +408,35 @@ export async function collect(client, dates) {
   for (const key of [...weeks.keys()].sort()) {
     const { y, w, dates: ds } = weeks.get(key);
     const plan = parseWeekplan(await client.weekplan(y, w));
+    if (plan.view === "day") {
+      client.dayView = true;
+      return collectByDay(client, dates);
+    }
     if (plan.displayedWeek != null && plan.displayedWeek !== w) {
       throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${plan.displayedWeek}`);
     }
     for (const d of ds) result.push(plan.days.get(d) ?? new DayStatus(d, OrderState.NO_OFFER));
   }
   return result.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+const DAY_PARALLEL = 4;
+
+async function collectByDay(client, dates) {
+  const out = new Array(dates.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < dates.length) {
+      const i = next++;
+      const d = dates[i];
+      const plan = parseWeekplan(await client.dayplan(d));
+      const other = [...plan.days.keys()].find((k) => k !== d);
+      if (other) throw new IbsError(`Angefragt war ${De.short(d)}, geliefert wurde ${De.short(other)}`);
+      out[i] = plan.days.get(d) ?? new DayStatus(d, OrderState.NO_OFFER);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(DAY_PARALLEL, dates.length) }, worker));
+  return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /**

@@ -6,7 +6,7 @@
 <pre id="out">läuft</pre>
 <script type="module">
 import {
-  parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin,
+  parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
 } from "../ibs.js";
 
 const results = [];
@@ -83,6 +83,47 @@ await test("Datum und Profil", () => {
   eq(todayBerlin(new Date("2026-12-31T22:59:00Z")), "2026-12-31", "todayBerlin Silvester MEZ");
   eq(CartResponse.from({ MessageStatus: "OK", TotalItemsInCart: 2 }).totalItemsInCart, 2, "PascalCase");
   eq(CartResponse.from({ messageStatus: "Error", message: "x" }).ok, false, "Fehlerstatus");
+});
+
+const dayOpen = await fetch("dayplan_open.html").then((r) => r.text());
+await test("Tagesansicht (Handy): offen, IDs, Kundennummer, Kaltverpflegung gesperrt", () => {
+  const p = parseWeekplan(dayOpen);
+  eq([p.view, p.displayedWeek, p.days.size], ["day", null, 1], "Ansicht");
+  const d = p.days.get("2026-10-12");
+  eq(d.state, OrderState.ORDERED, "Status");
+  const [a, b, kv] = d.entries;
+  eq([a.customerId, a.menuGroupId, a.menuLineId, a.selectable], ["1000", "16", "827", true], "827");
+  eq(b.name, "Linseneintopf"); eq(b.selectable, true, "828 wählbar");
+  eq([kv.isKv, kv.selectable], [true, false], "Kaltverpflegung");
+  eq(a.name, "Dinkel-Makkaroni mit Gemüsesoße", "Entities");
+});
+await test("Tagesansicht nach Bestellschluss", () => {
+  const closed = dayOpen.replaceAll('data-readonly="false"', 'data-readonly="true"').replaceAll('data-order-status="2"', 'data-order-status="0"').replaceAll('data-quantity-ordered="1"', 'data-quantity-ordered=""');
+  eq(parseWeekplan(closed).days.get("2026-10-12").state, OrderState.DEADLINE_PASSED);
+});
+await test("Kaltverpflegung erkannt wie im Seiten-JS", () => {
+  const kvName = (n) => parseWeekplan(dayOpen.replace('data-name="Linseneintopf"', `data-name="${n}"`)).days.get("2026-10-12").entries[1].isKv;
+  eq([kvName("M5 Lunchpaket"), kvName("KV Brot"), kvName("Kaltverpflegung"), kvName("Kvarkspeise"), kvName("Linseneintopf")], [true, true, true, false, false]);
+});
+await test("collect wechselt bei Tagesansicht auf je-Tag-Abfragen", async () => {
+  const asked = [];
+  const fake = {
+    async weekplan() { return dayOpen; },
+    async dayplan(d) {
+      asked.push(d);
+      return d === "2026-10-12" ? dayOpen : '<li class="plan" id="dayplan"></li>';
+    },
+  };
+  const days = await collect(fake, ["2026-10-12", "2026-10-13", "2026-10-19"]);
+  eq(fake.dayView, true, "Modus gemerkt");
+  eq(asked.sort(), ["2026-10-12", "2026-10-13", "2026-10-19"], "je Tag gefragt");
+  eq(days.map((d) => d.state), [OrderState.ORDERED, OrderState.NO_OFFER, OrderState.NO_OFFER], "Zustände");
+});
+await test("collect bricht ab, wenn die Tagesansicht einen anderen Tag zeigt", async () => {
+  const fake = { dayView: true, async dayplan() { return dayOpen; } };
+  let err = null;
+  try { await collect(fake, ["2026-10-13"]); } catch (e) { err = e; }
+  eq(!!err && /geliefert wurde/.test(err.message), true, "Fehler");
 });
 
 // Bestellen gegen einen Schein-Client, wie OrderPlacerTest.kt.
