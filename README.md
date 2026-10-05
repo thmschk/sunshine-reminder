@@ -27,7 +27,7 @@ Es gibt zwei Fassungen:
 
 ## Web-Version
 
-Die Web-Version wird gerade erprobt; die Adresse folgt, sobald sie allgemein
+Die Web-Version wird gerade erprobt. Die Adresse folgt, sobald sie allgemein
 offen ist.
 
 * Sie kann, was die App kann: Übersicht der nächsten Tage, bestellen,
@@ -64,7 +64,7 @@ nacheinander, kurz zwischengespeichert, die Erinnerung höchstens die nächsten
 fünf Schultage. Die Erinnerung auf dem iPhone ist noch nicht ausprobiert.
 
 Warum keine iPhone-App? iOS entscheidet selbst, ob und wann eine App im
-Hintergrund rechnen darf; eine Prüfung mit Frist kann Stunden zu spät kommen
+Hintergrund rechnen darf. Eine Prüfung mit Frist kann Stunden zu spät kommen
 oder ausfallen. Eine Erinnerung empfangen kann das iPhone aber tadellos — nur
 auslösen muss sie jemand anders. Das übernimmt hier der Server. Wer ganz ohne
 fremden Server auskommen will, nimmt die [Python-Variante](#die-python-variante)
