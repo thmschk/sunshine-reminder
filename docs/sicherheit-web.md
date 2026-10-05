@@ -33,6 +33,11 @@ es geprüft ist. Stand: 2026-10-05.
 - **Sdui-Relay auf eigener Subdomain (F6):** gleiche Maschine, gleicher Betreiber. Der Relay sendet ohnehin keine CORS-Freigabe, fremde Seiten können seine Antworten nicht lesen.
 - **GitHub-Issues F1–F9:** nicht angelegt, um offene Lücken nicht vor dem Beheben öffentlich aufzulisten. Dieser Bericht ersetzt sie.
 
+## Nachtrag: viele Nutzer
+
+- Weckrufe derselben Uhrzeit verteilt der Server gleichmäßig über 30 Minuten (am wenigsten belegte Minute), Standard ist 17:00.
+- Betreiber-Alarme gehen an Abos mit `is_admin`. Ein Gerät markiert sich über `…/#betreiber` → ⚙ mit dem Schlüssel aus `ADMIN_KEY` in `/srv/sunshine/.env`. Die Markierung überlebt ein Neuanmelden desselben Geräts.
+
 ## Offen
 
 - iPhone: Erinnerung über 14 Werktage, mindestens 5 davon „alles bestellt“, Abo muss gültig bleiben.

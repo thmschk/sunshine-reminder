@@ -157,3 +157,37 @@ class SduiLogin(unittest.TestCase):
         for raw in cases:
             with self.subTest(raw=raw), self.assertRaises(BadRequest):
                 sdui_login_body(raw)
+
+
+class Verteilung(unittest.TestCase):
+    def test_gleichmaessig_ueber_die_halbe_stunde(self):
+        import sqlite3
+        import app
+        c = sqlite3.connect(":memory:")
+        c.execute("CREATE TABLE subs (time TEXT, offset_min INTEGER)")
+        for _ in range(60):
+            c.execute("INSERT INTO subs VALUES ('17:00', ?)", (app.pick_offset(c, "17:00"),))
+        counts = [n for (n,) in c.execute("SELECT COUNT(*) FROM subs GROUP BY offset_min")]
+        self.assertEqual(len(counts), app.MAX_OFFSET_MIN + 1)
+        self.assertEqual(set(counts), {2})
+
+    def test_andere_uhrzeit_zaehlt_nicht(self):
+        import sqlite3
+        import app
+        c = sqlite3.connect(":memory:")
+        c.execute("CREATE TABLE subs (time TEXT, offset_min INTEGER)")
+        c.executemany("INSERT INTO subs VALUES ('12:00', ?)", [(m,) for m in range(30)])
+        self.assertIn(app.pick_offset(c, "17:00"), range(30))
+
+
+class Betreiber(unittest.TestCase):
+    def test_schluessel(self):
+        import os
+        import app
+        os.environ.pop("ADMIN_KEY", None)
+        self.assertFalse(app.admin_key_ok("x"))
+        os.environ["ADMIN_KEY"] = "geheim-123"
+        self.assertTrue(app.admin_key_ok("geheim-123"))
+        self.assertFalse(app.admin_key_ok("geheim-12"))
+        self.assertFalse(app.admin_key_ok(""))
+        os.environ.pop("ADMIN_KEY")

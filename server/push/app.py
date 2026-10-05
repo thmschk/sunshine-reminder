@@ -50,10 +50,10 @@ MAX_SUBSCRIPTIONS = 5000
 PUSH_TTL = 3 * 3600
 PUSH_TIMEOUT = 10
 MAX_ENDPOINT_LEN = 1024
-# Jedes Abo wird um einen festen Zufallswert später geweckt: Handys hinter
-# derselben Mobilfunk-IP (CGNAT) sollen IBS5 nicht in derselben Minute abfragen,
-# sonst sperrt IBS5 die IP.
-MAX_OFFSET_MIN = 9
+# Jedes Abo wird um eine feste Verschiebung später geweckt, gleichmäßig über eine
+# halbe Stunde verteilt: Handys hinter derselben Mobilfunk-IP (CGNAT) sollen IBS5
+# nicht in derselben Minute abfragen, sonst sperrt IBS5 die IP.
+MAX_OFFSET_MIN = 29
 
 # Nur echte Push-Dienste, sonst ließe sich der Server als Relay für beliebige URLs missbrauchen.
 PUSH_HOSTS = re.compile(
@@ -172,6 +172,11 @@ def init() -> Vapid:
         cols = {r["name"] for r in CONN.execute("PRAGMA table_info(subs)")}
         if "offset_min" not in cols:
             CONN.execute("ALTER TABLE subs ADD COLUMN offset_min INTEGER")
+        if "is_admin" not in cols:
+            CONN.execute("ALTER TABLE subs ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        # Übergang: früher standen Betreiber-Abos als Liste in ADMIN_SUBS.
+        for legacy in [x for x in os.environ.get("ADMIN_SUBS", "").split(",") if x]:
+            CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (legacy,))
         CONN.execute(f"UPDATE subs SET offset_min = abs(random()) % {MAX_OFFSET_MIN + 1} WHERE offset_min IS NULL")
         CONN.commit()
     return Vapid.from_file(KEY_PATH)
@@ -180,6 +185,21 @@ def init() -> Vapid:
 def public_key_b64(v: Vapid) -> str:
     raw = v.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def pick_offset(conn: sqlite3.Connection, time_: str) -> int:
+    """Die am wenigsten belegte Minute im Fenster derselben Uhrzeit; bei Gleichstand zufällig."""
+    used = dict(conn.execute("SELECT offset_min, COUNT(*) FROM subs WHERE time = ? GROUP BY offset_min", (time_,)).fetchall())
+    counts = [used.get(m, 0) for m in range(MAX_OFFSET_MIN + 1)]
+    low = min(counts)
+    free = [m for m, c in enumerate(counts) if c == low]
+    return free[secrets.randbelow(len(free))]
+
+
+def admin_key_ok(given: str) -> bool:
+    """Betreiber-Schlüssel aus ADMIN_KEY (nur auf dem Server); ohne gesetzten Schlüssel nie."""
+    want = os.environ.get("ADMIN_KEY", "")
+    return bool(want) and bool(given) and secrets.compare_digest(given.encode(), want.encode())
 
 
 def sha(s: str) -> str:
@@ -297,9 +317,8 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
 
 # Tägliche Selbstprüfung: Gerade die Eigenheiten, von denen die Web-Version lebt,
 # können unbemerkt kippen (CORS-Freigabe von IBS5, Login ohne Preflight, Sdui).
-# Weicht etwas ab, geht eine Meldung an die Abos in ADMIN_SUBS (Kommaliste von ids).
+# Weicht etwas ab, geht eine Meldung an die Betreiber-Abos (is_admin).
 SELFCHECK_AT = os.environ.get("SELFCHECK_AT", "06:30")
-ADMIN_SUBS = [x for x in os.environ.get("ADMIN_SUBS", "").split(",") if x]
 ORIGIN = "https://sunshine.thomschke.info"
 selfcheck_state = {"at": None, "ok": None, "problems": []}
 
@@ -347,8 +366,8 @@ def run_selfcheck(vapid: Vapid) -> None:
     if problems:
         log.warning("Selbstprüfung: %s", "; ".join(problems))
         with db_lock:
-            rows = [CONN.execute("SELECT * FROM subs WHERE id = ?", (i,)).fetchone() for i in ADMIN_SUBS]
-        for row in filter(None, rows):
+            rows = CONN.execute("SELECT * FROM subs WHERE is_admin = 1").fetchall()
+        for row in rows:
             send(row, vapid, "alarm", "Selbstprüfung: " + "; ".join(problems))
     else:
         log.info("Selbstprüfung ok")
@@ -431,7 +450,7 @@ class Handler(BaseHTTPRequestHandler):
         return row
 
     def route(self) -> tuple[str, str | None, str | None]:
-        m = re.match(r"^/api/subscriptions(?:/([\w-]{16,64}))?(/test)?$", self.path.split("?")[0])
+        m = re.match(r"^/api/subscriptions(?:/([\w-]{16,64}))?(/test|/admin)?$", self.path.split("?")[0])
         return ("subs", m.group(1), m.group(2)) if m else (self.path.split("?")[0], None, None)
 
     def sdui(self, method: str) -> None:
@@ -492,21 +511,31 @@ class Handler(BaseHTTPRequestHandler):
                 with db_lock:
                     if CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0] >= MAX_SUBSCRIPTIONS:
                         return self.reply(503, {"error": "voll"})
-                    # Dasselbe Gerät neu angemeldet: altes Abo ersetzen.
+                    # Dasselbe Gerät neu angemeldet: altes Abo ersetzen, Betreiber bleibt Betreiber.
+                    old = CONN.execute("SELECT is_admin FROM subs WHERE endpoint = ?", (s["endpoint"],)).fetchone()
                     CONN.execute("DELETE FROM subs WHERE endpoint = ?", (s["endpoint"],))
                     CONN.execute(
-                        "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created, offset_min) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created, offset_min, is_admin) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (new_id, sha(secret), s["endpoint"], s["keys"], s["time"], s["weekdays"], s["tz"],
-                         dt.date.today().isoformat(), secrets.randbelow(MAX_OFFSET_MIN + 1)),
+                         dt.date.today().isoformat(), pick_offset(CONN, s["time"]), old["is_admin"] if old else 0),
                     )
                     CONN.commit()
                 return self.reply(201, {"id": new_id, "secret": secret})
-            if kind == "subs" and test:
+            if kind == "subs" and test == "/test":
                 row = self.owned(sub_id)
                 if row is None:
                     return self.reply(404)
                 return self.reply(200 if send(row, self.vapid, "test") else 502)
+            if kind == "subs" and test == "/admin":
+                # Gerät als Betreiber-Gerät markieren: Geheimnis des Abos UND Betreiber-Schlüssel.
+                row = self.owned(sub_id)
+                if row is None or not admin_key_ok(self.headers.get("X-Admin-Key", "")):
+                    return self.reply(403)
+                with db_lock:
+                    CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (sub_id,))
+                    CONN.commit()
+                return self.reply(200, {"admin": True})
         except BadRequest as exc:
             return self.reply(400, {"error": str(exc)})
         self.reply(404)
@@ -523,6 +552,9 @@ class Handler(BaseHTTPRequestHandler):
         except BadRequest as exc:
             return self.reply(400, {"error": str(exc)})
         if s:
+            with db_lock:
+                if "time" in s and s["time"] != row["time"]:
+                    s["offset_min"] = pick_offset(CONN, s["time"])
             cols = ", ".join(f"{k} = ?" for k in s)
             with db_lock:
                 if "endpoint" in s:

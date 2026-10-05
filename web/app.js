@@ -16,7 +16,8 @@ const DAY_LIST_LENGTH = 5;
 
 // Wie SettingsStore der Android-App: Standard 7, 1–14 Tage; Prüfzeit Standard 12:00.
 const DAYS_AHEAD = { def: 7, min: 1, max: 14 };
-const DEFAULT_PUSH_TIME = "12:00";
+// 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
+const DEFAULT_PUSH_TIME = "17:00";
 const store = { creds: null, daysAhead: DAYS_AHEAD.def, push: null };
 
 async function loadStore() {
@@ -765,13 +766,20 @@ function pushBoxHtml(message = "") {
       <input id="push-time" type="time" value="${DEFAULT_PUSH_TIME}" step="300">
       <div class="row"><button id="b-push-on" class="block">Erinnerung einschalten</button></div>`;
   }
+  // Betreiber-Gerät markieren: nur sichtbar über …/#betreiber, braucht den Schlüssel vom Server.
+  const admin = location.hash === "#betreiber" ? `
+    <hr><p class="small muted u-m0">Betreiber: Dieses Gerät bekommt dann die Alarme der täglichen Selbstprüfung.</p>
+    ${passwordField("admin-key", 'placeholder="Betreiber-Schlüssel"')}
+    <div class="row"><button id="b-push-admin" class="text u-pl0">Als Betreiber-Gerät markieren</button></div>` : "";
   return `${msg}<div>Werktags gegen ${esc(store.push.time)}</div>
+    <p class="small muted u-m0">Die Meldung kommt im Lauf der halben Stunde danach, damit nicht alle Geräte
+      gleichzeitig beim Bestellsystem anfragen.</p>
     <label class="u-normal" for="push-time">Uhrzeit ändern</label>
     <input id="push-time" type="time" value="${esc(store.push.time)}" step="300">
     <div class="row">
       <button id="b-push-test" class="text">Jetzt testen</button>
       <button id="b-push-off" class="danger">Ausschalten</button>
-    </div>
+    </div>${admin}
 `;
 }
 
@@ -794,6 +802,12 @@ function wirePushBox(message = "") {
   if (on) on.onclick = guard(() => pushEnable(time.value || DEFAULT_PUSH_TIME));
   if (off) off.onclick = guard(pushDisable);
   if (test) test.onclick = guard(pushTest);
+  const adm = document.getElementById("b-push-admin");
+  if (adm) adm.onclick = guard(async () => {
+    await api("POST", `/subscriptions/${store.push.id}/admin`, null, store.push.secret,
+      { "X-Admin-Key": document.getElementById("admin-key").value });
+    alert("Dieses Gerät ist jetzt Betreiber-Gerät.");
+  });
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
 }
 
@@ -802,8 +816,8 @@ const b64ToBytes = (b64) => {
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
 };
 
-async function api(method, path, body, secret) {
-  const headers = { "Content-Type": "application/json" };
+async function api(method, path, body, secret, extra = {}) {
+  const headers = { "Content-Type": "application/json", ...extra };
   if (secret) headers.Authorization = `Bearer ${secret}`;
   const r = await fetch(`/api${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
   if (!r.ok) throw new Error(`Server: HTTP ${r.status}`);
