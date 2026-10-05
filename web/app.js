@@ -484,6 +484,8 @@ async function pushEnable(time) {
   if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
   const perm = await Notification.requestPermission();
   if (perm !== "granted") throw new Error("Benachrichtigungen sind für diese Seite nicht erlaubt.");
+  // serviceWorker.ready käme ohne erfolgreiche Registrierung nie zurück.
+  if (!(await swReady)) throw new Error("Dieser Browser kann den Hintergrunddienst für Erinnerungen nicht starten.");
   const reg = await navigator.serviceWorker.ready;
   const { publicKey } = await api("GET", "/vapid");
   const sub = (await reg.pushManager.getSubscription())
@@ -518,9 +520,10 @@ async function pushDisable() {
 $reload.onclick = () => showHome(true);
 $settings.onclick = showSettings;
 
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js", { type: "module" }).catch(() => { /* Seite funktioniert auch ohne */ });
-}
+// Ohne Service Worker läuft die Seite weiter, nur Erinnerungen gehen dann nicht.
+const swReady = "serviceWorker" in navigator
+  ? navigator.serviceWorker.register("sw.js", { type: "module" }).then(() => true, () => false)
+  : Promise.resolve(false);
 
 // Antippen der Erinnerung öffnet ./?order=<Tag> → direkt in die Bestellansicht.
 await loadStore();
