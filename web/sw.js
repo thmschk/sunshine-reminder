@@ -6,9 +6,9 @@ import {
 } from "./ibs.js";
 import { kvGet, kvSet, secretGet } from "./idb.js";
 
-const VERSION = "v13";
+const VERSION = "v14";
 const PUSH_MAX_DAYS = 5;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "manifest.webmanifest"];
+const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -97,6 +97,8 @@ function notify(title, body, { silent = false, url = "./" } = {}) {
   return self.registration.showNotification(title, {
     body,
     icon: "icon-192.png",
+    // Kleines Symbol in Statusleiste und Kopf der Meldung; ohne zeigt Android das Chrome-Logo.
+    badge: "badge-96.png",
     tag: "hs-check",
     renotify: !silent,
     silent,

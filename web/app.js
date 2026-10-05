@@ -47,7 +47,10 @@ const $settings = document.getElementById("btn-settings");
 const $web = document.getElementById("btn-web");
 const $footer = document.getElementById("footer");
 
+const $header = document.querySelector("header");
+
 function chrome(visible) {
+  $header.hidden = false;
   $reload.hidden = $settings.hidden = $web.hidden = !visible;
   if (!visible) $footer.hidden = true;
 }
@@ -248,126 +251,171 @@ function dayRow(d) {
 
 // ---------------------------------------------------------------- Bestellen
 
+/**
+ * Bestellen, umbestellen, abbestellen — wie OrderScreen der App. Jeder noch
+ * änderbare Tag, offene mit „nichts“ vorausgewählt, bestellte mit dem
+ * bestellten Gericht. Abgeschickt wird nur, was davon abweicht.
+ */
 async function showOrder(focusDate = null) {
   const creds = currentCreds();
   if (!creds) return showSetup();
-  $footer.hidden = true;
-  busy("Speisepläne werden geladen …");
-
-  // Woche für Woche laden und aufhören, sobald nach einer Woche mit Speiseplan
-  // eine ohne kommt: weiter voraus hat IBS5 noch nichts eingestellt.
-  const today = todayBerlin();
-  let all = [];
-  try {
-    for (let w = 0; w < ORDER_WEEKS; w++) {
-      const dates = [];
-      for (let i = w * 7; i < (w + 1) * 7; i++) {
-        const d = addDays(today, i);
-        if (weekdayNo(d) <= 5) dates.push(d);
-      }
-      const week = await withLogin(creds, () => collect(client, dates));
-      const offered = week.some((d) => d.state !== OrderState.NO_OFFER);
-      all = all.concat(week);
-      if (!offered && all.some((d) => d.state !== OrderState.NO_OFFER)) break;
-    }
-  } catch (e) {
-    $app.innerHTML = `<div class="card hero bad"><h2>Laden fehlgeschlagen</h2><p>${esc(e.message)}</p></div>
-      <div class="row"><button id="b-back" class="text">← Zurück</button></div>`;
-    document.getElementById("b-back").onclick = () => showHome();
-    return;
-  }
-
-  // Nur Tage, an denen sich noch etwas wählen lässt; die bestellte Linie muss
-  // selbst änderbar sein, sonst ist der Tag gesperrt.
-  const days = all.filter((d) => {
-    const ordered = d.entries.find((e) => e.isOrdered);
-    return d.entries.some((e) => e.selectable) && (!ordered || ordered.selectable);
-  });
-  const previouslyInCart = all.flatMap((d) => d.entries.filter((e) => e.quantityInCart !== "" && e.selectable));
-
-  if (!days.length) {
-    $app.innerHTML = `<div class="card"><p>Keine Tage, die sich noch ändern lassen.</p></div>
-      <div class="row"><button id="b-back" class="text">← Zurück</button></div>`;
-    document.getElementById("b-back").onclick = () => showHome();
-    return;
-  }
-
+  chrome(false);
+  $header.hidden = true; // wie OrderScreen der App: nur „Bestellen“ und „Zurück“
   $app.innerHTML = `
-    <div class="row" style="margin-top:0"><button id="b-back" class="text">← Zurück</button></div>
-    <p class="small muted">Offene Tage stehen auf „nichts“. Wer ein anderes Gericht wählt, bestellt um.
-      Abgeschickt wird nur, was du änderst.</p>
-    <form id="f-order">
-      ${days.map((d) => {
-        const ordered = d.entries.find((e) => e.isOrdered);
-        const none = ordered ? "abbestellen" : "nichts";
-        return `
-        <div class="card day-order" id="day-${d.date}">
-          <fieldset>
-            <legend>${esc(De.long(d.date))}${d.state === OrderState.IN_CART ? ` <span class="badge IN_CART">im Warenkorb</span>` : ""}</legend>
-            ${d.entries.map((e, i) => `
-              <label class="choice ${e.selectable ? "" : "locked"}">
-                <input type="radio" name="d-${d.date}" value="${i}" ${e.isOrdered ? "checked" : ""} ${e.selectable ? "" : "disabled"}>
-                <span>${esc(e.name)}${e.isOrdered ? " <span class='badge ORDERED'>bestellt</span>" : ""}${e.selectable ? "" : " <span class='small'>(nicht wählbar)</span>"}</span>
-              </label>`).join("")}
-            <label class="choice"><input type="radio" name="d-${d.date}" value="none" ${ordered ? "" : "checked"}><span>${none}</span></label>
-          </fieldset>
-        </div>`;
-      }).join("")}
-      <div class="sticky">
-        <label class="check small"><input id="dry" type="checkbox"> Nur Probelauf (Warenkorb füllen, prüfen, wieder leeren)</label>
-        <div class="row" style="margin-top:8px"><button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button></div>
-      </div>
-    </form>`;
-
+    <div class="order-head"><h2>Bestellen</h2><button id="b-back" class="text">Zurück</button></div>
+    <div id="o-progress" class="progress"></div>
+    <div id="o-result"></div>
+    <form id="f-order"></form>`;
   document.getElementById("b-back").onclick = () => showHome();
+  const $progress = document.getElementById("o-progress");
+  const $result = document.getElementById("o-result");
   const form = document.getElementById("f-order");
-  const submit = document.getElementById("b-submit");
+  const setResult = (text, cls = "") => {
+    $result.innerHTML = text ? `<pre class="msg order-result ${cls}">${esc(text)}</pre>` : "";
+  };
+
+  let days = [];
+  let all = [];
+  // Die bestellte Linie, falls sie sich noch ändern lässt (DayStatus.ordered() der App).
+  const orderedOf = (d) => d.entries.find((e) => e.isOrdered && e.selectable) ?? null;
+  const isChangeable = (d) =>
+    d.state === OrderState.NOT_ORDERED || d.state === OrderState.IN_CART ? d.entries.some((e) => e.selectable)
+      : d.state === OrderState.ORDERED ? orderedOf(d) != null
+      : false;
+
+  async function load(fresh = false) {
+    $progress.hidden = false;
+    form.innerHTML = "";
+    // Woche für Woche laden und aufhören, sobald nach einer Woche mit Speiseplan
+    // eine ohne kommt: weiter voraus hat IBS5 noch nichts eingestellt.
+    const today = todayBerlin();
+    all = [];
+    try {
+      for (let w = 0; w < ORDER_WEEKS; w++) {
+        const dates = [];
+        for (let i = w * 7; i < (w + 1) * 7; i++) {
+          const d = addDays(today, i);
+          if (weekdayNo(d) <= 5) dates.push(d);
+        }
+        const week = await withLogin(creds, () => collect(client, dates, { fresh }));
+        const offered = week.some((d) => d.state !== OrderState.NO_OFFER);
+        all = all.concat(week);
+        if (!offered && all.some((d) => d.state !== OrderState.NO_OFFER)) break;
+      }
+    } catch (e) {
+      $progress.hidden = true;
+      setResult(e.message, "error");
+      return;
+    }
+    $progress.hidden = true;
+    days = all.filter(isChangeable);
+    render();
+  }
+
+  function render() {
+    if (!days.length) {
+      form.innerHTML = `<p>Keine Tage, die sich noch ändern lassen.</p>`;
+      return;
+    }
+    form.innerHTML = `
+      ${days.map((d) => {
+        const current = orderedOf(d);
+        const what = current ? " — bestellt" : d.state === OrderState.IN_CART ? " — liegt im Warenkorb" : " — offen";
+        const options = d.entries.filter((e) => e.selectable).map((e) => `
+          <label class="option">
+            <input type="radio" name="d-${d.date}" value="${esc(e.menuLineId)}" ${current?.menuLineId === e.menuLineId ? "checked" : ""}>
+            <span>${esc(e.name)}${current?.menuLineId === e.menuLineId ? " (bestellt)" : ""}</span>
+          </label>`).join("");
+        return `
+          <fieldset class="card day-order" id="day-${d.date}">
+            <legend>${esc(De.long(d.date) + what)}</legend>
+            ${options}
+            <label class="option">
+              <input type="radio" name="d-${d.date}" value="" ${current ? "" : "checked"}>
+              <span>${current ? "abbestellen" : "nichts"}</span>
+            </label>
+          </fieldset>`;
+      }).join("")}
+      <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
+    refresh();
+  }
 
   const pending = () => days.map((d) => {
     const v = form.querySelector(`input[name="d-${d.date}"]:checked`)?.value;
     return {
       date: d.date,
-      current: d.entries.find((e) => e.isOrdered) ?? null,
-      target: v == null || v === "none" ? null : d.entries[Number(v)],
+      current: orderedOf(d),
+      target: v ? d.entries.find((e) => e.menuLineId === v && e.selectable) ?? null : null,
     };
   }).filter((c) => changeKind(c) !== "NONE");
 
-  const refresh = () => {
+  function refresh() {
+    const submit = document.getElementById("b-submit");
+    if (!submit) return;
     const changes = pending();
     for (const d of days) {
-      document.getElementById(`day-${d.date}`).classList.toggle("changed", changes.some((c) => c.date === d.date));
+      document.getElementById(`day-${d.date}`)?.classList.toggle("changed", changes.some((c) => c.date === d.date));
     }
     submit.disabled = !changes.length;
-    submit.textContent = changes.length ? `Abschicken (${changes.length})` : "Nichts geändert";
-  };
-  form.addEventListener("change", refresh);
-  refresh();
+    submit.textContent = !changes.length ? "Nichts geändert"
+      : changes.every((c) => changeKind(c) === "ORDER") ? `${changes.length} Essen bestellen`
+      : changes.length === 1 ? "1 Änderung abschicken"
+      : `${changes.length} Änderungen abschicken`;
+  }
 
+  const describe = (c) => {
+    const day = De.chip(c.date);
+    return { ORDER: `${day} bestellen: ${c.target?.name}`, SWITCH: `${day} umbestellen auf: ${c.target?.name}`,
+      CANCEL: `${day} abbestellen: ${c.current?.name}` }[changeKind(c)];
+  };
+
+  form.addEventListener("change", refresh);
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const changes = pending();
-    const dryRun = document.getElementById("dry").checked;
-    const verb = { ORDER: "bestellen", SWITCH: "umbestellen auf", CANCEL: "abbestellen" };
-    const list = changes.map((c) => `• ${De.short(c.date)}: ${verb[changeKind(c)]} ${c.target?.name ?? c.current?.name ?? ""}`).join("\n");
-    if (!dryRun && !confirm(`Verbindlich abschicken?\n\n${list}`)) return;
+    if (!changes.length || !(await confirmDialog("Verbindlich abschicken?", changes.map(describe)))) return;
 
-    busy(dryRun ? "Probelauf …" : "Wird abgeschickt …");
-    const result = await withLogin(creds, () =>
-      placeOrders(client, changes, { dryRun, previouslyInCart, reload: (ds) => collect(client, ds, { fresh: true }) }),
+    document.getElementById("b-submit").disabled = true;
+    $progress.hidden = false;
+    const previouslyInCart = all.flatMap((d) => d.entries.filter((e) => e.quantityInCart === "1" && e.selectable));
+    const outcome = await withLogin(creds, () =>
+      placeOrders(client, changes, { previouslyInCart, reload: (ds) => collect(client, ds, { fresh: true }) }),
     ).catch((e) => ({ kind: "aborted", reason: e.message }));
+    $progress.hidden = true;
 
-    const html = {
-      done: `<div class="card hero ok"><h2>Erledigt</h2><pre class="msg small">${esc(list)}</pre></div>`,
-      dryrun: `<div class="card hero ok"><h2>Probelauf ok</h2><p class="small">Alles lag korrekt im Warenkorb und wurde wieder entfernt.</p><pre class="msg small">${esc(list)}</pre></div>`,
-      aborted: `<div class="card hero bad"><h2>Nichts abgeschickt</h2><p>${esc(result.reason)}</p></div>`,
-      unconfirmed: `<div class="card hero open"><h2>Abgeschickt, aber nicht bestätigt</h2><p>${esc(result.reason)}</p>
-        <p class="small">Bitte auf der Bestellseite nachsehen: ${esc((result.missing || []).map(De.short).join(", "))}</p></div>`,
-    }[result.kind];
-    $app.innerHTML = `${html}<div class="row"><button id="b-home" class="block">Zur Übersicht</button></div>`;
-    document.getElementById("b-home").onclick = () => showHome();
+    if (outcome.kind === "done") setResult(`Erledigt:\n${outcome.changes.map(describe).join("\n")}`, "ok");
+    else if (outcome.kind === "aborted") setResult(`Nichts abgeschickt: ${outcome.reason}`, "error");
+    else {
+      setResult(`Abgeschickt, aber nicht bestätigt (${outcome.reason}) — bitte auf der Bestellseite nachsehen: `
+        + (outcome.missing || []).map(De.short).join(", "), "error");
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (outcome.kind === "done" || outcome.kind === "unconfirmed") await load(true);
+    else refresh();
   });
 
-  if (focusDate) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start" });
+  await load();
+  if (focusDate) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+/** Rückfrage wie AlertDialog der App; true = „Abschicken“. */
+function confirmDialog(title, lines) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement("dialog");
+    dlg.className = "dialog";
+    dlg.innerHTML = `
+      <h3>${esc(title)}</h3>
+      ${lines.map((l) => `<p>${esc(l)}</p>`).join("")}
+      <div class="dialog-actions">
+        <button type="button" class="text" data-v="0">Abbrechen</button>
+        <button type="button" class="text" data-v="1">Abschicken</button>
+      </div>`;
+    document.body.append(dlg);
+    const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
+    dlg.addEventListener("cancel", () => done(false));
+    dlg.querySelectorAll("button").forEach((b) => { b.onclick = () => done(b.dataset.v === "1"); });
+    dlg.showModal();
+  });
 }
 
 // ---------------------------------------------------------------- Einstellungen
