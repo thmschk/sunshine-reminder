@@ -759,8 +759,8 @@ async function wireSduiBox(message = "") {
   const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
   // „Erinnern an“ ist selbst die Zeile: zugeklappt rechts die Kürzel, aufgeklappt die Fächerliste darunter.
   box.innerHTML = `${msg}
-    ${srow("face", esc(cfg.childName || "verbunden"), { tip: "Sdui läuft über unseren Server, der nichts speichert." })}
-    ${srow("school", "Schule", { value: esc(cfg.slink || "") })}
+    ${srow("school", esc(cfg.childName || "verbunden"), { hint: cfg.slink ? `Schule: ${esc(cfg.slink)}` : "",
+      tip: "Sdui läuft über unseren Server, der nichts speichert." })}
     ${known.length ? `
     <details class="srow-details">
       <summary class="srow">${ico("star")}<span class="srow-t">Erinnern an</span><span class="srow-v dd-value"></span></summary>
