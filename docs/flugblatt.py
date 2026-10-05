@@ -83,8 +83,6 @@ block("Anmelden mit Kundennummer und Passwort des Bestellsystems, beim Zahnrad d
       "kleinen Server, der weder Zugangsdaten noch Bestellungen sieht.",
       font("Regular", 28), INK, 40)
 
-d.text((W // 2, y + 2), "satt … theoretisch.", font=font("LightItalic", 30), fill=BERRY, anchor="ma")
-
 # --- Fusszeile ------------------------------------------------------------
 foot = wrap("Kein offizielles Angebot: Das Projekt steht in keiner Verbindung zu "
             "Sunshine Catering oder zum Hersteller des Bestellsystems. Privat "
