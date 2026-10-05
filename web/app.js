@@ -619,10 +619,29 @@ const ICON = {
 };
 const ico = (name) => `<svg class="s-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
 
-/** Eine Zeile der Einstellungen: Symbol, Titel, Untertitel, rechts ein Bedienelement. */
-const srow = (icon, title, sub = "", right = "", cls = "") => `
-  <div class="srow ${cls}">${ico(icon)}<div class="srow-txt"><div class="srow-t">${title}</div>${
-    sub ? `<div class="srow-s">${sub}</div>` : ""}</div>${right}</div>`;
+let infoSeq = 0;
+/**
+ * Eine einzeilige Zeile der Einstellungen: Symbol, Titel, knapper grauer Zusatz,
+ * rechts ein Bedienelement. Längere Erklärungen hinter ⓘ: mit der Maus als
+ * Tooltip, beim Antippen als Zeile darunter.
+ */
+function srow(icon, title, { hint = "", info = "", right = "", cls = "", tag = "div", id = "" } = {}) {
+  const iid = info ? `info-${++infoSeq}` : "";
+  const infoBtn = info ? `<span class="info-btn" role="button" tabindex="0" data-info="${iid}" title="${esc(info)}" aria-label="Erklärung">ⓘ</span>` : "";
+  return `<${tag} ${id ? `id="${id}"` : ""} class="srow ${tag === "button" ? "srow-btn " : ""}${cls}">${ico(icon)}
+    <span class="srow-t">${title}${hint ? ` <span class="srow-h">${hint}</span>` : ""}${infoBtn}</span>${right}</${tag}>
+    ${info ? `<div class="srow-info" id="${iid}" hidden>${esc(info)}</div>` : ""}`;
+}
+
+// ⓘ antippen klappt die Erklärung unter der Zeile auf und zu (ohne den Knopf der Zeile auszulösen).
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest?.(".info-btn");
+  if (!b) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const box = document.getElementById(b.dataset.info);
+  if (box) box.hidden = !box.hidden;
+}, true);
 
 /** Einstellungen nach Entwurf A: Gruppen mit kurzen Zeilen statt Fließtext. */
 function showSettings() {
@@ -643,9 +662,9 @@ function showSettings() {
 
     <div class="group-title">Konto</div>
     <div class="group">
-      ${srow("person", esc(profile?.name || "Angemeldet"),
-        `Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}`)}
-      <button id="b-logout" class="srow srow-btn danger-row">${ico("logout")}<div class="srow-txt"><div class="srow-t">Abmelden und alles löschen</div></div></button>
+      ${srow("person", esc(profile?.name || "Angemeldet"), { hint: `Kd. ${esc(creds?.customerNo || "")}`,
+        info: loadCreds() ? "Zugangsdaten sind verschlüsselt auf diesem Gerät gespeichert." : "Zugangsdaten gelten nur für diese Sitzung." })}
+      ${srow("logout", "Abmelden und alles löschen", { tag: "button", id: "b-logout", cls: "danger-row" })}
     </div>
 
     <p class="foot-note">Testversion · <a href="https://github.com/thmschk/sunshine-reminder#architektur" target="_blank" rel="noopener">So funktioniert's</a>
@@ -669,12 +688,12 @@ function showSettings() {
 /** Vorwarnzeit mit −/+: ein Schieberegler verstellt sich beim Scrollen über ihn hinweg. */
 function daysAheadRow() {
   const n = loadDaysAhead();
-  return srow("calendar", "Vorwarnzeit", "so weit schaut die Übersicht voraus", `
+  return srow("calendar", "Vorwarnzeit", { info: "So weit schaut die Übersicht voraus, ab morgen gerechnet. Die Erinnerung prüft davon höchstens die nächsten 5 Schultage.", right: `
     <div class="stepper">
       <button type="button" id="days-minus" class="step" aria-label="einen Tag weniger" ${n <= DAYS_AHEAD.min ? "disabled" : ""}>−</button>
       <b id="days-ahead-val">${n}</b>
       <button type="button" id="days-plus" class="step" aria-label="einen Tag mehr" ${n >= DAYS_AHEAD.max ? "disabled" : ""}>+</button>
-    </div>`);
+    </div>` });
 }
 
 function wireDaysAhead() {
@@ -702,24 +721,25 @@ async function wireSduiBox(message = "") {
   const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
   if (!cfg) {
     box.innerHTML = `${msg}
-      <button id="b-sdui-setup" class="srow srow-btn">${ico("school")}<div class="srow-txt"><div class="srow-t">Stundenplan einrichten</div>
-        <div class="srow-s">Zeitleiste je Tag, Erinnerung an Fächer wie Sport</div></div><span class="chev">›</span></button>`;
+      ${srow("school", "Stundenplan einrichten", { tag: "button", id: "b-sdui-setup", right: `<span class="chev">›</span>`,
+        info: "Holt den Stundenplan aus Sdui: Die Übersicht zeigt je Tag die Stunden, und die Erinnerung meldet am Vortag gewählte Fächer wie Sport." })}`;
     document.getElementById("b-sdui-setup").onclick = () => sduiSetupForm();
     return;
   }
   const known = (await kvGet("sduiKnown")) || [];
   const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
+  // „Erinnern an“ ist selbst die Zeile: zugeklappt rechts die Kürzel, aufgeklappt die Fächerliste darunter.
   box.innerHTML = `${msg}
-    ${srow("school", esc(cfg.childName || "verbunden"), `verbunden${cfg.slink ? ` · ${esc(cfg.slink)}` : ""}`)}
-    ${srow("star", "Erinnern an", "am Vortag, mit der Essenserinnerung")}
-    <div class="group-pad">${known.length ? `
-      <details class="dropdown">
-        <summary><span class="dd-label">Fächer</span><span class="dd-value"></span></summary>
-        <div class="subjects">${known.map((sub) => `
-          <label class="check"><input type="checkbox" value="${esc(sub)}" ${cfg.subjects.includes(sub) ? "checked" : ""}>
-            ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")}</div>
-      </details>` : `<p class="small muted u-m0">Noch kein Plan geladen.</p>`}</div>
-    <button id="b-sdui-off" class="srow srow-btn danger-row small-row"><div class="srow-txt"><div class="srow-t">Sdui entfernen</div></div></button>`;
+    ${srow("school", esc(cfg.childName || "verbunden"), { hint: esc(cfg.slink || ""),
+      info: "Anmeldung und Abruf laufen über unseren Server, weil Sdui Webseiten nicht direkt zulässt. Er speichert nichts. Auf dem Gerät liegt nur ein Zugangsschlüssel, der ein Jahr gilt." })}
+    ${known.length ? `
+    <details class="srow-details">
+      <summary class="srow">${ico("star")}<span class="srow-t">Erinnern an</span><span class="dd-value"></span><span class="dd-caret"></span></summary>
+      <div class="subjects">${known.map((sub) => `
+        <label class="check"><input type="checkbox" value="${esc(sub)}" ${cfg.subjects.includes(sub) ? "checked" : ""}>
+          ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")}</div>
+    </details>` : srow("star", "Erinnern an", { hint: "noch kein Plan geladen" })}
+    ${srow("logout", "Sdui entfernen", { tag: "button", id: "b-sdui-off", cls: "danger-row" })}`;
   // Im zugeklappten Feld stehen die Kürzel der gewählten Fächer, wie in der App.
   const showChosen = () => {
     const chosen = [...box.querySelectorAll(".subjects input:checked")].map((x) => x.value);
@@ -801,24 +821,25 @@ const toggle = (id, on, label) =>
 function pushBoxHtml(message = "") {
   const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
   if (!pushSupported) {
-    return srow("bell", "Erinnerung", isIos && !standalone
+    return srow("bell", "Erinnerung", { hint: "nicht möglich", info: isIos && !standalone
       ? "Auf dem iPhone nur, wenn die Seite über Teilen → „Zum Home-Bildschirm“ installiert ist und von dort geöffnet wird."
-      : "Dieser Browser kann keine Erinnerungen empfangen.") + daysAheadRow();
+      : "Dieser Browser kann keine Erinnerungen empfangen." }) + daysAheadRow();
   }
   const on = !!store.push;
   const time = on ? store.push.time : DEFAULT_PUSH_TIME;
   // Betreiber-Gerät markieren: nur sichtbar über …/#betreiber, braucht den Schlüssel vom Server.
   const admin = on && location.hash === "#betreiber" ? `
-    ${srow("key", "Betreiber-Gerät", "bekommt die Alarme der täglichen Selbstprüfung")}
+    ${srow("key", "Betreiber-Gerät", { info: "Bekommt die Alarme der täglichen Selbstprüfung des Servers." })}
     <div class="group-pad">${passwordField("admin-key", 'placeholder="Betreiber-Schlüssel"')}
       <div class="row"><button id="b-push-admin" class="text u-pl0">Als Betreiber-Gerät markieren</button></div></div>` : "";
   return `${msg}
-    ${srow("bell", "Erinnerung", on ? "werktags, prüft auf diesem Gerät" : "aus", toggle("push-switch", on, "Erinnerung"))}
-    ${srow("clock", "Uhrzeit", "kommt bis zu 30 Minuten später",
-      `<input id="push-time" class="time-pill" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit">`)}
+    ${srow("bell", "Erinnerung", { hint: on ? "werktags" : "aus", right: toggle("push-switch", on, "Erinnerung"),
+      info: "Werktags zur gewählten Zeit prüft dieses Gerät selbst beim Bestellsystem und meldet sich. Unser Server weckt es dafür nur und kennt weder Zugangsdaten noch Bestellungen." })}
+    ${srow("clock", "Uhrzeit", { hint: "+30 min",
+      right: `<input id="push-time" class="time-pill" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit">`,
+      info: "Die Meldung kommt im Lauf der halben Stunde danach, damit nicht alle Geräte gleichzeitig beim Bestellsystem anfragen." })}
     ${daysAheadRow()}
-    ${on ? `<button id="b-push-test" class="srow srow-btn">${ico("play")}<div class="srow-txt"><div class="srow-t">Jetzt testen</div>
-      <div class="srow-s">zeigt sofort die Meldung von heute</div></div></button>` : ""}
+    ${on ? srow("play", "Jetzt testen", { tag: "button", id: "b-push-test", info: "Zeigt sofort die Meldung, die heute käme." }) : ""}
     ${admin}`;
 }
 

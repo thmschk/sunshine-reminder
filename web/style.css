@@ -305,3 +305,19 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .srow .stepper b { min-width: 1.4em; text-align: center; }
 .foot-note { text-align: center; font-size: .82rem; color: var(--on-surface-variant); margin: 20px 0 8px; }
 .foot-note a, .linklike { color: inherit; text-decoration: underline; background: none; padding: 0; font: inherit; font-weight: normal; border-radius: 0; }
+
+/* Einzeilige Zeilen, Erklärungen hinter ⓘ */
+.srow { min-height: 52px; padding: 10px 16px; }
+.srow-t { flex: 1; min-width: 0; font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow-h { font-size: .85rem; color: var(--on-surface-variant); margin-left: 4px; }
+.info-btn { display: inline-block; margin-left: 6px; color: var(--on-surface-variant); font-size: .95rem; cursor: pointer; padding: 2px 4px; }
+.srow-info { padding: 0 16px 10px 52px; font-size: .85rem; color: var(--on-surface-variant); margin-top: -4px; }
+.group > .srow-info + .srow, .group > .srow-info + .srow-details, .group > .srow + .srow-details,
+.group > .srow-details + .srow, .group > .srow-details + .srow-info + .srow { border-top: 1px solid var(--surface-variant); }
+.srow-details summary { list-style: none; cursor: pointer; }
+.srow-details summary::-webkit-details-marker { display: none; }
+.srow-details .dd-value { font-weight: 600; font-size: .92rem; }
+.srow-details .dd-caret { width: 0; height: 0; border: 5px solid transparent; border-top-color: var(--on-surface-variant); border-bottom: 0; margin-left: 6px; }
+.srow-details[open] .dd-caret { transform: rotate(180deg); }
+.srow-details .subjects { padding: 0 16px 8px 52px; margin: 0; }
+.danger-row .srow-t { color: var(--error); }
