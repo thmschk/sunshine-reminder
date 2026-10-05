@@ -63,6 +63,11 @@ Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Tage
 nacheinander, kurz zwischengespeichert, die Erinnerung höchstens die nächsten
 fünf Schultage. Die Erinnerung auf dem iPhone ist noch nicht ausprobiert.
 
+Die Web-Version spricht direkt aus dem Browser mit IBS5. Das geht nur, weil
+IBS5 solche Zugriffe von anderen Webseiten derzeit zulässt. Ändert der
+Hersteller das, funktioniert die Web-Version nicht mehr, bis sie umgebaut ist.
+Die Android-App ist davon nicht betroffen.
+
 Warum keine iPhone-App? iOS entscheidet selbst, ob und wann eine App im
 Hintergrund rechnen darf. Eine Prüfung mit Frist kann Stunden zu spät kommen
 oder ausfallen. Eine Erinnerung empfangen kann das iPhone aber tadellos — nur
