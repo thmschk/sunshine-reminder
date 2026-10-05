@@ -4,23 +4,31 @@
 
 Erinnert auf dem Handy daran, wenn im Schulessen-Bestellsystem **IBS5**
 (`ibs.sunshine-catering.de`) für die nächsten Tage nichts bestellt ist — und
-bestellt, bestellt um oder bestellt ab direkt aus der App. Wer mag, holt sich
-dazu den **Stundenplan aus Sdui** und wird am Vortag an Fächer wie Sport
-erinnert.
+bestellt, bestellt um oder bestellt ab direkt aus der App.
 
-Die App prüft **auf dem Gerät**. Es gibt keinen Server, keine Anmeldung bei
-einem Dienst, kein Konto. Die Zugangsdaten verlassen das Handy nur in Richtung
-des Bestellsystems bzw. von Sdui selbst.
+Es gibt zwei Fassungen:
 
-## Web-Version für iPhone und andere (Test)
+| | [Web-Version](#web-version) | [Android-App](#android-app) |
+|---|---|---|
+| Geräte | iPhone und Android | nur Android |
+| Installation | Seite öffnen, „Zum Home-Bildschirm“ | APK-Datei, an Play Protect vorbei |
+| Erinnerung | höchstens 5 Schultage voraus | bis 14 Tage voraus |
+| Stundenplan aus Sdui | – | ja |
+| Server | ein kleiner Wecker, sieht keine Zugangsdaten | keiner |
+| Stand | Test, wird weiterentwickelt | stabil, bekommt nur noch Reparaturen |
 
-Eine native iPhone-App gibt es nicht und wird es nicht geben: iOS entscheidet
-selbst, ob und wann eine App im Hintergrund rechnen darf. Eine Prüfung mit
-Frist kann Stunden zu spät kommen oder ausfallen. Empfangen kann das iPhone
-eine Erinnerung aber tadellos — nur auslösen muss sie jemand anders.
+> **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
+> Sunshine Catering, zum Hersteller von IBS5 oder zur Sdui GmbH. Es benutzt
+> dieselben Schnittstellen wie deren Webseiten, mit den Zugangsdaten des
+> jeweiligen Nutzers. Bestellt wird nur, wenn man ausdrücklich Gerichte wählt
+> und bestätigt — von selbst bestellt oder ändert nichts.
+> Sdui wird nur gelesen. Die Anbieter können ihre Webseiten jederzeit ändern;
+> dann funktioniert es nicht mehr. Nutzung auf eigene Verantwortung.
 
-Genau das macht eine Web-Version, die gerade erprobt wird (die Adresse folgt,
-sobald sie allgemein offen ist):
+## Web-Version
+
+Die Web-Version wird gerade erprobt; die Adresse folgt, sobald sie allgemein
+offen ist.
 
 * Sie kann, was die App kann: Übersicht der nächsten Tage, bestellen,
   umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit
@@ -55,19 +63,21 @@ Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Tage
 nacheinander, kurz zwischengespeichert, die Erinnerung höchstens die nächsten
 fünf Schultage. Die Erinnerung auf dem iPhone ist noch nicht ausprobiert.
 
-Wer lieber ganz ohne fremden Server auskommt: Die
-[Python-Variante](#die-python-variante) läuft auf einem eigenen Rechner, der
-ohnehin durchläuft — Raspberry Pi, NAS, Server.
+Warum keine iPhone-App? iOS entscheidet selbst, ob und wann eine App im
+Hintergrund rechnen darf; eine Prüfung mit Frist kann Stunden zu spät kommen
+oder ausfallen. Eine Erinnerung empfangen kann das iPhone aber tadellos — nur
+auslösen muss sie jemand anders. Das übernimmt hier der Server. Wer ganz ohne
+fremden Server auskommen will, nimmt die [Python-Variante](#die-python-variante)
+auf einem eigenen Rechner, der ohnehin durchläuft.
 
-> **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
-> Sunshine Catering, zum Hersteller von IBS5 oder zur Sdui GmbH. Es benutzt
-> dieselben Schnittstellen wie deren Webseiten, mit den Zugangsdaten des
-> jeweiligen Nutzers. Bestellt wird nur, wenn man in der App ausdrücklich Gerichte wählt
-> und bestätigt — von selbst bestellt oder ändert sie nichts.
-> Sdui wird nur gelesen. Die Anbieter können ihre Webseiten jederzeit ändern;
-> dann funktioniert die App nicht mehr. Nutzung auf eigene Verantwortung.
+## Android-App
 
-## Was sie tut
+Die ursprüngliche Fassung: prüft **auf dem Gerät**, ohne Server, ohne Anmeldung
+bei einem Dienst, ohne Konto. Die Zugangsdaten verlassen das Handy nur in
+Richtung des Bestellsystems bzw. von Sdui selbst. Dazu kann sie den
+**Stundenplan aus Sdui** holen und am Vortag an Fächer wie Sport erinnern.
+
+### Was sie tut
 
 Werktags gegen 17:00 meldet sich das Handy, wenn für die kommenden Tage etwas
 angeboten, aber nicht bestellt ist:
@@ -82,7 +92,7 @@ Bestellen ist noch möglich:
 In der App steht zusätzlich der Wochenplan mit den Gerichten — praktisch, wenn
 man nur kurz wissen will, was es gibt.
 
-### Bestellen, umbestellen, abbestellen
+#### Bestellen, umbestellen, abbestellen
 
 Bestellt wird direkt in der App: „Jetzt bestellen" in der Erinnerung, ein Tipp
 auf einen Tag der Startseite (die Bestellansicht springt zu genau diesem Tag)
@@ -96,7 +106,7 @@ diese Auswahl liegt — sonst liegt dort etwas Fremdes, und die App schickt
 nichts ab. Danach prüft sie im Wochenplan nach, ob jeder Tag so dasteht wie
 gewünscht, und sagt es, wenn nicht.
 
-### Stundenplan aus Sdui (freiwillig)
+#### Stundenplan aus Sdui (freiwillig)
 
 Wer Sdui nicht nutzt, sieht davon nur einen Eintrag in den Einstellungen.
 Eingerichtet wird er unter Einstellungen → **Stundenplan (Sdui)** →
@@ -138,7 +148,7 @@ welche Tage noch änderbar sind. Erinnert wird nur, solange Handeln möglich ist
 dazukommt oder morgen der Bestellschluss abläuft. Sobald alles bestellt ist,
 verschwindet die Meldung von selbst.
 
-## Installation
+## Installation der App
 
 Die App ist **nicht im Play Store**. Sie wird als APK-Datei installiert:
 
@@ -206,7 +216,7 @@ fremder Hand sollte niemand blind durchwinken.
   privaten Bereich und gehen ausschließlich an `api.sdui.app`, über HTTPS.
   „Sdui entfernen" löscht sie samt Stundenplan.
 * **Die App braucht keinen Server dieses Projekts.** Niemand außer dir und dem
-  Bestellsystem sieht irgendetwas. (Nur die [Web-Version](#web-version-für-iphone-und-andere-test)
+  Bestellsystem sieht irgendetwas. (Nur die [Web-Version](#web-version)
   nutzt einen Server, und der sieht ausschließlich Push-Abo und Uhrzeit.)
 * **Keine Statistik, keine Werbung, keine Fremdbibliotheken zur Auswertung.**
 
