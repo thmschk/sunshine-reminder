@@ -6,7 +6,7 @@ import {
 } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
 
-const VERSION = "v9";
+const VERSION = "v11";
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "manifest.webmanifest"];
 
 self.addEventListener("install", (ev) => {
@@ -111,6 +111,39 @@ self.addEventListener("notificationclick", (ev) => {
       return win.focus();
     }
     return self.clients.openWindow(target);
+  })());
+});
+
+// Diagnose aus den Einstellungen: dieselben Schritte wie beim Push, Ergebnis an
+// die Seite statt als Meldung. Gibt nur Schritte und Fehler aus, keine Daten.
+self.addEventListener("message", (ev) => {
+  if (ev.data !== "diag") return;
+  ev.waitUntil((async () => {
+    const out = [`Service Worker ${VERSION}`];
+    const step = async (name, fn) => {
+      try {
+        const r = await fn();
+        out.push(`ok   ${name}${r ? ` (${r})` : ""}`);
+        return true;
+      } catch (e) {
+        out.push(`FEHL ${name}: ${e?.name || ""} ${e?.message || e}`);
+        return false;
+      }
+    };
+    const creds = await kvGet("creds");
+    out.push(creds ? "ok   Zugangsdaten vorhanden" : "FEHL keine Zugangsdaten");
+    await step("Login-Endpunkt erreichbar (leere Anfrage)", async () => {
+      const r = await fetch("https://ibs.sunshine-catering.de/ibs5/Login/Login", { method: "POST", body: new URLSearchParams({ identifierValue: "", secretValue: "" }), credentials: "omit", redirect: "manual" });
+      return `HTTP ${r.status} ${r.type}`;
+    });
+    const client = new IbsClient();
+    if (creds && await step("Login", async () => { await client.login(creds.customerNo, creds.password); return "Token"; })) {
+      await step("Tagesansicht morgen", async () => {
+        const html = await client.dayplan(targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead: 3 })[0]);
+        return `${html.length} Zeichen`;
+      });
+    }
+    ev.source?.postMessage({ diag: out.join("\n") });
   })());
 });
 

@@ -441,8 +441,10 @@ function pushBoxHtml(message = "") {
     <input id="push-time" type="time" value="${esc(store.push.time)}" step="300">
     <div class="row">
       <button id="b-push-test" class="text">Jetzt testen</button>
+      <button id="b-push-diag" class="text">Diagnose</button>
       <button id="b-push-off" class="danger">Ausschalten</button>
-    </div>`;
+    </div>
+    <pre id="diag" class="msg small muted" hidden></pre>`;
 }
 
 function wirePushBox(message = "") {
@@ -464,6 +466,24 @@ function wirePushBox(message = "") {
   if (on) on.onclick = guard(() => pushEnable(time.value || DEFAULT_PUSH_TIME));
   if (off) off.onclick = guard(pushDisable);
   if (test) test.onclick = guard(pushTest);
+  const diag = document.getElementById("b-push-diag");
+  if (diag) diag.onclick = async () => {
+    const out = document.getElementById("diag");
+    out.hidden = false;
+    out.textContent = "läuft …";
+    const reg = await navigator.serviceWorker.ready;
+    const answer = new Promise((resolve) => {
+      const onMsg = (ev) => {
+        if (!ev.data?.diag) return;
+        navigator.serviceWorker.removeEventListener("message", onMsg);
+        resolve(ev.data.diag);
+      };
+      navigator.serviceWorker.addEventListener("message", onMsg);
+      setTimeout(() => resolve("keine Antwort vom Service Worker (20 s)"), 20000);
+    });
+    reg.active.postMessage("diag");
+    out.textContent = await answer;
+  };
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
 }
 
