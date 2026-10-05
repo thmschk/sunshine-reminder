@@ -4,7 +4,7 @@ services:
     build: ./push
     restart: unless-stopped
     environment:
-      VAPID_SUBJECT: "https://sunshine.thomschke.info/"
+      VAPID_SUBJECT: "https://sunshine.thomschke.info"
       TZ: Europe/Berlin
     volumes:
       - ./data:/data

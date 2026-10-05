@@ -33,8 +33,9 @@ from pywebpush import WebPushException, webpush
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 DB_PATH = os.path.join(DATA_DIR, "push.sqlite")
 KEY_PATH = os.path.join(DATA_DIR, "vapid_private.pem")
-# Pflichtangabe für VAPID: Kontakt des Absenders. Eine URL statt einer Mailadresse.
-VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://sunshine.thomschke.info/")
+# Pflichtangabe für VAPID: Kontakt des Absenders. Eine URL statt einer Mailadresse,
+# ohne abschließenden Schrägstrich — sonst lehnt py_vapid sie ab.
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://sunshine.thomschke.info")
 PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY = 4096
 MAX_SUBSCRIPTIONS = 5000
@@ -157,6 +158,9 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check") -> bool:
             log.info("Abo abgelaufen und gelöscht")
         else:
             log.warning("Push fehlgeschlagen: HTTP %s", status)
+        return False
+    except Exception:
+        log.exception("Push nicht versendbar")
         return False
 
 
