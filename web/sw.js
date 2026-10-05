@@ -6,7 +6,8 @@ import {
 } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
 
-const VERSION = "v11";
+const VERSION = "v12";
+const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "manifest.webmanifest"];
 
 self.addEventListener("install", (ev) => {
@@ -58,12 +59,15 @@ async function checkAndNotify(isTest) {
     return notify(`${prefix}Nicht angemeldet`, "Bitte die Seite öffnen und anmelden.", { url: "./" });
   }
   const daysAhead = (await kvGet("daysAhead")) || 7;
+  // Höchstens die nächsten Schultage: auf dem Handy kostet jeder Tag eine
+  // Anfrage, und zu viele quittiert IBS5 mit einer IP-Sperre.
+  const dates = targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead }).slice(0, PUSH_MAX_DAYS);
   const client = new IbsClient();
   let days;
   let firstName = "";
   try {
     firstName = (await client.login(creds.customerNo, creds.password)).firstName;
-    days = await collect(client, targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead }));
+    days = await collect(client, dates);
   } catch (e) {
     const title = e instanceof IbsAuthError && !client.token ? "Anmeldung abgelehnt" : "Bestellstand unbekannt";
     return notify(prefix + title, `${e.message}\nEin Fehler ist keine Aussage darüber, ob bestellt ist.`, { url: "./" });

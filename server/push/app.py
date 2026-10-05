@@ -40,6 +40,10 @@ PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY = 4096
 MAX_SUBSCRIPTIONS = 5000
 PUSH_TTL = 3 * 3600
+# Jedes Abo wird um einen festen Zufallswert später geweckt: Handys hinter
+# derselben Mobilfunk-IP (CGNAT) sollen IBS5 nicht in derselben Minute abfragen,
+# sonst sperrt IBS5 die IP.
+MAX_OFFSET_MIN = 9
 
 # Nur echte Push-Dienste, sonst ließe sich der Server als Relay für beliebige URLs missbrauchen.
 PUSH_HOSTS = re.compile(
@@ -82,8 +86,13 @@ def init() -> Vapid:
                  weekdays TEXT NOT NULL,
                  tz TEXT NOT NULL,
                  last_sent TEXT,
-                 created TEXT NOT NULL)"""
+                 created TEXT NOT NULL,
+                 offset_min INTEGER)"""
         )
+        cols = {r["name"] for r in CONN.execute("PRAGMA table_info(subs)")}
+        if "offset_min" not in cols:
+            CONN.execute("ALTER TABLE subs ADD COLUMN offset_min INTEGER")
+        CONN.execute(f"UPDATE subs SET offset_min = abs(random()) % {MAX_OFFSET_MIN + 1} WHERE offset_min IS NULL")
         CONN.commit()
     return Vapid.from_file(KEY_PATH)
 
@@ -164,6 +173,19 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check") -> bool:
         return False
 
 
+def is_due(row, now: dt.datetime) -> bool:
+    """Wochentag passt, heute noch nicht geweckt, Uhrzeit + Verschiebung erreicht (bis 1 h nachholen)."""
+    due = now.replace(hour=int(row["time"][:2]), minute=int(row["time"][3:]), second=0, microsecond=0)
+    # Verschiebung nie über Mitternacht hinaus, sonst fiele der Tag aus.
+    due += dt.timedelta(minutes=min(row["offset_min"] or 0, 23 * 60 + 59 - due.hour * 60 - due.minute))
+    late = (now - due).total_seconds()
+    return (
+        str(now.isoweekday()) in row["weekdays"]
+        and row["last_sent"] != now.date().isoformat()
+        and 0 <= late < 3600
+    )
+
+
 def scheduler(vapid: Vapid) -> None:
     while True:
         # Kurz nach jeder vollen Minute prüfen.
@@ -175,13 +197,7 @@ def scheduler(vapid: Vapid) -> None:
             for row in rows:
                 now = dt.datetime.now(ZoneInfo(row["tz"]))
                 today = now.date().isoformat()
-                if (
-                    now.strftime("%H:%M") >= row["time"]
-                    and str(now.isoweekday()) in row["weekdays"]
-                    and row["last_sent"] != today
-                    # Verpasste Termine (Neustart) nur bis zu einer Stunde nachholen.
-                    and (now - now.replace(hour=int(row["time"][:2]), minute=int(row["time"][3:]))).total_seconds() < 3600
-                ):
+                if is_due(row, now):
                     with db_lock:
                         CONN.execute("UPDATE subs SET last_sent = ? WHERE id = ?", (today, row["id"]))
                         CONN.commit()
@@ -251,10 +267,10 @@ class Handler(BaseHTTPRequestHandler):
                     # Dasselbe Gerät neu angemeldet: altes Abo ersetzen.
                     CONN.execute("DELETE FROM subs WHERE endpoint = ?", (s["endpoint"],))
                     CONN.execute(
-                        "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created, offset_min) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (new_id, sha(secret), s["endpoint"], s["keys"], s["time"], s["weekdays"], s["tz"],
-                         dt.date.today().isoformat()),
+                         dt.date.today().isoformat(), secrets.randbelow(MAX_OFFSET_MIN + 1)),
                     )
                     CONN.commit()
                 return self.reply(201, {"id": new_id, "secret": secret})

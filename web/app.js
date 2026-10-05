@@ -382,7 +382,8 @@ function showSettings() {
       <hr>
       <h4>Schulessen (Sunshine)</h4>
       <div>Vorwarnzeit: <span id="days-ahead-val"></span></div>
-      <p class="small muted" style="margin:4px 0 8px">So weit schaut die Übersicht voraus, ab morgen gerechnet.</p>
+      <p class="small muted" style="margin:4px 0 8px">So weit schaut die Übersicht voraus, ab morgen gerechnet.
+        Die Erinnerung prüft davon höchstens die nächsten 5 Schultage.</p>
       <input id="days-ahead" type="range" min="${DAYS_AHEAD.min}" max="${DAYS_AHEAD.max}" step="1" value="${loadDaysAhead()}" aria-label="Vorwarnzeit">
       <p class="small muted" style="margin-bottom:0">${esc(profile?.name || "")}${profile?.institution ? ` · ${esc(profile.institution)}` : ""}<br>
         Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}</p>
