@@ -6,7 +6,7 @@ import {
 } from "./ibs.js";
 import { kvGet, kvSet, secretGet } from "./idb.js";
 
-const VERSION = "v15";
+const VERSION = "v16";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest"];
 
@@ -52,8 +52,9 @@ self.addEventListener("push", (ev) => {
   ev.waitUntil(checkAndNotify(kind === "test"));
 });
 
+// Beim Test („Jetzt testen“) dieselbe Meldung wie beim echten Weckruf, nur immer laut.
 async function checkAndNotify(isTest) {
-  const prefix = isTest ? "Test · " : "";
+  const prefix = "";
   const creds = await secretGet("creds");
   if (!creds) {
     return notify(`${prefix}Nicht angemeldet`, "Bitte die Seite öffnen und anmelden.", { url: "./" });

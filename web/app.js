@@ -108,10 +108,9 @@ function showSetup(message = "", prefill = {}) {
       <p class="small">Deine Zugangsdaten bleiben verschlüsselt auf diesem Gerät und gehen nur an das
         Bestellsystem. Unser Server weckt das Gerät für die Erinnerung nur, er sieht weder Zugangsdaten noch
         Bestellungen.</p>
-      <p class="small">Tipp: erst zum Startbildschirm hinzufügen (iPhone: Teilen → „Zum Home-Bildschirm“,
-        Android: ⋮ → „App installieren“), dann von dort öffnen.</p>
       <p class="small muted">Kein Angebot von Sunshine Catering oder dem Hersteller von IBS5.</p>
     </div>
+    ${installTip()}
     <div class="card">
       <h2 style="margin-top:0">Anmelden</h2>
       <p class="small muted">Mit Kundennummer und Passwort des Schulessen-Bestellsystems (IBS5).</p>
@@ -144,6 +143,23 @@ function showSetup(message = "", prefill = {}) {
     else sessionCreds = creds;
     showHome();
   });
+}
+
+/** Anleitung zum Installieren, nur für das eigene Gerät; entfällt in der installierten App. */
+function installTip() {
+  if (standalone) return "";
+  const android = /Android/.test(navigator.userAgent);
+  const steps = (name, list) => `
+    <div class="tip-device">${name}</div>
+    <ol class="tip-steps">${list.map((x) => `<li><span>${x}</span></li>`).join("")}</ol>`;
+  const ios = steps("iPhone", ["In Safari unten auf <b>Teilen</b> tippen", "<b>Zum Home-Bildschirm</b> wählen", "Von dort öffnen"]);
+  const and = steps("Android", ["In Chrome oben rechts auf <b>⋮</b> tippen", "<b>App installieren</b> wählen, nicht „Verknüpfung“", "Von dort öffnen"]);
+  return `
+    <div class="card tip">
+      <h3>Als App auf den Startbildschirm</h3>
+      <p class="small muted">Dann öffnet sie sich wie eine App${android ? "" : ", und nur so kommen auf dem iPhone Erinnerungen an"}.</p>
+      ${isIos ? ios : android ? and : ios + and}
+    </div>`;
 }
 
 let sessionCreds = null;
