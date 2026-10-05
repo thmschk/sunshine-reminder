@@ -344,3 +344,11 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .danger-row .s-ico { fill: var(--error); }
 .foot-note { margin-top: 26px; }
 .srow-details .dd-value { font-weight: normal; font-size: .95rem; }
+
+/* Fortschritt beim Aktualisieren */
+.refresh { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+.pbar { flex: 1; height: 4px; border-radius: 2px; background: var(--primary-container); overflow: hidden; }
+.pbar span { display: block; height: 100%; width: 0; background: var(--primary); transition: width .3s; }
+
+.pbar-run span { width: 35%; animation: slide 1.1s ease-in-out infinite; position: relative; }
+.ok-text { color: var(--ok); }

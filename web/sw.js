@@ -8,7 +8,7 @@ import { kvGet, kvSet, secretGet } from "./idb.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 
-const VERSION = "v29";
+const VERSION = "v30";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js"];
 
@@ -69,6 +69,13 @@ self.addEventListener("push", (ev) => {
     } catch (e) {
       await notify("Prüfung fehlgeschlagen", `${e?.message || e}\nBitte die App öffnen.`, { url: "./" }).catch(() => {});
     }
+    // „Jetzt testen“ in den Einstellungen wartet auf diese Bestätigung.
+    if (kind === "test") {
+      const [n] = await self.registration.getNotifications({ tag: "hs-check" });
+      for (const w of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {
+        w.postMessage({ testShown: n?.title || "Meldung" });
+      }
+    }
     await subjectReminder(kind === "test");
   })());
 });
@@ -114,6 +121,7 @@ async function checkAndNotify(isTest) {
   // Anfrage, und zu viele quittiert IBS5 mit einer IP-Sperre.
   const dates = targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead }).slice(0, PUSH_MAX_DAYS);
   const client = new IbsClient(undefined, guardHooks);
+  client.dayView = !!(await kvGet("ibsDayView"));
   let days;
   let firstName = "";
   try {

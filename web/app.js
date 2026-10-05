@@ -1,6 +1,6 @@
 import {
   DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
-  addDays, changeKind, collect, isoWeek, placeOrders, targetDates, todayBerlin, weekdayNo,
+  addDays, changeKind, collect, daysFromJson, daysToJson, isoWeek, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
 import * as Sdui from "./sdui.js";
@@ -205,45 +205,80 @@ const currentCreds = () => loadCreds() ?? sessionCreds;
 
 // ---------------------------------------------------------------- Startseite
 
+/**
+ * Übersicht. Auf dem Handy kostet jeder Tag eine Anfrage mit Pause (IP-Sperre),
+ * das dauert Sekunden. Deshalb zeigt sie sofort den zuletzt gespeicherten Stand
+ * und aktualisiert im Hintergrund mit Fortschrittsbalken.
+ */
 async function showHome(fresh = false) {
   const creds = currentCreds();
   if (!creds) return showSetup();
   const my = ++viewSeq;
   chrome(true);
-  busy("Wochenplan wird geladen …");
 
   const today = todayBerlin();
+  const cfg = { ...DEFAULT_CHECK, daysAhead: loadDaysAhead() };
+  const dates = targetDates(today, cfg);
+  // Ob IBS5 diesem Gerät nur Tagesansichten liefert, ist gemerkt: spart die Probe-Anfrage.
+  client.dayView ||= !!(await kvGet("ibsDayView").catch(() => false));
+  const cached = await kvGet("lastDays").catch(() => null);
+  const usable = cached && cached.from === today && cached.daysAhead === cfg.daysAhead && cached.customerNo === creds.customerNo;
+  if (my !== viewSeq) return;
+  if (usable) await renderHome(my, daysFromJson(cached.days), { staleAt: cached.at });
+  else $app.innerHTML = `<p class="muted">Wochenplan wird geladen …</p>${progressBar()}`;
+
   let days;
   try {
-    const cfg = { ...DEFAULT_CHECK, daysAhead: loadDaysAhead() };
-    days = await withLogin(creds, () => collect(client, targetDates(today, cfg), { fresh }));
+    days = await withLogin(creds, () => collect(client, dates, { fresh, onProgress: setProgress }));
   } catch (e) {
     if (my !== viewSeq) return;
     if (e instanceof IbsAuthError && !client.token) return showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
     const isPause = e instanceof IbsPausedError;
-    $app.innerHTML = `
+    const card = `
       <div class="card hero ${isPause ? "bad" : "neutral"}">
-        <h2>${isPause ? "Bestellsystem gesperrt oder nicht erreichbar" : "Bestellstand unbekannt"}</h2>
+        <h2>${isPause ? "Bestellsystem gesperrt oder nicht erreichbar" : usable ? "Aktualisieren fehlgeschlagen" : "Bestellstand unbekannt"}</h2>
         <p>${esc(e.message)}</p>
-        <p class="small">Ein Netzfehler ist keine Aussage darüber, ob bestellt ist. Über mobile Daten statt WLAN
-          geht es oft trotzdem.</p>
+        <p class="small">${usable ? `Unten steht der Stand von ${esc(when(cached.at))}. ` : ""}Ein Netzfehler ist keine Aussage
+          darüber, ob bestellt ist. Über mobile Daten statt WLAN geht es oft trotzdem.</p>
         <button id="b-retry" class="block">${isPause ? "Trotzdem jetzt versuchen" : "Nochmal versuchen"}</button>
-      </div>
-      ${lastOkLine()}`;
+      </div>`;
+    document.getElementById("refresh")?.remove();
+    if (usable) $app.insertAdjacentHTML("afterbegin", card);
+    else $app.innerHTML = card + lastOkLine();
     document.getElementById("b-retry").onclick = async () => {
       if (isPause) await resume();
       showHome(true);
     };
     return;
   }
+  if (client.dayView) kvSet("ibsDayView", true).catch(() => {});
+  kvSet("lastDays", { at: Date.now(), from: today, daysAhead: cfg.daysAhead, customerNo: creds.customerNo, days: daysToJson(days) })
+    .catch(() => {});
+  if (my !== viewSeq) return;
+  await renderHome(my, days);
+}
 
+/** Fortschrittsbalken; der Füllstand wird per Skript gesetzt (die CSP lässt keine style-Attribute zu). */
+const progressBar = () => `<div id="refresh" class="refresh"><div class="pbar"><span id="pbar-fill"></span></div>
+  <span id="pbar-text" class="small muted">wird aktualisiert …</span></div>`;
+
+function setProgress(done, total) {
+  const fill = document.getElementById("pbar-fill");
+  const text = document.getElementById("pbar-text");
+  if (fill) fill.style.width = `${Math.round((100 * done) / Math.max(total, 1))}%`;
+  if (text) text.textContent = `wird aktualisiert … ${done} von ${total} Tagen`;
+}
+
+/** Zeichnet die Übersicht; mit staleAt als gespeicherter Stand, der gerade aktualisiert wird. */
+async function renderHome(my, days, { staleAt = null } = {}) {
   // Stundenplan nur, wenn eingerichtet; ein Sdui-Fehler darf den Bestellstand nicht aufhalten.
   const sdui = await Sdui.cachedPlan().catch(() => null);
-  const cfg = sdui ? await Sdui.sduiConfig() : null;
-  const strip = sdui ? stripMaker(sdui.lessons, cfg?.subjects || []) : null;
+  const scfg = sdui ? await Sdui.sduiConfig() : null;
+  const strip = sdui ? stripMaker(sdui.lessons, scfg?.subjects || []) : null;
   if (my !== viewSeq) return;
 
   $app.innerHTML = `
+    ${staleAt ? progressBar() : ""}
     ${heroCard(days, profile?.firstName || "")}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
@@ -263,14 +298,15 @@ async function showHome(fresh = false) {
   const now = document.getElementById("b-order-now");
   if (now) now.onclick = () => showOrder(days.find((d) => d.isActionable).date);
 
-  await kvSet("lastOk", { at: Date.now(), via: "app" }).catch(() => {});
+  if (!staleAt) await kvSet("lastOk", { at: Date.now(), via: "app" }).catch(() => {});
   store.lastPushOk = await kvGet("lastPushOk").catch(() => null);
   if (my !== viewSeq) return;
   const stale = pushStale();
-  if (stale) $app.insertAdjacentHTML("afterbegin", stale);
-  const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" }).format(new Date());
+  if (stale) document.querySelector(".hero")?.insertAdjacentHTML("beforebegin", stale);
+  const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
+    .format(new Date(staleAt || Date.now()));
   const pushInfo = store.push && store.lastPushOk ? ` · Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "";
-  $footer.innerHTML = `<span>Geprüft ${t}${pushInfo}</span>
+  $footer.innerHTML = `<span>${staleAt ? "Stand" : "Geprüft"} ${t}${pushInfo}</span>
     <button id="b-heart" class="icon heart" title="Über diese App" aria-label="Über diese App">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART}"/></svg>
     </button>`;
@@ -612,6 +648,7 @@ const ICON = {
   calendar: "M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z",
   play: "M8 5v14l11-7z",
   school: "M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3L1 9l11 6 9-4.91V17h2V9L12 3z",
+  face: "M9 11.75c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zm6 0c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-.29.02-.58.05-.86 2.36-1.05 4.23-2.98 5.21-5.37C11.07 8.33 14.05 10 17.42 10c.78 0 1.53-.09 2.25-.26.21.71.33 1.47.33 2.26 0 4.41-3.59 8-8 8z",
   star: "M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z",
   person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
   logout: "M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z",
@@ -623,8 +660,8 @@ const ico = (name) => `<svg class="s-ico" viewBox="0 0 24 24" aria-hidden="true"
  * Eine Zeile der Einstellungen im Android-Stil: Symbol, Titel, rechts der
  * aktuelle Wert oder ein Bedienelement, nur wo nötig ein kleiner Hinweis darunter.
  */
-function srow(icon, title, { value = "", hint = "", right = "", cls = "", tag = "div", id = "" } = {}) {
-  return `<${tag} ${id ? `id="${id}"` : ""} class="srow ${tag === "button" ? "srow-btn " : ""}${cls}">${ico(icon)}
+function srow(icon, title, { value = "", hint = "", right = "", cls = "", tag = "div", id = "", tip = "" } = {}) {
+  return `<${tag} ${id ? `id="${id}"` : ""} ${tip ? `title="${esc(tip)}"` : ""} class="srow ${tag === "button" ? "srow-btn " : ""}${cls}">${ico(icon)}
     <span class="srow-t">${title}</span>${value ? `<span class="srow-v">${value}</span>` : ""}${right}</${tag}>
     ${hint ? `<div class="srow-hint">${hint}</div>` : ""}`;
 }
@@ -722,8 +759,8 @@ async function wireSduiBox(message = "") {
   const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
   // „Erinnern an“ ist selbst die Zeile: zugeklappt rechts die Kürzel, aufgeklappt die Fächerliste darunter.
   box.innerHTML = `${msg}
-    ${srow("school", esc(cfg.childName || "verbunden"), { value: esc(cfg.slink || ""),
-      hint: "läuft über unseren Server, der nichts speichert" })}
+    ${srow("face", esc(cfg.childName || "verbunden"), { tip: "Sdui läuft über unseren Server, der nichts speichert." })}
+    ${srow("school", "Schule", { value: esc(cfg.slink || "") })}
     ${known.length ? `
     <details class="srow-details">
       <summary class="srow">${ico("star")}<span class="srow-t">Erinnern an</span><span class="srow-v dd-value"></span></summary>
@@ -850,7 +887,7 @@ function wirePushBox(message = "") {
     }
   };
   if (sw) sw.onclick = guard(() => (store.push ? pushDisable() : pushEnable(time?.value || DEFAULT_PUSH_TIME)));
-  if (test) test.onclick = guard(pushTest);
+  if (test) test.onclick = () => runPushTest(test);
   const adm = document.getElementById("b-push-admin");
   if (adm) adm.onclick = guard(async () => {
     await api("POST", `/subscriptions/${store.push.id}/admin`, null, store.push.secret,
@@ -906,6 +943,41 @@ async function pushSetTime(time) {
   await api("PUT", `/subscriptions/${store.push.id}`, { time }, store.push.secret);
   store.push = { ...store.push, time };
   await kvSet("push", store.push);
+}
+
+/**
+ * „Jetzt testen“ mit sichtbarem Ablauf: Weckruf senden, auf die Meldung warten,
+ * Erfolg zeigen. Der Service Worker meldet sich, sobald die Meldung angezeigt ist.
+ */
+async function runPushTest(btn) {
+  btn.disabled = true;
+  btn.insertAdjacentHTML("afterend", `<div id="test-status" class="srow-edit">
+    <div class="pbar pbar-run"><span></span></div><span class="small muted" id="test-text">Weckruf wird gesendet …</span></div>`);
+  const text = () => document.getElementById("test-text");
+  const finish = (msg, ok) => {
+    const box = document.getElementById("test-status");
+    if (!box) return;
+    box.innerHTML = `<span class="small ${ok ? "ok-text" : "error"}">${esc(msg)}</span>`;
+    btn.disabled = false;
+    setTimeout(() => box.remove(), 8000);
+  };
+  const shown = new Promise((resolve) => {
+    const onMsg = (ev) => {
+      if (!ev.data?.testShown) return;
+      navigator.serviceWorker.removeEventListener("message", onMsg);
+      resolve(ev.data.testShown);
+    };
+    navigator.serviceWorker.addEventListener("message", onMsg);
+    setTimeout(() => resolve(null), 45000);
+  });
+  try {
+    await pushTest();
+    if (text()) text().textContent = "Gesendet, das Gerät prüft gerade beim Bestellsystem …";
+  } catch (e) {
+    return finish(`Senden fehlgeschlagen: ${e.message}`, false);
+  }
+  const title = await shown;
+  finish(title ? `✓ Meldung angezeigt: „${title}“` : "Gesendet, aber keine Meldung bestätigt. Sind Benachrichtigungen erlaubt?", !!title);
 }
 
 async function pushTest() {

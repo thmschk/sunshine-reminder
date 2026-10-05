@@ -403,8 +403,8 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
  * Jede betroffene Kalenderwoche einmal laden; Login muss vorher erfolgt sein.
  * Liefert IBS5 statt der Woche eine Tagesansicht (Handy), wird je Tag geladen.
  */
-export async function collect(client, dates, { fresh = false } = {}) {
-  if (client.dayView) return collectByDay(client, dates, fresh);
+export async function collect(client, dates, { fresh = false, onProgress } = {}) {
+  if (client.dayView) return collectByDay(client, dates, fresh, onProgress);
   const weeks = new Map();
   for (const d of dates) {
     const [y, w] = isoWeek(d);
@@ -418,7 +418,7 @@ export async function collect(client, dates, { fresh = false } = {}) {
     const plan = parseWeekplan(await client.weekplan(y, w));
     if (plan.view === "day") {
       client.dayView = true;
-      return collectByDay(client, dates, fresh);
+      return collectByDay(client, dates, fresh, onProgress);
     }
     if (plan.displayedWeek != null && plan.displayedWeek !== w) {
       throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${plan.displayedWeek}`);
@@ -435,10 +435,11 @@ const DAY_GAP_MS = 400;
 const DAY_CACHE_MS = 3 * 60 * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function collectByDay(client, dates, fresh) {
+async function collectByDay(client, dates, fresh, onProgress) {
   client.dayCache ??= new Map();
   const out = [];
   for (const d of dates) {
+    onProgress?.(out.length, dates.length);
     const hit = client.dayCache.get(d);
     if (!fresh && hit && Date.now() - hit.at < DAY_CACHE_MS) {
       out.push(hit.day);
@@ -457,6 +458,10 @@ async function collectByDay(client, dates, fresh) {
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
+
+/** Tage für den Speicher des Geräts, damit die Übersicht beim Öffnen sofort den letzten Stand zeigt. */
+export const daysToJson = (days) => days.map((d) => ({ date: d.date, state: d.state, entries: d.entries.map((e) => ({ ...e })) }));
+export const daysFromJson = (arr) => arr.map((d) => new DayStatus(d.date, d.state, d.entries.map((e) => new MenuEntry(e))));
 
 /**
  * Ein Netzfehler ist keine Aussage über den Bestellstand: deshalb "failed" als
