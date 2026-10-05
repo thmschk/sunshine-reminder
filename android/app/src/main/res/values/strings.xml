@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">theoretisch.satt</string>
+    <string name="app_name">theoretisch satt</string>
+    <!-- Unter dem Icon ist nur Platz für etwa zwölf Zeichen; „theoretisch…“ verlöre den Witz. -->
+    <string name="launcher_name">satt</string>
 </resources>

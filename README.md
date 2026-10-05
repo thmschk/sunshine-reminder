@@ -1,4 +1,6 @@
-# theoretisch.satt
+# theoretisch satt
+
+*satt … theoretisch.*
 
 *(früher „immerhin.satt“ und „happy sunshine“, bis 0.1.20 „sunshine reminder“ — Repository und Download-Link heißen weiter so)*
 
@@ -383,7 +385,7 @@ Ehrlich dazu, was **nicht** geprüft ist:
 
 * Wie zuverlässig der Hintergrundlauf über Wochen auslöst. Manche Hersteller
   (Xiaomi, Huawei, teils Samsung) beenden Hintergrundarbeit aggressiv. Falls die
-  Erinnerung ausbleibt: Einstellungen → Apps → theoretisch.satt → Akku →
+  Erinnerung ausbleibt: Einstellungen → Apps → theoretisch satt → Akku →
   „Uneingeschränkt". Dass sie ausbleibt, steht dann in der App.
 * Das Verhalten in Schulferien, wenn gar keine Wochenpläne veröffentlicht sind.
 * Alles außerhalb einer einzigen Einrichtung — ob andere Schulen dieselbe

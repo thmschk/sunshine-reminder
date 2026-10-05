@@ -1,6 +1,6 @@
 {
-  "name": "theoretisch.satt",
-  "short_name": "theoretisch.satt",
+  "name": "theoretisch satt",
+  "short_name": "satt",
   "description": "Erinnert ans Bestellen des Schulessens und bestellt direkt im Bestellsystem IBS5.",
   "lang": "de",
   "start_url": "./",

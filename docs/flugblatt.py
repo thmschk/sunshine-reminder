@@ -35,7 +35,7 @@ def block(t, f, fill, lh, gap=0, maxw=W - 2*M, x=M):
 d.text((M, y), "Och nö, Schulessen vergessen!", font=font("Bold", 60), fill=BERRY); y += 76
 d.text((M, y), "Muss doch nicht sein …", font=font("Light", 46), fill=INK); y += 86
 
-block("theoretisch.satt sieht werktags von allein nach, ob für die nächsten Tage "
+block("theoretisch satt sieht werktags von allein nach, ob für die nächsten Tage "
       "etwas bestellt ist, meldet sich, wenn noch etwas offen ist — und bestellt "
       "direkt aus der App.",
       font("Regular", 33), INK, 46, gap=24)
@@ -82,6 +82,8 @@ block("Anmelden mit Kundennummer und Passwort des Bestellsystems, beim Zahnrad d
       "Uhrzeit für die Erinnerung wählen — fertig. Zum Wecken nutzt die App einen "
       "kleinen Server, der weder Zugangsdaten noch Bestellungen sieht.",
       font("Regular", 28), INK, 40)
+
+d.text((W // 2, y + 2), "satt … theoretisch.", font=font("LightItalic", 30), fill=BERRY, anchor="ma")
 
 # --- Fusszeile ------------------------------------------------------------
 foot = wrap("Kein offizielles Angebot: Das Projekt steht in keiner Verbindung zu "

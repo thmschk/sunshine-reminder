@@ -328,7 +328,7 @@ def selfcheck() -> list[str]:
     problems = []
 
     def req(method, url, headers=None, data=None):
-        h = {"Origin": ORIGIN, "User-Agent": "theoretisch.satt Selbstprüfung", **(headers or {})}
+        h = {"Origin": ORIGIN, "User-Agent": "theoretisch-satt Selbstprüfung", **(headers or {})}
         r = urllib.request.Request(url, data=data, method=method, headers=h)
         try:
             with urllib.request.urlopen(r, timeout=20) as resp:
@@ -462,7 +462,7 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         if n > MAX_BODY:
             return self.reply(413)
-        headers = {"Accept": "application/json", "User-Agent": "theoretisch.satt (+https://github.com/thmschk/sunshine-reminder)"}
+        headers = {"Accept": "application/json", "User-Agent": "theoretisch-satt (+https://github.com/thmschk/sunshine-reminder)"}
         if self.headers.get("Authorization", "").startswith("Bearer "):
             headers["Authorization"] = self.headers["Authorization"]
         data = self.rfile.read(n) if method == "POST" else None
