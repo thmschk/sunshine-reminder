@@ -32,13 +32,21 @@ sobald sie allgemein offen ist):
 * Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
   Schlüssel, den der Browser erzeugt und nicht herausgibt.
 
-**Einrichten:** Seite öffnen und zum Startbildschirm hinzufügen — auf dem
-iPhone in Safari über Teilen → „Zum Home-Bildschirm“, auf Android in Chrome
-über ⋮ → „App installieren“ (nicht „Verknüpfung erstellen“). Dann von dort
-öffnen, anmelden und unter ⚙ die Erinnerung einschalten. Auf dem iPhone gibt es
-Erinnerungen nur so, nicht im normalen Safari-Tab. Auf Android müssen
-Benachrichtigungen für Chrome selbst erlaubt sein (Einstellungen → Apps →
-Chrome → Benachrichtigungen).
+### Einrichten
+
+1. **Installieren**
+   * **iPhone** (Safari): Teilen → „Zum Home-Bildschirm“
+   * **Android** (Chrome): ⋮ → „App installieren“ — nicht „Verknüpfung erstellen“
+2. **Über das neue Symbol öffnen**, nicht im Browser-Tab.
+3. **Anmelden** mit Kundennummer und Passwort von IBS5.
+4. **Erinnerung einschalten:** ⚙ → Uhrzeit wählen → „Erinnerung einschalten“.
+5. **Ausprobieren:** ⚙ → „Jetzt testen“.
+
+> [!NOTE]
+> Auf dem **iPhone** gibt es Erinnerungen nur in der installierten Fassung,
+> nicht im normalen Safari-Tab. Auf **Android** müssen Benachrichtigungen für
+> Chrome selbst erlaubt sein (Einstellungen → Apps → Chrome →
+> Benachrichtigungen), sonst fragt Chrome gar nicht erst.
 
 **Grenzen:** Handy-Browsern liefert IBS5 statt des Wochenplans nur eine
 Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
