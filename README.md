@@ -93,17 +93,16 @@ Was nach dem Eingeben der Zugangsdaten passiert:
 Kundennummer, IBS5-Passwort und Bestellungen erreichen den Server nie. Er sieht
 das Push-Abo mit Uhrzeit und, nur bei Sdui, die durchgereichten Sdui-Anfragen.
 
-#### Was ist ein Push-Abo?
+<details>
+<summary><b>Was ist ein Push-Abo?</b></summary>
 
-Eine Zustelladresse für dein Gerät beim Push-Dienst des Browsers.
+Stell es dir als Postfach für dein Handy vor, das bei Google bzw. Apple steht.
+Dein Browser richtet es beim Einschalten der Erinnerung ein und gibt unserem
+Server den Schlüssel zum Einwerfen, sonst niemandem. Was eingeworfen wird, kann
+nur dein Handy öffnen. Das Postfach verschwindet, sobald du die Erinnerung
+ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
 
-| | |
-|---|---|
-| **Was** | eine lange Zufallsadresse ohne Namen, dazu zwei Schlüssel. Nur dein Browser kann den Inhalt lesen. |
-| **Wer stellt zu** | Chrome → Google · Safari → Apple · Firefox → Mozilla |
-| **Wer erzeugt es** | dein Browser, beim Einschalten der Erinnerung |
-| **Wer darf senden** | nur unser Server, seine Nachrichten sind signiert |
-| **Wann endet es** | beim Ausschalten, beim Entziehen der Benachrichtigungen, beim Löschen der App oder der Website-Daten. Ungültige Abos löscht der Server sofort. |
+</details>
 
 ### Einrichten
 
@@ -205,6 +204,9 @@ Die ursprüngliche Fassung: prüft **auf dem Gerät**, ohne Server, ohne Anmeldu
 bei einem Dienst, ohne Konto. Die Zugangsdaten verlassen das Handy nur in
 Richtung des Bestellsystems bzw. von Sdui selbst. Dazu kann sie den
 **Stundenplan aus Sdui** holen und am Vortag an Fächer wie Sport erinnern.
+
+<details>
+<summary><b>Alles zur Android-App ausklappen</b> — Funktionen, Installation, Echtheit prüfen, Daten, Stand, selbst bauen</summary>
 
 ### Was sie tut
 
@@ -427,6 +429,8 @@ SUNSHINE_KEY_PASSWORD=…
 Fehlen sie, fällt der Release-Build auf den Debug-Schlüssel zurück. So lässt
 sich das Projekt überall bauen — die so entstandene Datei darf aber nicht
 verteilt werden, weil den Debug-Schlüssel jeder hat.
+
+</details>
 
 ## Die Python-Variante
 
