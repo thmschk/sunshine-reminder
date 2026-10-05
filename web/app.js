@@ -921,7 +921,7 @@ async function pushEnable(time) {
   if (perm !== "granted") {
     // Nach einmal "Blockieren" fragt der Browser nicht wieder; freigeben geht nur von Hand.
     throw new Error(isIos
-      ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → immerhin.satt → Mitteilungen erlauben."
+      ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → theoretisch.satt → Mitteilungen erlauben."
       : "Benachrichtigungen sind nicht erlaubt. Links neben der Adresse auf das Schloss tippen → Berechtigungen → "
         + "Benachrichtigungen → Zulassen, dann hier nochmal einschalten.");
   }

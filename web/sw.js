@@ -8,7 +8,7 @@ import { kvGet, kvSet, secretGet } from "./idb.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 
-const VERSION = "v32";
+const VERSION = "v33";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js"];
 

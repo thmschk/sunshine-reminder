@@ -35,7 +35,7 @@ def block(t, f, fill, lh, gap=0, maxw=W - 2*M, x=M):
 d.text((M, y), "Och nö, Schulessen vergessen!", font=font("Bold", 60), fill=BERRY); y += 76
 d.text((M, y), "Muss doch nicht sein …", font=font("Light", 46), fill=INK); y += 86
 
-block("immerhin.satt sieht werktags von allein nach, ob für die nächsten Tage "
+block("theoretisch.satt sieht werktags von allein nach, ob für die nächsten Tage "
       "etwas bestellt ist, meldet sich, wenn noch etwas offen ist — und bestellt "
       "direkt aus der App.",
       font("Regular", 33), INK, 46, gap=24)
@@ -48,8 +48,8 @@ sh = 505
 top = y
 # Bilder der Web-App (412 px breit, doppelte Auflösung), Startseite und Bestellansicht.
 for path, x, box in (
-    ("screenshot-web-start.png", M + 70, (0, 40, 824, 1380)),
-    ("screenshot-web-bestellen.png", W - M - 70 - 310, (0, 40, 824, 1380)),
+    ("screenshot-web-start.png", M + 70, (0, 40, 780, 1380)),
+    ("screenshot-web-bestellen.png", W - M - 70 - 294, (0, 40, 780, 1380)),
 ):
     s = Image.open(HERE / path).convert("RGB").crop(box)
     s = s.resize((int(s.width * sh / s.height), sh), Image.LANCZOS)
