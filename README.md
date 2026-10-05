@@ -146,6 +146,9 @@ Sdui direkt.
 
 ### Was der Server sieht und speichert
 
+<details>
+<summary>Ausklappen: Seite laden, Erinnerung, Sdui, Selbstprüfung</summary>
+
 | Anlass | sieht | speichert | wie lange |
 |---|---|---|---|
 | Seite laden | IP-Adresse, angefragte Datei | nichts; Zugriffs- und Fehlerprotokolle einzelner Anfragen sind abgeschaltet | – |
@@ -154,6 +157,8 @@ Sdui direkt.
 | tägliche Selbstprüfung | – (fragt selbst bei IBS5 und Sdui an, ohne Nutzerdaten) | Ergebnis unter `/api/health` | bis zur nächsten Prüfung |
 
 Name, Kundennummer, Bestellungen und das IBS5-Passwort erreichen den Server nie.
+
+</details>
 
 **Grenzen:** Handy-Browsern liefert IBS5 statt des Wochenplans nur eine
 Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
