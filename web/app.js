@@ -483,7 +483,13 @@ async function api(method, path, body, secret) {
 async function pushEnable(time) {
   if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
   const perm = await Notification.requestPermission();
-  if (perm !== "granted") throw new Error("Benachrichtigungen sind für diese Seite nicht erlaubt.");
+  if (perm !== "granted") {
+    // Nach einmal "Blockieren" fragt der Browser nicht wieder; freigeben geht nur von Hand.
+    throw new Error(isIos
+      ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → happy sunshine → Mitteilungen erlauben."
+      : "Benachrichtigungen sind nicht erlaubt. Links neben der Adresse auf das Schloss tippen → Berechtigungen → "
+        + "Benachrichtigungen → Zulassen, dann hier nochmal einschalten.");
+  }
   // serviceWorker.ready käme ohne erfolgreiche Registrierung nie zurück.
   if (!(await swReady)) throw new Error("Dieser Browser kann den Hintergrunddienst für Erinnerungen nicht starten.");
   const reg = await navigator.serviceWorker.ready;
