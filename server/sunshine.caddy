@@ -15,7 +15,7 @@ sunshine.thomschke.info {
 	}
 
 	# Hülle immer frisch prüfen lassen, sonst hängt ein Deploy am Browser-Cache.
-	@shell path / /index.html /sw.js /app.js /ibs.js /idb.js /style.css /manifest.webmanifest
+	@shell path / *.html *.js *.css *.webmanifest
 	header @shell Cache-Control "no-cache"
 
 	@manifest path *.webmanifest

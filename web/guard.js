@@ -28,7 +28,11 @@ export async function paused() {
   return p && p.until > Date.now() ? p : null;
 }
 
-export const resume = () => kvDel("ibsPause");
+/** „Trotzdem jetzt versuchen“: Pause und Zähler zurücksetzen. */
+export async function resume() {
+  await kvDel("ibsPause");
+  await kvDel("ibsBudget");
+}
 
 async function pause(reason) {
   await kvSet("ibsPause", { until: Date.now() + PAUSE_MS, reason, at: Date.now() });
