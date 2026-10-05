@@ -6,7 +6,7 @@ import {
 } from "./ibs.js";
 import { kvGet, kvSet, secretGet } from "./idb.js";
 
-const VERSION = "v16";
+const VERSION = "v17";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest"];
 

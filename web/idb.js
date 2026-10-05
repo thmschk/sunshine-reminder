@@ -1,6 +1,7 @@
 // Kleiner Schlüssel-Wert-Speicher in IndexedDB. Seite und Service Worker teilen
 // ihn: der Service Worker braucht bei der Push-Prüfung Zugangsdaten und
 // Einstellungen, an localStorage kommt er nicht heran.
+// Interner Name aus der Zeit vor der Umbenennung; ein neuer Name hieße neue, leere Datenbank.
 const DB = "happy-sunshine";
 const STORE = "kv";
 

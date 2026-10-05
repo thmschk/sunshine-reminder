@@ -1,6 +1,6 @@
-# happy sunshine
+# immerhin.satt
 
-*(bis 0.1.20: „sunshine reminder“ — Repository und Download-Link heißen weiter so)*
+*(früher „happy sunshine“, bis 0.1.20 „sunshine reminder“ — Repository und Download-Link heißen weiter so)*
 
 Erinnert auf dem Handy daran, wenn im Schulessen-Bestellsystem **IBS5**
 (`ibs.sunshine-catering.de`) für die nächsten Tage nichts bestellt ist — und
@@ -251,7 +251,7 @@ Ehrlich dazu, was **nicht** geprüft ist:
 
 * Wie zuverlässig der Hintergrundlauf über Wochen auslöst. Manche Hersteller
   (Xiaomi, Huawei, teils Samsung) beenden Hintergrundarbeit aggressiv. Falls die
-  Erinnerung ausbleibt: Einstellungen → Apps → happy sunshine → Akku →
+  Erinnerung ausbleibt: Einstellungen → Apps → immerhin.satt → Akku →
   „Uneingeschränkt". Dass sie ausbleibt, steht dann in der App.
 * Das Verhalten in Schulferien, wenn gar keine Wochenpläne veröffentlicht sind.
 * Alles außerhalb einer einzigen Einrichtung — ob andere Schulen dieselbe
