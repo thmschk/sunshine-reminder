@@ -92,14 +92,14 @@ h3 { font-size: .8rem; letter-spacing: .06em; color: var(--muted); margin: 22px 
   display: grid;
   grid-template-columns: 4.6rem 1fr auto;
   gap: 10px;
-  align-items: baseline;
+  align-items: center;
   padding: 10px 2px;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
 .days li:last-child { border-bottom: 0; }
 .days .date { font-weight: 600; }
-.days .dish { overflow-wrap: anywhere; }
+.days .dish { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .badge { font-size: .8rem; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
 .badge.ORDERED { background: var(--ok-bg); color: var(--ok); }
 .badge.NOT_ORDERED, .badge.IN_CART { background: var(--warn-bg); color: var(--warn); }
