@@ -33,7 +33,11 @@ function clearCreds() {
   try { localStorage.removeItem(CREDS_KEY); } catch { /* egal */ }
 }
 
-/** Einmal einloggen und den Token behalten; abgelaufene Tokens einmal erneuern. */
+/**
+ * Einmal einloggen und den Token behalten. Ein abgelaufener Token zeigt sich als
+ * Auth- oder Netzfehler (siehe IbsClient#send) → einmal neu anmelden; ist das
+ * Netz wirklich weg, scheitert der zweite Versuch genauso.
+ */
 async function ensureLogin(creds, force = false) {
   if (!force && client.token && loggedInAs === creds.customerNo) return;
   profile = await client.login(creds.customerNo, creds.password);
@@ -44,7 +48,7 @@ async function withLogin(creds, fn) {
   try {
     return await fn();
   } catch (e) {
-    if (!(e instanceof IbsAuthError)) throw e;
+    if (!(e instanceof IbsAuthError || e.maybeAuth)) throw e;
     await ensureLogin(creds, true);
     return fn();
   }

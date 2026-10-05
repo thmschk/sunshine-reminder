@@ -58,8 +58,9 @@ export const De = {
  * Zwei Eigenheiten des Servers (siehe IbsClient.kt): ohne Accept-Language kommt
  * HTTP 500 (setzt der Browser selbst), und authentifizierte Endpunkte wollen
  * X-Requested-With. Ohne gültigen Token leitet IBS5 per 302 auf eine Fehlerseite
- * ohne CORS-Freigabe um; redirect:"manual" macht daraus einen erkennbaren
- * Auth-Fehler statt eines nichtssagenden "Failed to fetch".
+ * ohne CORS-Freigabe um. Der Browser prüft CORS schon an der 302-Antwort, also
+ * kommt dann nur ein Netzfehler an — nicht unterscheidbar von einem echten.
+ * Solche Fehler bei angemeldeten Aufrufen tragen deshalb maybeAuth.
  */
 export class IbsClient {
   constructor(baseUrl = BASE_URL) {
@@ -163,7 +164,9 @@ export class IbsClient {
         cache: "no-store",
       });
     } catch (e) {
-      throw new IbsError(`Keine Verbindung zum Bestellsystem (${path}): ${e.message}`);
+      const err = new IbsError(`Keine Verbindung zum Bestellsystem (${path}): ${e.message}`);
+      err.maybeAuth = auth;
+      throw err;
     }
     if (resp.type === "opaqueredirect" || resp.status === 401 || resp.status === 403) {
       throw new IbsAuthError(`${path}: Anmeldung abgelaufen oder abgelehnt`);
