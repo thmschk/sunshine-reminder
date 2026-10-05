@@ -1,15 +1,14 @@
-<!-- Sonne als Uhr (Entwurf 8A-B2): Sonne fuer den Namen, Uhr fuer "rechtzeitig dran gedacht".
-     Auf 80 % verkleinert, damit die Strahlen in der runden Maske des Launchers bleiben. -->
+<!-- Gelber Teller mit Uhrzeiger (Entwurf F): die frühere Sonnen-Uhr ohne Strahlen,
+     Teller für "satt", Zeiger für "rechtzeitig dran gedacht". Radius 32 bleibt in
+     der 66-dp-Schutzzone des adaptiven Icons. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <group android:scaleX="0.8" android:scaleY="0.8" android:pivotX="54" android:pivotY="54">
-        <path android:strokeColor="#F8D800" android:strokeWidth="6" android:strokeLineCap="round"
-            android:pathData="M54,14L54,22M54,86L54,94M14,54L22,54M86,54L94,54M26,26L31,31M77,77L82,82M82,26L77,31M31,77L26,82" />
-        <path android:fillColor="#F8D800"
-            android:pathData="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52z" />
-        <path android:strokeColor="#A01850" android:strokeWidth="6.5"
-            android:strokeLineCap="round" android:strokeLineJoin="round"
-            android:pathData="M54,38V54l11,7" />
-    </group>
+    <path android:fillColor="#F8D800"
+        android:pathData="M54,22a32,32 0,1 1,0 64a32,32 0,1 1,0 -64z" />
+    <path android:strokeColor="#BFFFFFFF" android:strokeWidth="3"
+        android:pathData="M54,32a22,22 0,1 1,0 44a22,22 0,1 1,0 -44z" />
+    <path android:strokeColor="#A01850" android:strokeWidth="6.5"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M54,37V54l12,7" />
 </vector>
