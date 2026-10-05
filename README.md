@@ -93,14 +93,17 @@ Was nach dem Eingeben der Zugangsdaten passiert:
 Kundennummer, IBS5-Passwort und Bestellungen erreichen den Server nie. Er sieht
 das Push-Abo mit Uhrzeit und, nur bei Sdui, die durchgereichten Sdui-Anfragen.
 
-**Was ist ein Push-Abo?** Eine Zustelladresse für das Gerät beim Push-Dienst
-des Browsers (Chrome: Google, Safari: Apple, Firefox: Mozilla) — eine lange
-Zufallskennung ohne Namen, dazu zwei Schlüssel, mit denen nur dieser Browser den
-Inhalt entschlüsseln kann. Der Browser erzeugt es beim Einschalten der
-Erinnerung, unser Server hebt es auf und darf als Einziger dorthin senden (seine
-Nachrichten sind signiert). Das Abo endet beim Ausschalten, beim Entziehen der
-Benachrichtigungen, beim Löschen der App oder der Website-Daten. Meldet der
-Push-Dienst ein Abo als ungültig, löscht der Server es sofort.
+#### Was ist ein Push-Abo?
+
+Eine Zustelladresse für dein Gerät beim Push-Dienst des Browsers.
+
+| | |
+|---|---|
+| **Was** | eine lange Zufallsadresse ohne Namen, dazu zwei Schlüssel. Nur dein Browser kann den Inhalt lesen. |
+| **Wer stellt zu** | Chrome → Google · Safari → Apple · Firefox → Mozilla |
+| **Wer erzeugt es** | dein Browser, beim Einschalten der Erinnerung |
+| **Wer darf senden** | nur unser Server, seine Nachrichten sind signiert |
+| **Wann endet es** | beim Ausschalten, beim Entziehen der Benachrichtigungen, beim Löschen der App oder der Website-Daten. Ungültige Abos löscht der Server sofort. |
 
 ### Einrichten
 
