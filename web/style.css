@@ -266,3 +266,10 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .u-my48 { margin: 4px 0 8px; }
 .u-pl0 { padding-left: 0; }
 .u-block { display: block; }
+
+.stepper { display: flex; align-items: center; gap: 8px; }
+.stepper span { flex: 1; }
+.stepper .step {
+  width: 40px; height: 40px; padding: 0; border-radius: 50%; font-size: 1.3rem; line-height: 1;
+  background: var(--primary-container); color: var(--on-primary-container);
+}

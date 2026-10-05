@@ -605,10 +605,14 @@ function showSettings() {
       <div id="push-box">${pushBoxHtml()}</div>
       <hr>
       <h4>Schulessen (Sunshine)</h4>
-      <div>Vorwarnzeit: <span id="days-ahead-val"></span></div>
+      <!-- Plus/Minus statt Schieberegler: ein Regler verstellt sich beim Scrollen über ihn hinweg. -->
+      <div class="stepper">
+        <span>Vorwarnzeit: <b id="days-ahead-val"></b></span>
+        <button type="button" id="days-minus" class="step" aria-label="einen Tag weniger">−</button>
+        <button type="button" id="days-plus" class="step" aria-label="einen Tag mehr">+</button>
+      </div>
       <p class="small muted u-my48">So weit schaut die Übersicht voraus, ab morgen gerechnet.
         Die Erinnerung prüft davon höchstens die nächsten 5 Schultage.</p>
-      <input id="days-ahead" type="range" min="${DAYS_AHEAD.min}" max="${DAYS_AHEAD.max}" step="1" value="${loadDaysAhead()}" aria-label="Vorwarnzeit">
       <p class="small muted u-mb0">${esc(profile?.name || "")}${profile?.institution ? ` · ${esc(profile.institution)}` : ""}<br>
         Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}</p>
       <button id="b-logout" class="danger">Abmelden und alles löschen</button>
@@ -624,13 +628,18 @@ function showSettings() {
         aus deinem Browser mit dem Bestellsystem.</p>
     </div>`;
   document.getElementById("b-back").onclick = () => showHome();
-  const range = document.getElementById("days-ahead");
   const showVal = () => {
-    const n = Number(range.value);
+    const n = loadDaysAhead();
     document.getElementById("days-ahead-val").textContent = n === 1 ? "1 Tag" : `${n} Tage`;
+    document.getElementById("days-minus").disabled = n <= DAYS_AHEAD.min;
+    document.getElementById("days-plus").disabled = n >= DAYS_AHEAD.max;
   };
-  range.oninput = showVal;
-  range.onchange = () => saveDaysAhead(Number(range.value));
+  const step = (d) => () => {
+    saveDaysAhead(Math.min(DAYS_AHEAD.max, Math.max(DAYS_AHEAD.min, loadDaysAhead() + d)));
+    showVal();
+  };
+  document.getElementById("days-minus").onclick = step(-1);
+  document.getElementById("days-plus").onclick = step(1);
   showVal();
   wirePushBox();
   wireSduiBox();
