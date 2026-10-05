@@ -101,6 +101,8 @@ button:disabled { opacity: .45; cursor: default; }
 .chips { display: flex; gap: 6px; overflow-x: auto; margin: 10px 0 4px; }
 .chip { background: #fff; border-radius: 14px; padding: 5px 10px; font-size: .9rem; font-weight: 500; white-space: nowrap; }
 .hero button { margin-top: 12px; }
+.intro p { margin: 8px 0; }
+.intro p.small { font-size: .85rem; }
 
 .section {
   font-size: .78rem;

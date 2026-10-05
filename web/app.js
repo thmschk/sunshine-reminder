@@ -101,10 +101,20 @@ function busy(text) {
 function showSetup(message = "", prefill = {}) {
   chrome(false);
   $app.innerHTML = `
+    <div class="card hero open intro">
+      <h2>Nie wieder Schulessen vergessen</h2>
+      <p>Zeigt, für welche Tage im Bestellsystem IBS5 noch nichts bestellt ist, und bestellt, bestellt um
+        oder bestellt ab. Wer mag, wird werktags zur gewählten Zeit erinnert.</p>
+      <p class="small">Deine Zugangsdaten bleiben verschlüsselt auf diesem Gerät und gehen nur an das
+        Bestellsystem. Unser Server weckt das Gerät für die Erinnerung nur, er sieht weder Zugangsdaten noch
+        Bestellungen.</p>
+      <p class="small">Tipp: erst zum Startbildschirm hinzufügen (iPhone: Teilen → „Zum Home-Bildschirm“,
+        Android: ⋮ → „App installieren“), dann von dort öffnen.</p>
+      <p class="small muted">Kein Angebot von Sunshine Catering oder dem Hersteller von IBS5.</p>
+    </div>
     <div class="card">
       <h2 style="margin-top:0">Anmelden</h2>
-      <p class="small muted">Mit den Zugangsdaten des Schulessen-Bestellsystems (IBS5). Sie bleiben in
-        diesem Browser und gehen nur an das Bestellsystem selbst.</p>
+      <p class="small muted">Mit Kundennummer und Passwort des Schulessen-Bestellsystems (IBS5).</p>
       ${message ? `<p class="error">${esc(message)}</p>` : ""}
       <form id="f-login" autocomplete="on">
         <label for="cn">Kundennummer</label>

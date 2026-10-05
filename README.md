@@ -12,22 +12,46 @@ Die App prüft **auf dem Gerät**. Es gibt keinen Server, keine Anmeldung bei
 einem Dienst, kein Konto. Die Zugangsdaten verlassen das Handy nur in Richtung
 des Bestellsystems bzw. von Sdui selbst.
 
-## Nur für Android — es gibt keine iPhone-Version
+Für iPhone und alle anderen Geräte gibt es eine **Web-Version** zum Testen:
+**<https://sunshine.thomschke.info>** — siehe [unten](#web-version-für-iphone-und-andere-test).
 
-Und es wird auch keine geben, die den Zweck erfüllt. Der Grund liegt nicht am
-Aufwand, sondern an iOS: Dort entscheidet das System selbst, ob eine App im
-Hintergrund rechnen darf, orientiert an den Nutzungsgewohnheiten. Eine Prüfung
-kann Stunden zu spät kommen oder tagelang ausbleiben. Für eine Erinnerung mit
-Frist ist das keine Grundlage.
+## Web-Version für iPhone und andere (Test)
 
-Eine iOS-App könnte den Wochenplan anzeigen und beim Öffnen prüfen — aber nicht
-zuverlässig um 17:00 aufwachen und warnen. Genau das ist der ganze Zweck: Wer
-daran denkt, die App zu öffnen, hätte auch ans Bestellen gedacht.
+Eine native iPhone-App gibt es nicht und wird es nicht geben: iOS entscheidet
+selbst, ob und wann eine App im Hintergrund rechnen darf. Eine Prüfung mit
+Frist kann Stunden zu spät kommen oder ausfallen. Empfangen kann das iPhone
+eine Erinnerung aber tadellos — nur auslösen muss sie jemand anders.
 
-Für iPhone-Nutzer bleibt der Weg über einen Rechner, der ohnehin durchläuft —
-Raspberry Pi, NAS, Server. Empfangen kann das iPhone eine Erinnerung
-tadellos, nur auslösen muss sie jemand anders. Dafür ist die
-[Python-Variante](#die-python-variante) in diesem Repository da.
+Genau das macht die Web-Version unter **<https://sunshine.thomschke.info>**:
+
+* Sie kann, was die App kann: Übersicht der nächsten Tage, bestellen,
+  umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit
+  dem Bestellsystem.
+* Für die Erinnerung weckt ein kleiner Server das Gerät werktags zur gewählten
+  Uhrzeit mit einer leeren Push-Nachricht. Geprüft wird dann **auf dem Gerät**;
+  der Server kennt weder Zugangsdaten noch Bestellstand, nur das Push-Abo und
+  die Uhrzeit.
+* Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
+  Schlüssel, den der Browser erzeugt und nicht herausgibt.
+
+**Einrichten:** Seite öffnen und zum Startbildschirm hinzufügen — auf dem
+iPhone in Safari über Teilen → „Zum Home-Bildschirm“, auf Android in Chrome
+über ⋮ → „App installieren“ (nicht „Verknüpfung erstellen“). Dann von dort
+öffnen, anmelden und unter ⚙ die Erinnerung einschalten. Auf dem iPhone gibt es
+Erinnerungen nur so, nicht im normalen Safari-Tab. Auf Android müssen
+Benachrichtigungen für Chrome selbst erlaubt sein (Einstellungen → Apps →
+Chrome → Benachrichtigungen).
+
+**Grenzen:** Handy-Browsern liefert IBS5 statt des Wochenplans nur eine
+Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
+quittiert IBS5 mit einer Sperre der IP-Adresse (dann geht auch die normale
+Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Tage
+nacheinander, kurz zwischengespeichert, die Erinnerung höchstens die nächsten
+fünf Schultage. Die Erinnerung auf dem iPhone ist noch nicht ausprobiert.
+
+Wer lieber ganz ohne fremden Server auskommt: Die
+[Python-Variante](#die-python-variante) läuft auf einem eigenen Rechner, der
+ohnehin durchläuft — Raspberry Pi, NAS, Server.
 
 > **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
 > Sunshine Catering, zum Hersteller von IBS5 oder zur Sdui GmbH. Es benutzt
@@ -175,8 +199,9 @@ fremder Hand sollte niemand blind durchwinken.
 * **Sdui-Zugangsdaten** (nur wenn eingerichtet) liegen getrennt davon im selben
   privaten Bereich und gehen ausschließlich an `api.sdui.app`, über HTTPS.
   „Sdui entfernen" löscht sie samt Stundenplan.
-* **Es gibt keinen Server dieses Projekts.** Niemand außer dir und dem
-  Bestellsystem sieht irgendetwas.
+* **Die App braucht keinen Server dieses Projekts.** Niemand außer dir und dem
+  Bestellsystem sieht irgendetwas. (Nur die [Web-Version](#web-version-für-iphone-und-andere-test)
+  nutzt einen Server, und der sieht ausschließlich Push-Abo und Uhrzeit.)
 * **Keine Statistik, keine Werbung, keine Fremdbibliotheken zur Auswertung.**
 
 Die App fordert diese Berechtigungen an:
@@ -278,6 +303,16 @@ machine ibs.sunshine-catering.de login <Kundennummer> password <Passwort>
 Für den regelmäßigen Lauf liegen in `deploy/` fertige systemd-Timer.
 
 ## Technische Notizen
+
+**Web-Version** (`web/`, Server in `server/`): Mit Handy-User-Agent liefert
+`/Mealplan/Weekplan` auch mit `year`/`week` nur die Tagesansicht von heute
+(`id="dayplan"`, Bestellschluss als `data-readonly="true"`); geladen wird dann
+je Tag über `/Mealplan/WeekplanMobile?date=`. Kaltverpflegung sperrt IBS5 dort
+nur im eigenen Seiten-JS (Name enthält M5, KV oder Kaltverpflegung) — die
+Web-Version übernimmt diese Regel. CORS gibt IBS5 frei (`Allow-Origin: *`);
+der Preflight auf `/Login/Login` ohne `Accept-Language` bekommt allerdings 302,
+deshalb schickt der Login kein `X-Requested-With` und bleibt eine einfache
+Anfrage ohne Preflight.
 
 IBS5 ist eine ASP.NET-Anwendung mit einer kleinen JSON-/Bearer-Token-API, die
 das eigene Web-Frontend benutzt. Dieses Projekt spricht dieselbe:
