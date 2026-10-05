@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>idb.js Verschlüsselung</title>
+<!-- Mit echter Wartezeit aufrufen (Screenshot), nicht mit virtueller Zeit: IndexedDB hängt dort. -->
+<body style="font:18px monospace"><pre id="out">läuft</pre>
+<script type="module">
+import { kvGet, kvSet, kvDel, secretGet, secretSet } from "../idb.js";
+const lines = [];
+const check = (name, ok) => lines.push(`${ok ? "ok  " : "FAIL"} ${name}`);
+try {
+  await kvDel("t.creds");
+  await secretSet("t.creds", { customerNo: "1000", password: "geheim-äöü" });
+  const raw = await kvGet("t.creds");
+  const rawText = JSON.stringify(raw) + new TextDecoder().decode(raw.ct);
+  check("Datenbank enthält keinen Klartext", raw.enc === 1 && !rawText.includes("geheim") && !rawText.includes("1000"));
+  const back = await secretGet("t.creds");
+  check("Rundweg mit Umlauten", back?.password === "geheim-äöü" && back?.customerNo === "1000");
+  const k = await kvGet("cryptoKey");
+  check("Schlüssel nicht exportierbar", k instanceof CryptoKey && k.extractable === false);
+  let exported = true;
+  try { await crypto.subtle.exportKey("raw", k); } catch { exported = false; }
+  check("exportKey wird verweigert", !exported);
+  await kvSet("t.creds", { customerNo: "2000", password: "alt" });
+  const legacy = await secretGet("t.creds");
+  check("alter Klartext wird gelesen", legacy?.password === "alt");
+  check("und dabei verschlüsselt", (await kvGet("t.creds")).enc === 1);
+  await kvDel("t.creds");
+} catch (e) {
+  lines.push("FAIL Ausnahme: " + e);
+}
+document.getElementById("out").textContent = lines.join("\n") + (lines.some((l) => l.startsWith("FAIL")) ? "\n\nFEHLGESCHLAGEN" : "\n\nALLE OK");
+</script>

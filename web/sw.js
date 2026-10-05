@@ -4,9 +4,9 @@
 import {
   AlarmText, DEFAULT_CHECK, De, IbsAuthError, IbsClient, collect, evaluate, targetDates, todayBerlin,
 } from "./ibs.js";
-import { kvGet, kvSet } from "./idb.js";
+import { kvGet, kvSet, secretGet } from "./idb.js";
 
-const VERSION = "v12";
+const VERSION = "v13";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "manifest.webmanifest"];
 
@@ -54,7 +54,7 @@ self.addEventListener("push", (ev) => {
 
 async function checkAndNotify(isTest) {
   const prefix = isTest ? "Test · " : "";
-  const creds = await kvGet("creds");
+  const creds = await secretGet("creds");
   if (!creds) {
     return notify(`${prefix}Nicht angemeldet`, "Bitte die Seite öffnen und anmelden.", { url: "./" });
   }
@@ -134,7 +134,7 @@ self.addEventListener("message", (ev) => {
         return false;
       }
     };
-    const creds = await kvGet("creds");
+    const creds = await secretGet("creds");
     out.push(creds ? "ok   Zugangsdaten vorhanden" : "FEHL keine Zugangsdaten");
     await step("Login-Endpunkt erreichbar (leere Anfrage)", async () => {
       const r = await fetch("https://ibs.sunshine-catering.de/ibs5/Login/Login", { method: "POST", body: new URLSearchParams({ identifierValue: "", secretValue: "" }), credentials: "omit", redirect: "manual" });

@@ -2,10 +2,11 @@ import {
   DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
   addDays, changeKind, collect, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
-import { kvDel, kvGet, kvSet } from "./idb.js";
+import { kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
 
-// Zugangsdaten und Einstellungen liegen nur in diesem Browser, in IndexedDB,
-// damit auch der Service Worker sie bei der Push-Prüfung lesen kann. Beim Start
+// Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
+// diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
+// Push-Prüfung lesen kann. Beim Start
 // einmal in den Speicher geladen; vorher genutztes localStorage wird übernommen.
 const ORDER_WEEKS = 8;
 /** So viele Tage zeigt die Liste auf der Startseite (wie DAY_LIST_LENGTH der App). */
@@ -20,14 +21,14 @@ async function loadStore() {
   try {
     const old = localStorage.getItem("hs.creds");
     if (old) {
-      await kvSet("creds", JSON.parse(old));
+      await secretSet("creds", JSON.parse(old));
       const n = parseInt(localStorage.getItem("hs.daysAhead"), 10);
       if (n) await kvSet("daysAhead", n);
       localStorage.removeItem("hs.creds");
       localStorage.removeItem("hs.daysAhead");
     }
   } catch { /* kein localStorage */ }
-  const c = await kvGet("creds");
+  const c = await secretGet("creds").catch(() => undefined);
   store.creds = c?.customerNo && c?.password ? c : null;
   const n = await kvGet("daysAhead");
   store.daysAhead = n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
@@ -59,7 +60,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 
 async function saveCreds(c) {
   store.creds = c;
-  await kvSet("creds", c).catch(() => {});
+  await secretSet("creds", c).catch(() => {});
 }
 async function clearCreds() {
   store.creds = null;
