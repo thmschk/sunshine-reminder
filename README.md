@@ -69,22 +69,23 @@ Was nach dem Eingeben der Zugangsdaten passiert:
    nur dieses Abo und die Uhrzeit an unseren Server.
 4. **Jeden Werktag zur gewählten Zeit** läuft der Weckruf so:
 
-```mermaid
-sequenceDiagram
-    participant S as Unser Server
-    participant P as Push-Dienst (Google/Apple)
-    participant H as Handy (Service Worker)
-    participant I as IBS5
-    S->>P: leerer Weckruf an die Push-Adresse
-    P->>H: zustellen
-    Note over H: liest die verschlüsselten<br/>Zugangsdaten vom Gerät
-    H->>I: anmelden, Speiseplan abfragen
-    I-->>H: Bestellstand
-    Note over H: Meldung „2 Tage offen“<br/>oder still „Alles bestellt ✓“
-```
+   ```mermaid
+   sequenceDiagram
+       participant S as Unser Server
+       participant P as Push-Dienst (Google/Apple)
+       participant H as Handy (Service Worker)
+       participant I as IBS5
+       S->>P: leerer Weckruf an die Push-Adresse
+       P->>H: zustellen
+       Note over H: liest die verschlüsselten<br/>Zugangsdaten vom Gerät
+       H->>I: anmelden, Speiseplan abfragen
+       I-->>H: Bestellstand
+       Note over H: Meldung „2 Tage offen“<br/>oder still „Alles bestellt ✓“
+   ```
 
    Der Server erfährt dabei nicht, ob bestellt ist. Er weiß nur, dass ein
    Weckruf an eine anonyme Push-Adresse ging.
+
 5. **Bestellen (nur auf Klick).** Das gewählte Essen landet bei IBS5 im
    Warenkorb. Abgeschickt wird nur, wenn dort genau die Auswahl liegt, danach
    prüft die Seite im Speiseplan nach. Auch das läuft direkt vom Handy zu IBS5.
