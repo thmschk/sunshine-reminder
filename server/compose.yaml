@@ -1,0 +1,17 @@
+# Push-Wecker der Web-App; erreichbar nur über Caddy (Netz "web"), kein eigener Port.
+services:
+  push:
+    build: ./push
+    restart: unless-stopped
+    environment:
+      VAPID_SUBJECT: "https://sunshine.thomschke.info/"
+      TZ: Europe/Berlin
+    volumes:
+      - ./data:/data
+    networks:
+      web:
+        # Eindeutiger Name im gemeinsamen Netz, andere Apps hängen dort auch.
+        aliases: [sunshine-push]
+networks:
+  web:
+    external: true

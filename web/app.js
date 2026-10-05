@@ -2,27 +2,42 @@ import {
   DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
   addDays, changeKind, collect, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
+import { kvDel, kvGet, kvSet } from "./idb.js";
 
-// Zugangsdaten liegen nur in diesem Browser. Prototyp: localStorage; für den
-// Service Worker (Push-Prüfung) wandern sie später nach IndexedDB.
-const CREDS_KEY = "hs.creds";
-const DAYS_AHEAD_KEY = "hs.daysAhead";
+// Zugangsdaten und Einstellungen liegen nur in diesem Browser, in IndexedDB,
+// damit auch der Service Worker sie bei der Push-Prüfung lesen kann. Beim Start
+// einmal in den Speicher geladen; vorher genutztes localStorage wird übernommen.
 const ORDER_WEEKS = 8;
 /** So viele Tage zeigt die Liste auf der Startseite (wie DAY_LIST_LENGTH der App). */
 const DAY_LIST_LENGTH = 5;
 
-// Wie SettingsStore der Android-App: Standard 7, 1–14 Tage.
+// Wie SettingsStore der Android-App: Standard 7, 1–14 Tage; Prüfzeit Standard 12:00.
 const DAYS_AHEAD = { def: 7, min: 1, max: 14 };
-function loadDaysAhead() {
+const DEFAULT_PUSH_TIME = "12:00";
+const store = { creds: null, daysAhead: DAYS_AHEAD.def, push: null };
+
+async function loadStore() {
   try {
-    const n = parseInt(localStorage.getItem(DAYS_AHEAD_KEY), 10);
-    return n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
-  } catch {
-    return DAYS_AHEAD.def;
-  }
+    const old = localStorage.getItem("hs.creds");
+    if (old) {
+      await kvSet("creds", JSON.parse(old));
+      const n = parseInt(localStorage.getItem("hs.daysAhead"), 10);
+      if (n) await kvSet("daysAhead", n);
+      localStorage.removeItem("hs.creds");
+      localStorage.removeItem("hs.daysAhead");
+    }
+  } catch { /* kein localStorage */ }
+  const c = await kvGet("creds");
+  store.creds = c?.customerNo && c?.password ? c : null;
+  const n = await kvGet("daysAhead");
+  store.daysAhead = n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
+  store.push = (await kvGet("push")) || null;
 }
+const loadCreds = () => store.creds;
+const loadDaysAhead = () => store.daysAhead;
 function saveDaysAhead(n) {
-  try { localStorage.setItem(DAYS_AHEAD_KEY, String(n)); } catch { /* privater Modus */ }
+  store.daysAhead = n;
+  kvSet("daysAhead", n).catch(() => {});
 }
 
 const $app = document.getElementById("app");
@@ -42,19 +57,14 @@ let loggedInAs = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-function loadCreds() {
-  try {
-    const c = JSON.parse(localStorage.getItem(CREDS_KEY) || "null");
-    return c?.customerNo && c?.password ? c : null;
-  } catch {
-    return null;
-  }
+async function saveCreds(c) {
+  store.creds = c;
+  await kvSet("creds", c).catch(() => {});
 }
-function saveCreds(c) {
-  try { localStorage.setItem(CREDS_KEY, JSON.stringify(c)); } catch { /* privater Modus */ }
-}
-function clearCreds() {
-  try { localStorage.removeItem(CREDS_KEY); } catch { /* egal */ }
+async function clearCreds() {
+  store.creds = null;
+  await kvDel("creds");
+  await kvDel("notified");
 }
 
 /**
@@ -116,7 +126,7 @@ function showSetup(message = "", prefill = {}) {
       showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}` : e.message, creds);
       return;
     }
-    if (remember) saveCreds(creds);
+    if (remember) await saveCreds(creds);
     else sessionCreds = creds;
     showHome();
   });
@@ -367,6 +377,9 @@ function showSettings() {
   $app.innerHTML = `
     <div class="card settings">
       <h2>Einstellungen</h2>
+      <h4>Erinnerung</h4>
+      <div id="push-box">${pushBoxHtml()}</div>
+      <hr>
       <h4>Schulessen (Sunshine)</h4>
       <div>Vorwarnzeit: <span id="days-ahead-val"></span></div>
       <p class="small muted" style="margin:4px 0 8px">So weit schaut die Übersicht voraus, ab morgen gerechnet.</p>
@@ -390,9 +403,11 @@ function showSettings() {
   range.oninput = showVal;
   range.onchange = () => saveDaysAhead(Number(range.value));
   showVal();
-  document.getElementById("b-logout").onclick = () => {
-    if (!confirm("Zugangsdaten auf diesem Gerät löschen?")) return;
-    clearCreds();
+  wirePushBox();
+  document.getElementById("b-logout").onclick = async () => {
+    if (!confirm("Zugangsdaten auf diesem Gerät löschen? Die Erinnerung wird dabei ausgeschaltet.")) return;
+    await pushDisable().catch(() => {});
+    await clearCreds();
     sessionCreds = null;
     client.token = null;
     profile = null;
@@ -401,11 +416,119 @@ function showSettings() {
   };
 }
 
+// ---------------------------------------------------------------- Erinnerung
+
+const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const pushSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+function pushBoxHtml(message = "") {
+  const msg = message ? `<p class="small error">${esc(message)}</p>` : "";
+  if (!pushSupported) {
+    return `<p class="small muted" style="margin:0">${isIos && !standalone
+      ? "Auf dem iPhone gibt es Erinnerungen nur, wenn die Seite über Teilen → „Zum Home-Bildschirm“ installiert ist und von dort geöffnet wird."
+      : "Dieser Browser kann keine Erinnerungen empfangen."}</p>`;
+  }
+  if (!store.push) {
+    return `${msg}<p class="small muted" style="margin:0 0 6px">Werktags zur gewählten Zeit prüft dieses Gerät selbst und meldet sich,
+      wenn etwas offen ist. Unser Server weckt es dafür nur — er kennt weder Zugangsdaten noch Bestellstand.</p>
+      <label for="push-time" style="font-weight:normal">Uhrzeit</label>
+      <input id="push-time" type="time" value="${DEFAULT_PUSH_TIME}" step="300">
+      <div class="row"><button id="b-push-on" class="block">Erinnerung einschalten</button></div>`;
+  }
+  return `${msg}<div>Werktags gegen ${esc(store.push.time)}</div>
+    <label for="push-time" style="font-weight:normal">Uhrzeit ändern</label>
+    <input id="push-time" type="time" value="${esc(store.push.time)}" step="300">
+    <div class="row">
+      <button id="b-push-test" class="text">Jetzt testen</button>
+      <button id="b-push-off" class="danger">Ausschalten</button>
+    </div>`;
+}
+
+function wirePushBox(message = "") {
+  const box = document.getElementById("push-box");
+  if (!box) return;
+  box.innerHTML = pushBoxHtml(message);
+  const on = document.getElementById("b-push-on");
+  const off = document.getElementById("b-push-off");
+  const test = document.getElementById("b-push-test");
+  const time = document.getElementById("push-time");
+  const guard = (fn) => async () => {
+    try {
+      await fn();
+      wirePushBox();
+    } catch (e) {
+      wirePushBox(e.message);
+    }
+  };
+  if (on) on.onclick = guard(() => pushEnable(time.value || DEFAULT_PUSH_TIME));
+  if (off) off.onclick = guard(pushDisable);
+  if (test) test.onclick = guard(pushTest);
+  if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
+}
+
+const b64ToBytes = (b64) => {
+  const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (b64.length % 4)) % 4));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+};
+
+async function api(method, path, body, secret) {
+  const headers = { "Content-Type": "application/json" };
+  if (secret) headers.Authorization = `Bearer ${secret}`;
+  const r = await fetch(`/api${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) throw new Error(`Server: HTTP ${r.status}`);
+  return r.json().catch(() => ({}));
+}
+
+async function pushEnable(time) {
+  if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("Benachrichtigungen sind für diese Seite nicht erlaubt.");
+  const reg = await navigator.serviceWorker.ready;
+  const { publicKey } = await api("GET", "/vapid");
+  const sub = (await reg.pushManager.getSubscription())
+    ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+  const { id, secret } = await api("POST", "/subscriptions", {
+    subscription: sub.toJSON(), time, weekdays: [1, 2, 3, 4, 5], tz: "Europe/Berlin",
+  });
+  store.push = { id, secret, time };
+  await kvSet("push", store.push);
+}
+
+async function pushSetTime(time) {
+  if (!/^\d{2}:\d{2}$/.test(time)) return;
+  await api("PUT", `/subscriptions/${store.push.id}`, { time }, store.push.secret);
+  store.push = { ...store.push, time };
+  await kvSet("push", store.push);
+}
+
+async function pushTest() {
+  await api("POST", `/subscriptions/${store.push.id}/test`, null, store.push.secret);
+}
+
+async function pushDisable() {
+  const p = store.push;
+  store.push = null;
+  await kvDel("push");
+  if (p) await api("DELETE", `/subscriptions/${p.id}`, null, p.secret).catch(() => {});
+  const reg = await navigator.serviceWorker?.getRegistration();
+  await (await reg?.pushManager.getSubscription())?.unsubscribe();
+}
+
 $reload.onclick = () => showHome(true);
 $settings.onclick = showSettings;
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").catch(() => { /* Seite funktioniert auch ohne */ });
+  navigator.serviceWorker.register("sw.js", { type: "module" }).catch(() => { /* Seite funktioniert auch ohne */ });
 }
 
-showHome();
+// Antippen der Erinnerung öffnet ./?order=<Tag> → direkt in die Bestellansicht.
+await loadStore();
+const orderDate = new URLSearchParams(location.search).get("order");
+if (orderDate && /^\d{4}-\d{2}-\d{2}$/.test(orderDate)) {
+  history.replaceState(null, "", "./");
+  if (currentCreds()) {
+    chrome(true);
+    showOrder(orderDate);
+  } else showHome();
+} else showHome();
