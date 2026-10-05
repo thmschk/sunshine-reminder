@@ -555,6 +555,8 @@ class Handler(BaseHTTPRequestHandler):
             with db_lock:
                 if "time" in s and s["time"] != row["time"]:
                     s["offset_min"] = pick_offset(CONN, s["time"])
+                    # Neue Uhrzeit: heute zur neuen Zeit wecken, auch wenn die alte schon dran war.
+                    s["last_sent"] = None
             cols = ", ".join(f"{k} = ?" for k in s)
             with db_lock:
                 if "endpoint" in s:
