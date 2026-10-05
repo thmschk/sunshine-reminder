@@ -1,12 +1,27 @@
 import {
-  AlarmText, De, IbsAuthError, IbsClient, OrderState, STATE_LABEL, WEB_URL,
+  AlarmText, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, WEB_URL,
   addDays, changeKind, collect, evaluate, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 
 // Zugangsdaten liegen nur in diesem Browser. Prototyp: localStorage; für den
 // Service Worker (Push-Prüfung) wandern sie später nach IndexedDB.
 const CREDS_KEY = "hs.creds";
+const DAYS_AHEAD_KEY = "hs.daysAhead";
 const ORDER_WEEKS = 8;
+
+// Wie SettingsStore der Android-App: Standard 7, 1–14 Tage.
+const DAYS_AHEAD = { def: 7, min: 1, max: 14 };
+function loadDaysAhead() {
+  try {
+    const n = parseInt(localStorage.getItem(DAYS_AHEAD_KEY), 10);
+    return n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
+  } catch {
+    return DAYS_AHEAD.def;
+  }
+}
+function saveDaysAhead(n) {
+  try { localStorage.setItem(DAYS_AHEAD_KEY, String(n)); } catch { /* privater Modus */ }
+}
 
 const $app = document.getElementById("app");
 const $reload = document.getElementById("btn-reload");
@@ -114,7 +129,8 @@ async function showHome() {
   const today = todayBerlin();
   let days;
   try {
-    days = await withLogin(creds, () => collect(client, targetDates(today)));
+    const cfg = { ...DEFAULT_CHECK, daysAhead: loadDaysAhead() };
+    days = await withLogin(creds, () => collect(client, targetDates(today, cfg)));
   } catch (e) {
     if (e instanceof IbsAuthError && !client.token) return showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
     $app.innerHTML = `
@@ -306,12 +322,26 @@ function showSettings() {
       <p class="small muted">Kundennummer ${esc(creds?.customerNo || "")} · ${loadCreds() ? "auf diesem Gerät gespeichert" : "nur für diese Sitzung"}</p>
       <div class="row"><button id="b-logout" class="secondary">Abmelden und Zugangsdaten löschen</button></div>
     </div>
+    <div class="card">
+      <h2 style="margin-top:0">Schulessen</h2>
+      <label for="days-ahead">Vorwarnzeit: <span id="days-ahead-val"></span></label>
+      <input id="days-ahead" type="range" min="${DAYS_AHEAD.min}" max="${DAYS_AHEAD.max}" step="1" value="${loadDaysAhead()}" style="width:100%">
+      <p class="small muted">So weit schaut die Übersicht voraus, ab morgen gerechnet.</p>
+    </div>
     <div class="card small muted">
       <p style="margin-top:0"><b>Prototyp.</b> Es gibt noch keine Erinnerung — die Seite prüft nur, wenn sie offen ist.</p>
       <p>Kein offizielles Angebot von Sunshine Catering oder dem Hersteller von IBS5. Die Seite spricht direkt
         aus deinem Browser mit dem Bestellsystem; über unseren Server laufen keine Zugangsdaten.</p>
     </div>`;
   document.getElementById("b-back").onclick = showHome;
+  const range = document.getElementById("days-ahead");
+  const showVal = () => {
+    const n = Number(range.value);
+    document.getElementById("days-ahead-val").textContent = n === 1 ? "1 Tag" : `${n} Tage`;
+  };
+  range.oninput = showVal;
+  range.onchange = () => saveDaysAhead(Number(range.value));
+  showVal();
   document.getElementById("b-logout").onclick = () => {
     clearCreds();
     sessionCreds = null;
