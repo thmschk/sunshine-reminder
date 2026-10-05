@@ -321,3 +321,26 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .srow-details[open] .dd-caret { transform: rotate(180deg); }
 .srow-details .subjects { padding: 0 16px 8px 52px; margin: 0; }
 .danger-row .srow-t { color: var(--error); }
+
+/* Einstellungen im Android-Stil: keine Karten, volle Breite, Werte rechts */
+.s-head { margin: 18px 0 2px -8px; }
+.group-title { text-transform: none; letter-spacing: 0; font-size: .85rem; font-weight: 500; margin: 14px 4px 2px; }
+.group { background: transparent; border-radius: 0; overflow: visible; margin: 0 -16px; }
+.group + .group-title { border-top: 1px solid var(--surface-variant); margin-top: 10px; padding-top: 14px; margin-left: -16px; margin-right: -16px; padding-left: 20px; }
+.group > .srow + .srow, .group > .srow-hint + .srow, .group > .srow + .srow-details, .group > .srow-details + .srow,
+.group > .srow-edit + .srow, .group > .srow-info + .srow { border-top: 0; }
+.srow { padding: 0 20px; min-height: 52px; gap: 20px; }
+.srow-t { font-size: 1rem; }
+.srow-v { color: var(--on-surface-variant); font-size: .95rem; white-space: nowrap; }
+.srow-hint { font-size: .78rem; color: var(--on-surface-variant); padding: 0 20px 6px 62px; margin-top: -10px; }
+.srow-edit { display: flex; align-items: center; gap: 10px; padding: 0 20px 10px 62px; }
+.srow-edit .step { width: 36px; height: 36px; padding: 0; border-radius: 50%; font-size: 1.2rem;
+  background: var(--primary-container); color: var(--on-primary-container); flex: none; }
+.srow-edit .srow-hint { padding: 0; margin: 0 0 0 4px; }
+.srow-details .subjects { padding: 0 20px 8px 62px; }
+.time-value { width: auto; flex: none; font: inherit; font-size: .95rem; color: var(--on-surface-variant);
+  padding: 0; border: 0; background: transparent; text-align: right; }
+.time-value::-webkit-calendar-picker-indicator { display: none; }
+.danger-row .s-ico { fill: var(--error); }
+.foot-note { margin-top: 26px; }
+.srow-details .dd-value { font-weight: normal; font-size: .95rem; }
