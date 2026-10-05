@@ -482,7 +482,18 @@ function wirePushBox(message = "") {
       setTimeout(() => resolve("keine Antwort vom Service Worker (20 s)"), 20000);
     });
     reg.active.postMessage("diag");
-    out.textContent = await answer;
+    // Zum Vergleich dieselbe leere Anfrage aus der Seite: scheitert sie auch, ist
+    // das Netz bzw. die IP gesperrt, nicht der Service Worker.
+    let page;
+    try {
+      const r = await fetch("https://ibs.sunshine-catering.de/ibs5/Login/Login", {
+        method: "POST", body: new URLSearchParams({ identifierValue: "", secretValue: "" }), credentials: "omit", redirect: "manual",
+      });
+      page = `ok   Seite: Login-Endpunkt erreichbar (HTTP ${r.status} ${r.type})`;
+    } catch (e) {
+      page = `FEHL Seite: Login-Endpunkt: ${e.name} ${e.message}`;
+    }
+    out.textContent = `${await answer}\n${page}`;
   };
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
 }
