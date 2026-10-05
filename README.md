@@ -50,6 +50,48 @@ offen ist.
 * Wer mag, holt sich den **Stundenplan aus Sdui** dazu — siehe
   [unten](#stundenplan-aus-sdui-in-der-web-version).
 
+### Architektur
+
+Was nach dem Eingeben der Zugangsdaten passiert:
+
+1. **Anmelden (auf dem Handy).** Die Seite schickt Kundennummer und Passwort
+   direkt vom Handy an IBS5, nicht über unseren Server. IBS5 antwortet mit einem
+   Token für die weiteren Abfragen. Mit „Auf diesem Gerät merken“ legt die Seite
+   die Zugangsdaten verschlüsselt im Speicher des Browsers ab (IndexedDB), mit
+   einem Schlüssel, den der Browser erzeugt und nicht herausgibt.
+2. **Übersicht laden (auf dem Handy).** Mit dem Token fragt die Seite den
+   Speiseplan bei IBS5 ab — auf dem Handy eine Anfrage je Tag, nacheinander mit
+   kurzen Pausen — und zeigt, welche Tage bestellt, offen oder zu spät sind. Ist
+   Sdui eingerichtet, kommt der Stundenplan über unseren Server dazu, der die
+   Anfrage nur an Sdui weiterreicht.
+3. **Erinnerung einschalten (einmalig).** Der Browser erzeugt ein Push-Abo, eine
+   zufällige Adresse beim Push-Dienst von Google bzw. Apple. Die Seite schickt
+   nur dieses Abo und die Uhrzeit an unseren Server.
+4. **Jeden Werktag zur gewählten Zeit** läuft der Weckruf so:
+
+```mermaid
+sequenceDiagram
+    participant S as Unser Server
+    participant P as Push-Dienst (Google/Apple)
+    participant H as Handy (Service Worker)
+    participant I as IBS5
+    S->>P: leerer Weckruf an die Push-Adresse
+    P->>H: zustellen
+    Note over H: liest die verschlüsselten<br/>Zugangsdaten vom Gerät
+    H->>I: anmelden, Speiseplan abfragen
+    I-->>H: Bestellstand
+    Note over H: Meldung „2 Tage offen“<br/>oder still „Alles bestellt ✓“
+```
+
+   Der Server erfährt dabei nicht, ob bestellt ist. Er weiß nur, dass ein
+   Weckruf an eine anonyme Push-Adresse ging.
+5. **Bestellen (nur auf Klick).** Das gewählte Essen landet bei IBS5 im
+   Warenkorb. Abgeschickt wird nur, wenn dort genau die Auswahl liegt, danach
+   prüft die Seite im Speiseplan nach. Auch das läuft direkt vom Handy zu IBS5.
+
+Kundennummer, IBS5-Passwort und Bestellungen erreichen den Server nie. Er sieht
+das Push-Abo mit Uhrzeit und, nur bei Sdui, die durchgereichten Sdui-Anfragen.
+
 ### Einrichten
 
 1. **Installieren**
