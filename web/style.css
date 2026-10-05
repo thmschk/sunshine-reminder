@@ -1,0 +1,135 @@
+:root {
+  --yellow: #F8D800;
+  --berry: #A01850;
+  --bg: #FFFCF0;
+  --card: #FFFFFF;
+  --text: #2A2320;
+  --muted: #6E655F;
+  --line: #E9E2D0;
+  --ok-bg: #E6F4E8;
+  --ok: #1E6B34;
+  --warn-bg: #FFF3C4;
+  --warn: #7A5A00;
+  --bad-bg: #FBE3E8;
+  --bad: #9A1239;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1B1716;
+    --card: #262120;
+    --text: #F3EEE8;
+    --muted: #B1A79F;
+    --line: #3A3331;
+    --ok-bg: #173822;
+    --ok: #8FD6A2;
+    --warn-bg: #3D3210;
+    --warn: #F3D46A;
+    --bad-bg: #431A25;
+    --bad: #F2A0B4;
+    --berry: #E0628F;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 14px 16px 6px;
+}
+header h1 { font-size: 1.2rem; margin: 0; flex: 1; }
+main { max-width: 640px; margin: 0 auto; padding: 8px 16px 40px; }
+
+button, .button {
+  font: inherit;
+  border: 0;
+  border-radius: 10px;
+  padding: 11px 16px;
+  background: var(--berry);
+  color: #fff;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+button.secondary, .button.secondary { background: transparent; color: var(--berry); border: 1px solid var(--line); }
+button.icon { background: transparent; color: var(--text); font-size: 1.35rem; padding: 4px 8px; }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin: 12px 0;
+}
+.status.ok { background: var(--ok-bg); border-color: transparent; color: var(--ok); }
+.status.warn { background: var(--warn-bg); border-color: transparent; color: var(--warn); }
+.status.bad { background: var(--bad-bg); border-color: transparent; color: var(--bad); }
+.status h2 { margin: 0 0 4px; font-size: 1.15rem; }
+.status p { margin: 2px 0; }
+
+h3 { font-size: .8rem; letter-spacing: .06em; color: var(--muted); margin: 22px 0 6px; }
+.muted { color: var(--muted); }
+.small { font-size: .88rem; }
+.error { color: var(--bad); }
+
+.days { list-style: none; margin: 0; padding: 0; }
+.days li {
+  display: grid;
+  grid-template-columns: 4.6rem 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.days li:last-child { border-bottom: 0; }
+.days .date { font-weight: 600; }
+.days .dish { overflow-wrap: anywhere; }
+.badge { font-size: .8rem; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
+.badge.ORDERED { background: var(--ok-bg); color: var(--ok); }
+.badge.NOT_ORDERED, .badge.IN_CART { background: var(--warn-bg); color: var(--warn); }
+.badge.DEADLINE_PASSED, .badge.UNKNOWN { background: var(--bad-bg); color: var(--bad); }
+.badge.NO_OFFER { color: var(--muted); }
+
+label { display: block; margin: 12px 0 4px; font-weight: 600; }
+input[type=text], input[type=password], input[type=number] {
+  width: 100%;
+  font: inherit;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+}
+.check { display: flex; gap: 8px; align-items: center; font-weight: normal; }
+
+fieldset { border: 0; padding: 0; margin: 0; }
+.day-order { scroll-margin-top: 12px; }
+.day-order legend { font-weight: 700; margin-bottom: 4px; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; font-weight: normal; margin: 0; }
+.choice input { margin-top: 4px; }
+.choice.locked { color: var(--muted); }
+.changed { outline: 2px solid var(--berry); outline-offset: 2px; }
+.sticky {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+}
+pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }

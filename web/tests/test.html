@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ibs.js Tests</title>
+<!-- Vom Repo-Wurzelverzeichnis aus servieren (python3 -m http.server), damit die
+     Fixtures aus android/core/src/test/resources erreichbar sind. -->
+<pre id="out">läuft</pre>
+<script type="module">
+import {
+  parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin,
+} from "../ibs.js";
+
+const results = [];
+const test = async (name, fn) => {
+  try { await fn(); results.push(`ok   ${name}`); } catch (e) { results.push(`FAIL ${name}: ${e.message}`); }
+};
+const eq = (a, b, what = "") => {
+  if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${what} erwartet ${JSON.stringify(b)}, war ${JSON.stringify(a)}`);
+};
+const throws = (fn, what) => { try { fn(); } catch { return; } throw new Error(`${what}: kein Fehler`); };
+
+const res = (f) => fetch(`../../android/core/src/test/resources/${f}`).then((r) => r.text());
+const kw35 = await res("weekplan_kw35.html");
+const kw42 = await res("weekplan_kw42_order.html");
+
+// Wie patchDay in WeekplanParserTest.kt: Ersetzungen nur in den Tags des Tages.
+const patchDay = (html, iso, ...reps) =>
+  html.replace(new RegExp(`<[^>]*menu_quantity_${iso}_[\\s\\S]*?>`, "g"), (tag) => reps.reduce((t, [a, b]) => t.split(a).join(b), tag));
+const withoutOrders = (html, iso) =>
+  patchDay(html, iso, ['data-order-status="2"', 'data-order-status="0"'], ['data-quantity-ordered="1"', 'data-quantity-ordered=""']);
+
+await test("echtes Fixture: alle Tage bestellt", () => {
+  const p = parseWeekplan(kw35);
+  eq(p.displayedWeek, 35, "KW");
+  eq(p.days.size, 5, "Tage");
+  eq([...p.days.values()].every((d) => d.state === OrderState.ORDERED), true, "alle bestellt");
+});
+await test("vergessen, aber noch bestellbar", () => {
+  const d = parseWeekplan(withoutOrders(kw35, "2026-08-27")).days.get("2026-08-27");
+  eq(d.state, OrderState.NOT_ORDERED); eq(d.orderable, true);
+});
+await test("vergessen nach Bestellschluss", () => {
+  eq(parseWeekplan(withoutOrders(kw35, "2026-08-24")).days.get("2026-08-24").state, OrderState.DEADLINE_PASSED);
+});
+await test("im Warenkorb liegengeblieben", () => {
+  const html = patchDay(withoutOrders(kw35, "2026-08-27"), "2026-08-27", ['data-quantity-in-shopping-cart=""', 'data-quantity-in-shopping-cart="1"']);
+  eq(parseWeekplan(html).days.get("2026-08-27").state, OrderState.IN_CART);
+});
+await test("unbekannter Status geht nie durch", () => {
+  const html = patchDay(withoutOrders(kw35, "2026-08-27"), "2026-08-27", ['data-order-status="0"', 'data-order-status="7"']);
+  eq(parseWeekplan(html).days.get("2026-08-27").state, OrderState.UNKNOWN);
+});
+await test("leere Ferienwoche ist kein Fehler", () => {
+  eq(parseWeekplan('<div id="weekplan"><div>KW 30</div></div>').days.size, 0);
+});
+await test("Fehlerseite wirft", () => {
+  throws(() => parseWeekplan("<html><body><p>Sitzung abgelaufen</p></body></html>"), "Fehlerseite");
+  throws(() => parseWeekplan('<div class="login-container">Anmelden</div>'), "Login");
+});
+await test("KW 42: Bestell-IDs, Kaltverpflegung, Warenkorb, Umlaute", () => {
+  const p = parseWeekplan(kw42);
+  eq(p.displayedWeek, 42, "KW");
+  const mon = p.days.get("2026-10-12");
+  const e = mon.entries[0];
+  eq([e.customerId, e.menuGroupId, e.menuLineId, e.selectable], ["1000", "16", "827", true], "Linie 827");
+  eq(mon.entries.find((x) => x.name === "Kaltverpflegung").selectable, false, "Kaltverpflegung");
+  eq(mon.entries[1].name, "Gemüseeintopf", "Umlaut");
+  eq(p.days.get("2026-10-13").state, OrderState.IN_CART, "Di Warenkorb");
+});
+await test("ISO-Kalenderwoche über Jahresgrenzen", () => {
+  eq(isoWeek("2026-08-27"), [2026, 35]);
+  eq(isoWeek("2026-01-01"), [2026, 1]);
+  eq(isoWeek("2027-01-01"), [2026, 53]);
+  eq(isoWeek("2024-12-30"), [2025, 1]);
+});
+await test("Zieltage: morgen bis +9, nur Mo–Fr", () => {
+  eq(targetDates("2026-10-02"), ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"]);
+});
+await test("Datum und Profil", () => {
+  eq(De.long("2026-08-27"), "Donnerstag, 27.08.2026");
+  eq(new Profile("Muster, Mia", "").firstName, "Mia");
+  eq(/^\d{4}-\d{2}-\d{2}$/.test(todayBerlin()), true, "todayBerlin");
+  eq(CartResponse.from({ MessageStatus: "OK", TotalItemsInCart: 2 }).totalItemsInCart, 2, "PascalCase");
+  eq(CartResponse.from({ messageStatus: "Error", message: "x" }).ok, false, "Fehlerstatus");
+});
+
+// Bestellen gegen einen Schein-Client, wie OrderPlacerTest.kt.
+class FakeClient {
+  constructor({ extraInCart = 0, failSubmit = false } = {}) {
+    Object.assign(this, { extraInCart, failSubmit, cart: [], calls: [], submitted: false });
+  }
+  total() { return this.cart.length + this.extraInCart; }
+  async clearCart(c, date, g) { this.calls.push(`clear ${date}`); this.cart = this.cart.filter((x) => x.date !== date); return new CartResponse(true, null, this.total()); }
+  async addToCart(e) {
+    this.calls.push(`add ${e.date} ${e.menuLineId}`);
+    this.cart.push(e);
+    if (this.switchFrom?.[e.date]) this.cart.push({ date: e.date, cancel: true });
+    return new CartResponse(true, null, this.total());
+  }
+  async cancelInCart(e) { this.calls.push(`cancel ${e.date}`); this.cart.push(e); return new CartResponse(true, null, this.total()); }
+  async submitCart() { this.calls.push("submit"); this.submitted = !this.failSubmit; return new CartResponse(!this.failSubmit, this.failSubmit ? "nein" : null, 0); }
+}
+const p42 = parseWeekplan(kw42);
+const line = (date, id) => p42.days.get(date).entries.find((e) => e.menuLineId === id);
+const orderedAfter = (date, id) => async () => [{ date, entries: [{ isOrdered: true, menuLineId: id }] }];
+
+await test("Bestellen: abschicken und nachprüfen", async () => {
+  const c = new FakeClient();
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "done"); eq(c.submitted, true);
+});
+await test("Bestellen: Fremdes im Warenkorb → nichts abgeschickt", async () => {
+  const c = new FakeClient({ extraInCart: 1 });
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+});
+await test("Bestellen: Probelauf schickt nichts ab", async () => {
+  const c = new FakeClient();
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { dryRun: true, reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "dryrun"); eq(c.calls.includes("submit"), false, "submit"); eq(c.cart.length, 0, "Warenkorb geleert");
+});
+await test("Umbestellen erwartet zwei Einträge", async () => {
+  const c = new FakeClient();
+  c.switchFrom = { "2026-10-12": true };
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: line("2026-10-12", "828"), target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "done");
+});
+await test("Kaltverpflegung lässt sich nicht bestellen", async () => {
+  const c = new FakeClient();
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "831") }], { reload: orderedAfter("2026-10-12", "831") });
+  eq(r.kind, "aborted"); eq(c.calls.length, 0, "keine Aufrufe");
+});
+await test("Nachprüfung findet falsche Linie", async () => {
+  const c = new FakeClient();
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "828") });
+  eq(r.kind, "unconfirmed");
+});
+
+const failed = results.filter((r) => r.startsWith("FAIL")).length;
+document.getElementById("out").textContent = `${results.join("\n")}\n\n${failed ? `${failed} FEHLGESCHLAGEN` : "ALLE OK"}`;
+</script>
