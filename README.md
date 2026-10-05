@@ -39,11 +39,8 @@ offen ist.
   die Uhrzeit.
 * Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
   Schlüssel, den der Browser erzeugt und nicht herausgibt.
-* Wer mag, holt sich den **Stundenplan aus Sdui** dazu (Zeitleiste je Tag,
-  Erinnerung an gewählte Fächer am Vortag). Sdui lässt Webseiten nicht direkt
-  zu, deshalb laufen Anmeldung und Abruf über den Server, der sie nur
-  durchreicht und nichts speichert. Das Sdui-Passwort geht dabei einmal
-  hindurch. Auf dem Gerät bleibt nur ein Zugangsschlüssel, der ein Jahr gilt.
+* Wer mag, holt sich den **Stundenplan aus Sdui** dazu — siehe
+  [unten](#stundenplan-aus-sdui-in-der-web-version).
 
 ### Einrichten
 
@@ -54,12 +51,36 @@ offen ist.
 3. **Anmelden** mit Kundennummer und Passwort von IBS5.
 4. **Erinnerung einschalten:** ⚙ → Uhrzeit wählen → „Erinnerung einschalten“.
 5. **Ausprobieren:** ⚙ → „Jetzt testen“.
+6. **Stundenplan (freiwillig):** ⚙ → „Stundenplan (Sdui)“ → „Einrichten …“,
+   dann Schule, E-Mail und Passwort von Sdui. Danach unter „Erinnern an“ die
+   Fächer wählen, an die am Vortag erinnert werden soll.
 
 > [!NOTE]
 > Auf dem **iPhone** gibt es Erinnerungen nur in der installierten Fassung,
 > nicht im normalen Safari-Tab. Auf **Android** müssen Benachrichtigungen für
 > Chrome selbst erlaubt sein (Einstellungen → Apps → Chrome →
 > Benachrichtigungen), sonst fragt Chrome gar nicht erst.
+
+### Stundenplan aus Sdui in der Web-Version
+
+Mit eingerichtetem Sdui bekommt jeder Tag auf der Startseite eine Zeitleiste:
+eine Zelle je Schulstunde mit dem Fachkürzel, gewählte Fächer dunkel,
+Freistunden als Lücke. Steht am nächsten Schultag ein gewähltes Fach an, kommt
+nach der Essenserinnerung eine zweite Meldung, etwa „Morgen Sport — 1.–2. Stunde“.
+
+Anders als IBS5 lässt Sdui keine Zugriffe von fremden Webseiten zu. Anmeldung
+und Abruf laufen deshalb über den Server, der sie nur durchreicht:
+
+| | |
+|---|---|
+| Was durchläuft | beim Einrichten einmal E-Mail und Passwort, danach bei jedem Abruf der Zugangsschlüssel (Token) und der Stundenplan |
+| Was der Server speichert | nichts, auch keine Protokolle |
+| Was auf dem Gerät bleibt | nur der Token, verschlüsselt — er gilt ein Jahr, danach einmal neu verbinden. Das Passwort wird nirgends gespeichert. |
+| Was durchgelassen wird | nur Anmeldung, eigenes Konto, Kind und Stundenplan, höchstens 20 Aufrufe in 10 Minuten je Absender |
+| Wie oft abgerufen wird | höchstens alle sechs Stunden, der Plan liegt dazwischen auf dem Gerät |
+
+Wer Sdui ganz ohne fremden Server nutzen will, nimmt die Android-App: Sie fragt
+Sdui direkt.
 
 **Grenzen:** Handy-Browsern liefert IBS5 statt des Wochenplans nur eine
 Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
@@ -339,6 +360,12 @@ Web-Version übernimmt diese Regel. CORS gibt IBS5 frei (`Allow-Origin: *`);
 der Preflight auf `/Login/Login` ohne `Accept-Language` bekommt allerdings 302,
 deshalb schickt der Login kein `X-Requested-With` und bleibt eine einfache
 Anfrage ohne Preflight.
+
+Sdui gibt CORS nur für `https://sdui.app` frei. Der Push-Dienst reicht unter
+`/api/sdui/` genau diese Aufrufe an `api.sdui.app/v1` durch:
+`POST auth/login`, `GET users/self`, `GET users/<id>` und
+`GET timetables/users/<id>/timetable?begins_at=&ends_at=`. Der Login liefert
+einen JWT mit `expires_in` von 365 Tagen.
 
 IBS5 ist eine ASP.NET-Anwendung mit einer kleinen JSON-/Bearer-Token-API, die
 das eigene Web-Frontend benutzt. Dieses Projekt spricht dieselbe:
