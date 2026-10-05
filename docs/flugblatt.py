@@ -35,20 +35,21 @@ def block(t, f, fill, lh, gap=0, maxw=W - 2*M, x=M):
 d.text((M, y), "Och nö, Schulessen vergessen!", font=font("Bold", 60), fill=BERRY); y += 76
 d.text((M, y), "Muss doch nicht sein …", font=font("Light", 46), fill=INK); y += 86
 
-block("Eine kleine App sieht werktags von allein nach, ob für die nächsten "
-      "Tage etwas bestellt ist — und meldet sich nur, wenn noch etwas offen ist.",
+block("immerhin.satt sieht werktags von allein nach, ob für die nächsten Tage "
+      "etwas bestellt ist, meldet sich, wenn noch etwas offen ist — und bestellt "
+      "direkt aus der App.",
       font("Regular", 33), INK, 46, gap=24)
-block("Kostenlos, ohne Werbung, ohne Server: Geprüft wird auf dem Handy, die "
-      "Zugangsdaten verlassen es nur Richtung Bestellsystem.",
+block("Kostenlos, ohne Werbung, für iPhone und Android. Die Zugangsdaten bleiben "
+      "verschlüsselt auf dem Handy und gehen nur ans Bestellsystem.",
       font("Regular", 33), GREY, 46, gap=34)
 
 # --- Screenshots, auf den Inhalt beschnitten ------------------------------
 sh = 505
 top = y
-# Ausschnitt je Bild: Startseite bis unter "Alle bestellbaren Tage", Einstellungen bis unter den Dialog.
+# Bilder der Web-App (412 px breit, doppelte Auflösung), Startseite und Bestellansicht.
 for path, x, box in (
-    ("screenshot-status.png", M + 70, (0, 120, 1080, 1700)),
-    ("screenshot-einstellungen.png", W - M - 70 - 340, (0, 120, 1080, 2060)),
+    ("screenshot-web-start.png", M + 70, (0, 40, 824, 1380)),
+    ("screenshot-web-bestellen.png", W - M - 70 - 310, (0, 40, 824, 1380)),
 ):
     s = Image.open(HERE / path).convert("RGB").crop(box)
     s = s.resize((int(s.width * sh / s.height), sh), Image.LANCZOS)
@@ -57,38 +58,29 @@ for path, x, box in (
 y = top + sh + 48
 
 # --- Kasten mit QR --------------------------------------------------------
-# Der QR zeigt direkt auf die Datei, nicht auf die Projektseite: Wer den Zettel
-# in der Hand haelt, will die App, nicht den Quelltext. Die Warnung beim
-# Installieren steht darunter, die Anleitung ist also dabei.
-APK = ("https://github.com/thmschk/sunshine-reminder"
-       "/releases/latest/download/sunshine-reminder.apk")
+URL = "https://sunshine.thomschke.info"
 bh = 318
 d.rounded_rectangle([M, y, W - M, y + bh], radius=24,
                     fill=(255, 248, 214), outline=YELLOW, width=4)
 qr = qrcode.QRCode(border=1, box_size=10, error_correction=qrcode.constants.ERROR_CORRECT_M)
-qr.add_data(APK); qr.make(fit=True)
+qr.add_data(URL); qr.make(fit=True)
 qs = 240
 qx, qy = M + 28, y + (bh - qs)//2
 im.paste(qr.make_image().convert("RGB").resize((qs, qs), Image.NEAREST), (qx, qy))
-print(f"QR: {qs}px bei {qx},{qy} -> {APK}")
+print(f"QR: {qs}px bei {qx},{qy} -> {URL}")
 
-tx, ty = M + 28 + qs + 34, y + 40
-d.text((tx, ty), "App herunterladen:", font=font("Medium", 31), fill=INK); ty += 48
-for line in ("github.com/thmschk/sunshine-reminder/",
-             "releases/latest/download/",
-             "sunshine-reminder.apk"):
-    d.text((tx, ty), line, font=font("Bold", 25), fill=BERRY); ty += 34
-ty += 16
-d.text((tx, ty), "Nur für Android — nicht fürs iPhone.", font=font("Regular", 26), fill=GREY)
-ty += 38
-d.text((tx, ty), "Quelltext: github.com/thmschk/sunshine-reminder",
-       font=font("Regular", 22), fill=GREY)
+tx, ty = M + 28 + qs + 34, y + 36
+d.text((tx, ty), "Im Handy öffnen:", font=font("Medium", 31), fill=INK); ty += 46
+d.text((tx, ty), "sunshine.thomschke.info", font=font("Bold", 36), fill=BERRY); ty += 62
+d.text((tx, ty), "Dann zum Startbildschirm hinzufügen:", font=font("Medium", 25), fill=INK); ty += 38
+for line in ("iPhone: Teilen, dann „Zum Home-Bildschirm“",
+             "Android: Menü (drei Punkte), „App installieren“"):
+    d.text((tx, ty), line, font=font("Regular", 25), fill=GREY); ty += 34
 y += bh + 30
 
-block("Beim Installieren warnt Android, es kenne den Entwickler nicht. Das ist "
-      "kein Fund, sondern heißt nur: Diese App kennt Google noch nicht. Der große "
-      "Knopf bricht ab — weiter geht es über die kleine Zeile „Trotzdem "
-      "installieren“.",
+block("Anmelden mit Kundennummer und Passwort des Bestellsystems, beim Zahnrad die "
+      "Uhrzeit für die Erinnerung wählen — fertig. Zum Wecken nutzt die App einen "
+      "kleinen Server, der weder Zugangsdaten noch Bestellungen sieht.",
       font("Regular", 28), INK, 40)
 
 # --- Fusszeile ------------------------------------------------------------
