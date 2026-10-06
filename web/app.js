@@ -446,6 +446,13 @@ async function showOrder(focusDate = null) {
     <form id="f-order"></form>`;
   document.getElementById("b-back").onclick = () => showHome();
   const $progress = document.getElementById("o-progress");
+  // Unsichtbar statt ausgeblendet: verschwindet der Balken, darf nichts darunter verrutschen.
+  const working = (on) => { $progress.style.visibility = on ? "" : "hidden"; };
+  // Wer selbst scrollt, wird nicht mehr zum angetippten Tag zurückgeholt.
+  let userScrolled = false;
+  for (const ev of ["wheel", "touchmove", "keydown"]) {
+    addEventListener(ev, () => { userScrolled = true; }, { once: true, passive: true });
+  }
   const $result = document.getElementById("o-result");
   const form = document.getElementById("f-order");
   const setResult = (text, cls = "") => {
@@ -487,7 +494,7 @@ async function showOrder(focusDate = null) {
    * (Ein einzelner Feiertag hält das nicht auf.)
    */
   async function load() {
-    $progress.hidden = false;
+    working(true);
     form.innerHTML = `<div id="o-days"></div><p id="o-more" class="small muted"></p>
       <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
     const $days = document.getElementById("o-days");
@@ -517,15 +524,18 @@ async function showOrder(focusDate = null) {
         refresh();
         if (focusDate && shown.some((d) => d.date === focusDate)) {
           document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
-          focusDate = null;
         }
       }
     } catch (e) {
       error = e;
     }
     if (my !== viewSeq) return;
-    $progress.hidden = true;
+    working(false);
     $more.remove();
+    // Solange darunter noch Wochen fehlten, konnte der Tag nicht ganz nach oben;
+    // jetzt steht die Seite und er wird genau ausgerichtet.
+    if (focusDate && !userScrolled) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start" });
+    focusDate = null;
     if (error) setResult(error.message, "error");
     if (!days.length) {
       $days.innerHTML = error ? "" : `<p>Keine Tage, die sich noch ändern lassen.</p>`;
@@ -569,12 +579,12 @@ async function showOrder(focusDate = null) {
     if (!changes.length || !(await confirmDialog("Verbindlich abschicken?", changes.map(describe)))) return;
 
     document.getElementById("b-submit").disabled = true;
-    $progress.hidden = false;
+    working(true);
     const previouslyInCart = all.flatMap((d) => d.entries.filter((e) => e.quantityInCart === "1" && e.selectable));
     const outcome = await withLogin(creds, () =>
       placeOrders(client, changes, { previouslyInCart, reload: (ds) => collect(client, ds, { fresh: true }) }),
     ).catch((e) => ({ kind: "aborted", reason: e.message }));
-    $progress.hidden = true;
+    working(false);
 
     if (outcome.kind === "done") setResult(`Erledigt:\n${outcome.changes.map(describe).join("\n")}`, "ok");
     else if (outcome.kind === "aborted") setResult(`Nichts abgeschickt: ${outcome.reason}`, "error");
