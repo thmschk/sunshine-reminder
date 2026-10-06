@@ -60,8 +60,10 @@ Was nach dem Eingeben der Zugangsdaten passiert:
    die Zugangsdaten verschlüsselt im Speicher des Browsers ab (IndexedDB), mit
    einem Schlüssel, den der Browser erzeugt und nicht herausgibt.
 2. **Übersicht laden (auf dem Handy).** Mit dem Token fragt die Seite den
-   Speiseplan bei IBS5 ab — auf dem Handy eine Anfrage je Tag, nacheinander mit
-   kurzen Pausen — und zeigt, welche Tage bestellt, offen oder zu spät sind. Ist
+   Speiseplan bei IBS5 ab — auf dem Handy erst die Bestellhistorie für alle
+   bestellten Tage auf einmal, dann nur für die übrigen Tage je eine Anfrage,
+   nacheinander mit kurzen Pausen — und zeigt, welche Tage bestellt, offen oder
+   zu spät sind. Ist
    Sdui eingerichtet, kommt der Stundenplan über unseren Server dazu, der die
    Anfrage nur an Sdui weiterreicht.
 3. **Erinnerung einschalten (einmalig).** Der Browser erzeugt ein Push-Abo, eine
@@ -163,8 +165,11 @@ Name, Kundennummer, Bestellungen und das IBS5-Passwort erreichen den Server nie.
 **Grenzen:** Handy-Browsern liefert IBS5 statt des Wochenplans nur eine
 Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
 quittiert IBS5 mit einer Sperre der IP-Adresse (dann geht auch die normale
-Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Tage
-nacheinander mit Pausen und etwas Zufall, drei Minuten zwischengespeichert, die
+Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Übersicht
+und Erinnerung holen die bestellten Tage mit einer Anfrage aus der
+Bestellhistorie und laden nur Tage ohne Bestellung einzeln, die Bestellansicht
+braucht alle Tage einzeln. Tage nacheinander mit Pausen und etwas Zufall, drei
+Minuten zwischengespeichert, die
 Erinnerung höchstens die nächsten fünf Schultage, insgesamt höchstens 150
 Anfragen je Stunde und Gerät. Kommt beim Anmelden gar keine Antwort (so sieht
 die Sperre im Browser aus) oder ein 429, ruht die App drei Stunden und sagt das,
@@ -485,7 +490,15 @@ POST /ibs5/Login/Login
   -> {"token": …, "name1": …, "institutionName1": …}
 
 GET  /ibs5/Mealplan/Weekplan?year=&week=     Authorization: Bearer <token>
+GET  /ibs5/Account/Orderhistory?from=&to=&search=
 ```
+
+Die Bestellhistorie filtert `from`/`to` nach **Bestelldatum**, nicht nach
+Liefertag. Ab- und Umbestellungen stehen als eigene Zeilen mit Menge −1, auch
+„Bestellungen übertragen“ des Caterers (z.B. Umbuchung auf Kaltverpflegung);
+saldiert je Liefertag und Menülinie ergibt sich der Bestellstand. Desktop
+bekommt eine Tabelle (`id="order-history-table"`), Handy-Browser Karten
+(`class="rechnung"`) mit denselben Feldern. CORS ist freigegeben.
 
 Bestellt wird wie auf der Webseite in zwei Schritten — erst der Warenkorb, dann
 das Abschicken des **ganzen** Warenkorbs:

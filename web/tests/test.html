@@ -7,6 +7,7 @@
 <script type="module">
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
+  parseOrderHistory,
 } from "../ibs.js";
 
 const results = [];
@@ -124,6 +125,46 @@ await test("collect bricht ab, wenn die Tagesansicht einen anderen Tag zeigt", a
   let err = null;
   try { await collect(fake, ["2026-10-13"]); } catch (e) { err = e; }
   eq(!!err && /geliefert wurde/.test(err.message), true, "Fehler");
+});
+
+const histDesktop = await fetch("orderhistory_desktop.html").then((r) => r.text());
+const histMobile = await fetch("orderhistory_mobile.html").then((r) => r.text());
+const histSummary = (m) => [...m].sort().map(([d, ls]) => [d, ls.map((l) => `${l.line}×${l.quantity}`).sort()]);
+await test("Bestellhistorie: Ab- und Umbestellungen saldiert, Desktop wie Handy", () => {
+  const want = [
+    ["2026-10-02", ["M2×1"]],
+    ["2026-10-05", ["M1×1"]],
+    ["2026-10-06", ["KV×1"]], // Burger vom Caterer auf Kaltverpflegung umgebucht
+    ["2026-10-19", ["M2×1"]],
+  ];
+  eq(histSummary(parseOrderHistory(histDesktop)), want, "Desktop");
+  eq(histSummary(parseOrderHistory(histMobile)), want, "Handy");
+});
+await test("Bestellhistorie: Fehlerseite wirft, leere Historie nicht", () => {
+  throws(() => parseOrderHistory("<html><body>Sitzung abgelaufen</body></html>"), "Fehlerseite");
+  eq(parseOrderHistory('<table id="order-history-table"><tbody></tbody></table>').size, 0);
+});
+await test("collect mit history: Tagesansicht nur für Tage ohne Bestellung", async () => {
+  const asked = [];
+  const fake = {
+    dayView: true,
+    async orderHistory() { return histMobile; },
+    async dayplan(d) { asked.push(d); return '<li class="plan" id="dayplan"></li>'; },
+  };
+  const days = await collect(fake, ["2026-10-05", "2026-10-06", "2026-10-07"], { history: true });
+  eq(asked, ["2026-10-07"], "nur offener Tag");
+  eq(days.map((d) => d.state), [OrderState.ORDERED, OrderState.ORDERED, OrderState.NO_OFFER], "Zustände");
+  eq(days[0].orderedItems, ["Spiralnudeln"], "Gericht kurz");
+});
+await test("collect mit history: unlesbare Historie → je Tag", async () => {
+  const asked = [];
+  const fake = {
+    dayView: true,
+    async orderHistory() { return "<html>Fehler</html>"; },
+    async dayplan(d) { asked.push(d); return '<li class="plan" id="dayplan"></li>'; },
+  };
+  await collect(fake, ["2026-10-05", "2026-10-06"], { history: true });
+  eq(asked, ["2026-10-05", "2026-10-06"], "je Tag");
 });
 
 // Sdui: Zeitzone, Kürzel, Zusammenfassen, Zeitleiste — gegen die Testdaten der App.

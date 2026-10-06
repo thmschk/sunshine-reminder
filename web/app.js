@@ -229,7 +229,7 @@ async function showHome(fresh = false) {
 
   let days;
   try {
-    days = await withLogin(creds, () => collect(client, dates, { fresh, onProgress: setProgress }));
+    days = await withLogin(creds, () => collect(client, dates, { fresh, onProgress: setProgress, history: true }));
   } catch (e) {
     if (my !== viewSeq) return;
     if (e instanceof IbsAuthError && !client.token) return showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);

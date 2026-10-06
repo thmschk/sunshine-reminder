@@ -119,6 +119,11 @@ export class IbsClient {
     return this.#send(`/Mealplan/WeekplanMobile?date=${date}`, { method: "GET" });
   }
 
+  /** Bestellhistorie; from/to filtern nach Bestelldatum, nicht nach Liefertag. */
+  orderHistory(from, to) {
+    return this.#send(`/Account/Orderhistory?from=${from}&to=${to}&search=`, { method: "GET" });
+  }
+
   async cart() {
     return CartResponse.from(this.#json(await this.#send("/Mealplan/UpdateBalanceAndCart", { method: "GET" })));
   }
@@ -386,6 +391,76 @@ export function parseWeekplan(html) {
   return { days, displayedWeek: view === "week" && kw ? parseInt(kw[1], 10) : null, view };
 }
 
+// ---------------------------------------------------------------- Bestellhistorie
+
+const cellText = (s) => decode(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+const isoFromDe = (s) => {
+  const d = DE_DATE.exec(s);
+  return d ? `${d[3]}-${d[2]}-${d[1]}` : null;
+};
+
+/**
+ * Bestellhistorie → bestellte Linien je Liefertag. Ab- und Umbestellungen stehen
+ * dort als eigene Zeilen mit Menge −1 (auch „Bestellungen übertragen“ des
+ * Caterers), deshalb wird je Liefertag und Menülinie saldiert. Desktop liefert
+ * eine Tabelle, Handy-Browser Karten (class="rechnung") mit denselben Feldern.
+ * @returns {Map<string, {line: string, name: string, quantity: number}[]>} nur Linien mit Saldo > 0
+ */
+export function parseOrderHistory(html) {
+  if (!/id\s*=\s*["']order-history-table["']|id\s*=\s*["']account-subpage["'][^>]*value\s*=\s*["']order_history["']/.test(html)) {
+    throw new ParserError("Antwort enthält keine Bestellhistorie — vermutlich eine Fehler- oder Login-Seite.");
+  }
+  const body = html.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  const rows = [];
+  for (const tr of body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const c = [...tr[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => cellText(m[1]));
+    if (c.length >= 4) rows.push({ delivery: c[1], quantity: c[2], text: c[3] });
+  }
+  for (const card of body.split(/class\s*=\s*["']rechnung["']/).slice(1)) {
+    const spans = [...card.matchAll(/<span\b[^>]*>([\s\S]*?)<\/span>/gi)].map((m) => cellText(m[1]));
+    const field = (label) => spans[spans.indexOf(label) + 1] ?? "";
+    rows.push({ delivery: field("Lieferdatum:"), quantity: field("Menge:"), text: cellText(/<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(card)?.[1] ?? "") });
+  }
+
+  const net = new Map();
+  for (const r of rows) {
+    const date = isoFromDe(r.delivery);
+    const quantity = parseFloat(r.quantity.replace(",", "."));
+    if (!date || !Number.isFinite(quantity)) continue;
+    const sep = r.text.indexOf(" - ");
+    const line = (sep < 0 ? r.text : r.text.slice(0, sep)).split(" ")[0];
+    const key = `${date}|${line}`;
+    const prev = net.get(key);
+    net.set(key, { date, line, name: prev?.name || (sep < 0 ? r.text : r.text.slice(sep + 3)), quantity: (prev?.quantity || 0) + quantity });
+  }
+  const out = new Map();
+  for (const { date, line, name, quantity } of net.values()) {
+    if (quantity <= 0) continue;
+    if (!out.has(date)) out.set(date, []);
+    out.get(date).push({ line, name, quantity });
+  }
+  return out;
+}
+
+/** "Dinkel-Makkaroni(BIO), Tomatensoße, …" → "Dinkel-Makkaroni", wie data-name im Wochenplan. */
+const shortDish = (name) => name.split(/[(,]/)[0].trim() || name;
+
+/** Bestellter Tag aus der Historie; ohne Bestell-IDs, zum Ändern lädt die Bestellansicht den Tag selbst. */
+function historyDay(date, lines) {
+  return new DayStatus(date, OrderState.ORDERED, lines.map((l) => new MenuEntry({
+    date,
+    name: shortDish(l.name),
+    status: STATUS_ORDERED,
+    quantityOrdered: String(l.quantity),
+    quantityInCart: "",
+    orderable: false,
+    isKv: KV_NAME.test(l.line) || KV_NAME.test(l.name),
+    menuGroupId: "",
+    menuLineId: "",
+    customerId: "",
+  })));
+}
+
 // ---------------------------------------------------------------- Prüfung
 
 export const DEFAULT_CHECK = Object.freeze({ daysAhead: 9, weekdays: [1, 2, 3, 4, 5], includeToday: false });
@@ -402,9 +477,13 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
 /**
  * Jede betroffene Kalenderwoche einmal laden; Login muss vorher erfolgt sein.
  * Liefert IBS5 statt der Woche eine Tagesansicht (Handy), wird je Tag geladen.
+ * Mit history holt sich die Tagesansicht die bestellten Tage vorab gesammelt aus
+ * der Bestellhistorie; nur für die Übersicht, denn solche Tage tragen keine
+ * Bestell-IDs.
  */
-export async function collect(client, dates, { fresh = false, onProgress } = {}) {
-  if (client.dayView) return collectByDay(client, dates, fresh, onProgress);
+export async function collect(client, dates, { fresh = false, onProgress, history = false } = {}) {
+  const byDay = () => (history ? collectByHistory : collectByDay)(client, dates, fresh, onProgress);
+  if (client.dayView) return byDay();
   const weeks = new Map();
   for (const d of dates) {
     const [y, w] = isoWeek(d);
@@ -418,7 +497,7 @@ export async function collect(client, dates, { fresh = false, onProgress } = {})
     const plan = parseWeekplan(await client.weekplan(y, w));
     if (plan.view === "day") {
       client.dayView = true;
-      return collectByDay(client, dates, fresh, onProgress);
+      return byDay();
     }
     if (plan.displayedWeek != null && plan.displayedWeek !== w) {
       throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${plan.displayedWeek}`);
@@ -457,6 +536,29 @@ async function collectByDay(client, dates, fresh, onProgress) {
     out.push(day);
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Bestellt wird höchstens wenige Wochen im Voraus; die Historie filtert nach Bestelldatum.
+const HISTORY_DAYS = 90;
+
+/**
+ * Eine Anfrage für alle bestellten Tage, die Tagesansicht nur noch für die übrigen
+ * (offen, zu spät, kein Angebot unterscheidet nur sie). Ist die Historie nicht
+ * lesbar, wird wie bisher je Tag geladen.
+ */
+async function collectByHistory(client, dates, fresh, onProgress) {
+  if (!dates.length) return [];
+  const today = todayBerlin();
+  let ordered;
+  try {
+    ordered = parseOrderHistory(await client.orderHistory(addDays(today, -HISTORY_DAYS), addDays(today, 1)));
+  } catch (e) {
+    if (!(e instanceof ParserError)) throw e;
+    return collectByDay(client, dates, fresh, onProgress);
+  }
+  const known = dates.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
+  const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, onProgress);
+  return [...known, ...rest].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /** Tage für den Speicher des Geräts, damit die Übersicht beim Öffnen sofort den letzten Stand zeigt. */

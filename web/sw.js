@@ -8,7 +8,7 @@ import { kvGet, kvSet, secretGet } from "./idb.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 
-const VERSION = "v36";
+const VERSION = "v37";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js"];
 
@@ -126,7 +126,7 @@ async function checkAndNotify(isTest) {
   let firstName = "";
   try {
     firstName = (await client.login(creds.customerNo, creds.password)).firstName;
-    days = await collect(client, dates);
+    days = await collect(client, dates, { history: true });
   } catch (e) {
     const title = e instanceof IbsPausedError ? "Bestellsystem gesperrt oder nicht erreichbar"
       : e instanceof IbsAuthError && !client.token ? "Anmeldung abgelehnt" : "Bestellstand unbekannt";
