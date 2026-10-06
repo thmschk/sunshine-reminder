@@ -1,0 +1,42 @@
+// IBS5-Token über Seitenaufrufe und Weckrufe hinweg behalten: spart je Vorgang
+// den Login. Wie lange ein Token gilt, sagt IBS5 nicht; abgelaufen zeigt er sich
+// als Auth- oder Netzfehler (siehe IbsClient#send), dann wird einmal neu
+// angemeldet. Gespeichert wird verschlüsselt wie die Zugangsdaten und nur, wenn
+// diese selbst gespeichert sind.
+
+import { IbsAuthError, Profile } from "./ibs.js";
+import { secretGet, secretSet } from "./idb.js";
+
+const KEY = "ibsSession";
+
+/** Anmelden; client.token bleibt bei Ablehnung leer (daran erkennt die Seite falsche Zugangsdaten). */
+export async function login(client, creds, persist) {
+  client.token = null;
+  client.profile = await client.login(creds.customerNo, creds.password);
+  client.customerNo = creds.customerNo;
+  if (persist) {
+    const { name, institution } = client.profile;
+    await secretSet(KEY, { customerNo: creds.customerNo, token: client.token, name, institution }).catch(() => {});
+  }
+}
+
+/** fn mit gültigem Token ausführen: gespeicherten nehmen, sonst anmelden; bei Ablauf einmal neu. */
+export async function withSession(client, creds, fn, { persist = true } = {}) {
+  if (client.customerNo !== creds.customerNo) {
+    client.token = null;
+    const saved = persist ? await secretGet(KEY).catch(() => undefined) : undefined;
+    if (saved?.token && saved.customerNo === creds.customerNo) {
+      client.token = saved.token;
+      client.profile = new Profile(saved.name || "", saved.institution || "");
+      client.customerNo = creds.customerNo;
+    }
+  }
+  if (!client.token) await login(client, creds, persist);
+  try {
+    return await fn();
+  } catch (e) {
+    if (!(e instanceof IbsAuthError || e.maybeAuth)) throw e;
+    await login(client, creds, persist);
+    return fn();
+  }
+}

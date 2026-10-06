@@ -58,7 +58,9 @@ Was nach dem Eingeben der Zugangsdaten passiert:
    direkt vom Handy an IBS5, nicht über unseren Server. IBS5 antwortet mit einem
    Token für die weiteren Abfragen. Mit „Auf diesem Gerät merken“ legt die Seite
    die Zugangsdaten verschlüsselt im Speicher des Browsers ab (IndexedDB), mit
-   einem Schlüssel, den der Browser erzeugt und nicht herausgibt.
+   einem Schlüssel, den der Browser erzeugt und nicht herausgibt — ebenso den
+   Token, damit nicht jeder Aufruf neu anmeldet. Ist er abgelaufen, meldet sich
+   die Seite einmal neu an.
 2. **Übersicht laden (auf dem Handy).** Mit dem Token fragt die Seite den
    Speiseplan bei IBS5 ab — auf dem Handy erst die Bestellhistorie für alle
    bestellten Tage auf einmal, dann nur für die übrigen Tage je eine Anfrage,
@@ -167,9 +169,12 @@ Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
 quittiert IBS5 mit einer Sperre der IP-Adresse (dann geht auch die normale
 Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Übersicht
 und Erinnerung holen die bestellten Tage mit einer Anfrage aus der
-Bestellhistorie und laden nur Tage ohne Bestellung einzeln, die Bestellansicht
-braucht alle Tage einzeln. Tage nacheinander mit Pausen und etwas Zufall, drei
-Minuten zwischengespeichert, die
+Bestellhistorie und laden nur Tage ohne Bestellung einzeln. Die Bestellansicht
+braucht alle Tage einzeln, lädt Woche für Woche, zeigt jede sofort und hört auf,
+wenn Montag und Dienstag einer Woche noch keinen Speiseplan haben. Tage
+nacheinander mit Pausen und etwas Zufall; geladene Tage bleiben auf dem Gerät
+gespeichert (nach Bestellschluss bis zum Tag selbst, ohne Angebot eine Stunde,
+sonst zehn Minuten; widerspricht die Bestellhistorie, wird neu geladen), die
 Erinnerung höchstens die nächsten fünf Schultage, insgesamt höchstens 150
 Anfragen je Stunde und Gerät. Kommt beim Anmelden gar keine Antwort (so sieht
 die Sperre im Browser aus) oder ein 429, ruht die App drei Stunden und sagt das,

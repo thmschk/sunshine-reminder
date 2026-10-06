@@ -43,4 +43,4 @@ es geprüft ist. Stand: 2026-10-05.
 - iPhone: Erinnerung über 14 Werktage, mindestens 5 davon „alles bestellt“, Abo muss gültig bleiben.
 - Impressum, Datenschutzerklärung, Verzeichnis der Verarbeitungstätigkeiten, Auftragsverarbeitungsvertrag mit Hetzner.
 - Nutzungsbedingungen von IBS5 und Sdui zu fremden Programmen prüfen, gegebenenfalls anfragen. Betrifft auch die Android-App.
-- IBS5-Token statt Passwort: Laufzeit des Tokens noch nicht gemessen.
+- IBS5-Token statt Passwort: Der Token wird inzwischen zusätzlich (verschlüsselt) gespeichert, damit nicht jeder Aufruf neu anmeldet; das Passwort bleibt für den Fall nötig, dass er abläuft. Seine Laufzeit ist nicht dokumentiert.

@@ -7,10 +7,11 @@ import {
 import { kvGet, kvSet, secretGet } from "./idb.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
+import { withSession } from "./session.js";
 
-const VERSION = "v38";
+const VERSION = "v39";
 const PUSH_MAX_DAYS = 5;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js"];
+const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js", "session.js"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -122,11 +123,12 @@ async function checkAndNotify(isTest) {
   const dates = targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead }).slice(0, PUSH_MAX_DAYS);
   const client = new IbsClient(undefined, guardHooks);
   client.dayView = !!(await kvGet("ibsDayView"));
+  client.dayStore = { load: () => kvGet("dayCache"), save: (rows) => kvSet("dayCache", rows) };
   let days;
   let firstName = "";
   try {
-    firstName = (await client.login(creds.customerNo, creds.password)).firstName;
-    days = await collect(client, dates, { history: true });
+    days = await withSession(client, creds, () => collect(client, dates, { history: true }));
+    firstName = client.profile?.firstName || "";
   } catch (e) {
     const title = e instanceof IbsPausedError ? "Bestellsystem gesperrt oder nicht erreichbar"
       : e instanceof IbsAuthError && !client.token ? "Anmeldung abgelehnt" : "Bestellstand unbekannt";

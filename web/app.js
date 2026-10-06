@@ -5,6 +5,7 @@ import {
 import { kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks, resume } from "./guard.js";
+import { login, withSession } from "./session.js";
 
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
 // diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
@@ -61,8 +62,8 @@ function chrome(visible) {
 }
 
 const client = new IbsClient(undefined, guardHooks);
-let profile = null;
-let loggedInAs = null;
+// Geladene Tage teilt die Seite über IndexedDB mit dem Service Worker (siehe dayCache in ibs.js).
+client.dayStore = { load: () => kvGet("dayCache"), save: (rows) => kvSet("dayCache", rows) };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -77,26 +78,8 @@ async function clearCreds() {
   store.lastOk = store.lastPushOk = null;
 }
 
-/**
- * Einmal einloggen und den Token behalten. Ein abgelaufener Token zeigt sich als
- * Auth- oder Netzfehler (siehe IbsClient#send) → einmal neu anmelden; ist das
- * Netz wirklich weg, scheitert der zweite Versuch genauso.
- */
-async function ensureLogin(creds, force = false) {
-  if (!force && client.token && loggedInAs === creds.customerNo) return;
-  profile = await client.login(creds.customerNo, creds.password);
-  loggedInAs = creds.customerNo;
-}
-async function withLogin(creds, fn) {
-  await ensureLogin(creds);
-  try {
-    return await fn();
-  } catch (e) {
-    if (!(e instanceof IbsAuthError || e.maybeAuth)) throw e;
-    await ensureLogin(creds, true);
-    return fn();
-  }
-}
+/** Token nur speichern, wenn auch die Zugangsdaten gespeichert sind („Auf diesem Gerät merken“). */
+const withLogin = (creds, fn) => withSession(client, creds, fn, { persist: loadCreds()?.customerNo === creds.customerNo });
 
 function busy(text) {
   $app.innerHTML = `<p class="muted">${esc(text)}</p>`;
@@ -146,8 +129,7 @@ function showSetup(message = "", prefill = {}) {
     const remember = document.getElementById("remember").checked;
     busy("Anmelden …");
     try {
-      client.token = null;
-      await ensureLogin(creds, true);
+      await login(client, creds, remember);
     } catch (e) {
       showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}` : e.message, creds);
       return;
@@ -279,7 +261,7 @@ async function renderHome(my, days, { staleAt = null } = {}) {
 
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
-    ${heroCard(days, profile?.firstName || "")}
+    ${heroCard(days, client.profile?.firstName || "")}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
       <div class="section">DIE NÄCHSTEN TAGE</div>
@@ -454,7 +436,7 @@ function dayRow(d, strip = null) {
 async function showOrder(focusDate = null) {
   const creds = currentCreds();
   if (!creds) return showSetup();
-  viewSeq++;
+  const my = ++viewSeq;
   chrome(false);
   $header.hidden = true; // wie OrderScreen der App: nur „Bestellen“ und „Zurück“
   $app.innerHTML = `
@@ -479,61 +461,76 @@ async function showOrder(focusDate = null) {
       : d.state === OrderState.ORDERED ? orderedOf(d) != null
       : false;
 
-  async function load(fresh = false) {
+  const dayFieldset = (d) => {
+    const current = orderedOf(d);
+    const what = current ? " — bestellt" : d.state === OrderState.IN_CART ? " — liegt im Warenkorb" : " — offen";
+    const options = d.entries.filter((e) => e.selectable).map((e) => `
+      <label class="option">
+        <input type="radio" name="d-${d.date}" value="${esc(e.menuLineId)}" ${current?.menuLineId === e.menuLineId ? "checked" : ""}>
+        <span>${esc(e.name)}${current?.menuLineId === e.menuLineId ? " (bestellt)" : ""}</span>
+      </label>`).join("");
+    return `
+      <fieldset class="card day-order" id="day-${d.date}">
+        <legend>${esc(De.long(d.date) + what)}</legend>
+        ${options}
+        <label class="option">
+          <input type="radio" name="d-${d.date}" value="" ${current ? "" : "checked"}>
+          <span>${current ? "abbestellen" : "nichts"}</span>
+        </label>
+      </fieldset>`;
+  };
+
+  /**
+   * Kalenderwoche für Kalenderwoche laden und jede gleich anzeigen. IBS5 stellt
+   * Speisepläne wochenweise ein: Haben nach Tagen mit Speiseplan Montag und
+   * Dienstag einer Woche keinen, ist weiter voraus noch nichts eingestellt.
+   * (Ein einzelner Feiertag hält das nicht auf.)
+   */
+  async function load() {
     $progress.hidden = false;
-    form.innerHTML = "";
-    // Woche für Woche laden und aufhören, sobald nach einer Woche mit Speiseplan
-    // eine ohne kommt: weiter voraus hat IBS5 noch nichts eingestellt.
+    form.innerHTML = `<div id="o-days"></div><p id="o-more" class="small muted"></p>
+      <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
+    const $days = document.getElementById("o-days");
+    const $more = document.getElementById("o-more");
     const today = todayBerlin();
+    const monday = addDays(today, 1 - weekdayNo(today));
+    const get = (dates) => withLogin(creds, () => collect(client, dates));
+    const offered = (ds) => ds.some((d) => d.state !== OrderState.NO_OFFER);
+    days = [];
     all = [];
+    let error = null;
     try {
-      for (let w = 0; w < ORDER_WEEKS; w++) {
-        const dates = [];
-        for (let i = w * 7; i < (w + 1) * 7; i++) {
-          const d = addDays(today, i);
-          if (weekdayNo(d) <= 5) dates.push(d);
-        }
-        const week = await withLogin(creds, () => collect(client, dates, { fresh }));
-        const offered = week.some((d) => d.state !== OrderState.NO_OFFER);
+      for (let w = 0; w < ORDER_WEEKS && my === viewSeq; w++) {
+        const mon = addDays(monday, 7 * w);
+        const dates = [0, 1, 2, 3, 4].map((i) => addDays(mon, i)).filter((d) => d >= today);
+        if (!dates.length) continue;
+        $more.textContent = `KW ${isoWeek(mon)[1]} wird geladen …`;
+        let week = await get(dates.slice(0, 2));
+        const stop = dates.length === 5 && offered(all) && !offered(week);
+        if (!stop && my === viewSeq) week = week.concat(await get(dates.slice(2)));
+        if (my !== viewSeq) return;
         all = all.concat(week);
-        if (!offered && all.some((d) => d.state !== OrderState.NO_OFFER)) break;
+        if (stop || (!offered(week) && offered(all))) break;
+        const shown = week.filter(isChangeable);
+        days = days.concat(shown);
+        $days.insertAdjacentHTML("beforeend", shown.map(dayFieldset).join(""));
+        refresh();
+        if (focusDate && shown.some((d) => d.date === focusDate)) {
+          document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+          focusDate = null;
+        }
       }
     } catch (e) {
-      $progress.hidden = true;
-      setResult(e.message, "error");
-      return;
+      error = e;
     }
+    if (my !== viewSeq) return;
     $progress.hidden = true;
-    days = all.filter(isChangeable);
-    render();
-  }
-
-  function render() {
+    $more.remove();
+    if (error) setResult(error.message, "error");
     if (!days.length) {
-      form.innerHTML = `<p>Keine Tage, die sich noch ändern lassen.</p>`;
-      return;
+      $days.innerHTML = error ? "" : `<p>Keine Tage, die sich noch ändern lassen.</p>`;
+      document.getElementById("b-submit")?.remove();
     }
-    form.innerHTML = `
-      ${days.map((d) => {
-        const current = orderedOf(d);
-        const what = current ? " — bestellt" : d.state === OrderState.IN_CART ? " — liegt im Warenkorb" : " — offen";
-        const options = d.entries.filter((e) => e.selectable).map((e) => `
-          <label class="option">
-            <input type="radio" name="d-${d.date}" value="${esc(e.menuLineId)}" ${current?.menuLineId === e.menuLineId ? "checked" : ""}>
-            <span>${esc(e.name)}${current?.menuLineId === e.menuLineId ? " (bestellt)" : ""}</span>
-          </label>`).join("");
-        return `
-          <fieldset class="card day-order" id="day-${d.date}">
-            <legend>${esc(De.long(d.date) + what)}</legend>
-            ${options}
-            <label class="option">
-              <input type="radio" name="d-${d.date}" value="" ${current ? "" : "checked"}>
-              <span>${current ? "abbestellen" : "nichts"}</span>
-            </label>
-          </fieldset>`;
-      }).join("")}
-      <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
-    refresh();
   }
 
   const pending = () => days.map((d) => {
@@ -586,12 +583,12 @@ async function showOrder(focusDate = null) {
         + (outcome.missing || []).map(De.short).join(", "), "error");
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
-    if (outcome.kind === "done" || outcome.kind === "unconfirmed") await load(true);
+    // Die geänderten Tage hat placeOrders frisch geladen, der Rest kommt aus dem Zwischenspeicher.
+    if (outcome.kind === "done" || outcome.kind === "unconfirmed") await load();
     else refresh();
   });
 
   await load();
-  if (focusDate) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
 const REPO_URL = "https://github.com/thmschk/sunshine-reminder";
@@ -685,7 +682,7 @@ function showSettings() {
 
     <div class="group-title">Konto</div>
     <div class="group">
-      ${srow("person", esc(profile?.name || "Angemeldet"), { value: `Kd. ${esc(creds?.customerNo || "")}` })}
+      ${srow("person", esc(client.profile?.name || "Angemeldet"), { value: `Kd. ${esc(creds?.customerNo || "")}` })}
       ${srow("logout", "Abmelden und alles löschen", { tag: "button", id: "b-logout", cls: "danger-row" })}
     </div>
 
@@ -700,9 +697,8 @@ function showSettings() {
     await pushDisable().catch(() => {});
     await clearCreds();
     sessionCreds = null;
-    client.token = null;
-    profile = null;
-    loggedInAs = null;
+    client.token = client.profile = client.customerNo = null;
+    client.dayCache = null;
     showSetup();
   };
 }

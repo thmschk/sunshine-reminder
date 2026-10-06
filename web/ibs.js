@@ -509,18 +509,50 @@ export async function collect(client, dates, { fresh = false, onProgress, histor
 
 // Die Tagesansicht kostet eine Anfrage je Tag. Zu viele in kurzer Zeit quittiert
 // IBS5 mit einer IP-Sperre (HTTP 406 auf alles, auch die eigene Startseite) —
-// deshalb strikt nacheinander, mit Pause, und kurz zwischengespeichert.
+// deshalb strikt nacheinander, mit Pause, und zwischengespeichert.
 const DAY_GAP_MS = 400;
-const DAY_CACHE_MS = 3 * 60 * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Wie lange ein geladener Tag gilt: nach Bestellschluss ändert er sich nicht mehr,
+// ohne Angebot bekommt er vielleicht bald einen Speiseplan, alles andere ändert
+// sich durch Bestellen (eigene Bestellungen laden den Tag danach ohnehin neu).
+const DAY_TTL_MS = { [OrderState.DEADLINE_PASSED]: Infinity, [OrderState.NO_OFFER]: 60 * 60 * 1000 };
+const DAY_CACHE_MS = 10 * 60 * 1000;
+const isFresh = (hit) => Date.now() - hit.at < (DAY_TTL_MS[hit.day.state] ?? DAY_CACHE_MS);
+
+/**
+ * Zwischenspeicher der Tagesansichten, je Kundennummer (die Tage tragen deren
+ * Bestell-IDs). Mit client.dayStore ({load, save}) überdauert er Seitenaufrufe
+ * und wird mit dem Service Worker geteilt.
+ */
+async function dayCache(client) {
+  if (!client.dayCache || client.dayCache.customerNo !== client.customerNo) {
+    client.dayCache = new Map();
+    client.dayCache.customerNo = client.customerNo;
+    const saved = await Promise.resolve(client.dayStore?.load()).catch(() => null);
+    const today = todayBerlin();
+    const rows = saved && saved.customerNo === client.customerNo && Array.isArray(saved.rows) ? saved.rows : [];
+    for (const r of rows) {
+      if (r.date >= today) client.dayCache.set(r.date, { at: r.at, day: daysFromJson([r.day])[0] });
+    }
+  }
+  return client.dayCache;
+}
+
+function saveDayCache(client) {
+  if (!client.dayStore) return;
+  const rows = [...client.dayCache].map(([date, hit]) => ({ date, at: hit.at, day: daysToJson([hit.day])[0] }));
+  return Promise.resolve(client.dayStore.save({ customerNo: client.dayCache.customerNo, rows })).catch(() => {});
+}
+
 async function collectByDay(client, dates, fresh, onProgress) {
-  client.dayCache ??= new Map();
+  const cache = await dayCache(client);
   const out = [];
+  let fetched = 0;
   for (const d of dates) {
     onProgress?.(out.length, dates.length);
-    const hit = client.dayCache.get(d);
-    if (!fresh && hit && Date.now() - hit.at < DAY_CACHE_MS) {
+    const hit = cache.get(d);
+    if (!fresh && hit && isFresh(hit)) {
       out.push(hit.day);
       continue;
     }
@@ -532,9 +564,12 @@ async function collectByDay(client, dates, fresh, onProgress) {
     const other = [...plan.days.keys()].find((k) => k !== d);
     if (other) throw new IbsError(`Angefragt war ${De.short(d)}, geliefert wurde ${De.short(other)}`);
     const day = plan.days.get(d) ?? new DayStatus(d, OrderState.NO_OFFER);
-    client.dayCache.set(d, { at: Date.now(), day });
+    cache.set(d, { at: Date.now(), day });
+    fetched++;
     out.push(day);
   }
+  onProgress?.(out.length, dates.length);
+  if (fetched) await saveDayCache(client);
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -556,8 +591,17 @@ async function collectByHistory(client, dates, fresh, onProgress) {
     if (!(e instanceof ParserError)) throw e;
     return collectByDay(client, dates, fresh, onProgress);
   }
+  // Zwischengespeicherte Tage, die der Historie widersprechen (anderswo bestellt
+  // oder abbestellt), sind veraltet.
+  const cache = await dayCache(client);
+  let dropped = 0;
+  for (const [d, hit] of cache) {
+    if (ordered.has(d) !== (hit.day.state === OrderState.ORDERED)) dropped += cache.delete(d);
+  }
+  if (dropped) await saveDayCache(client);
   const known = dates.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
-  const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, onProgress);
+  const progress = onProgress && ((done) => onProgress(known.length + done, dates.length));
+  const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, progress);
   return [...known, ...rest].sort((a, b) => a.date.localeCompare(b.date));
 }
 
