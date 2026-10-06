@@ -207,7 +207,7 @@ async function showHome(fresh = false) {
   const usable = cached && cached.from === today && cached.daysAhead === cfg.daysAhead && cached.customerNo === creds.customerNo;
   if (my !== viewSeq) return;
   if (usable) await renderHome(my, daysFromJson(cached.days), { staleAt: cached.at });
-  else $app.innerHTML = `<p class="muted">Wochenplan wird geladen …</p>${progressBar()}`;
+  else $app.innerHTML = `<p class="muted">${progressText("Wochenplan wird geladen")}</p>${progressBar()}`;
 
   let days;
   try {
@@ -225,6 +225,7 @@ async function showHome(fresh = false) {
         <button id="b-retry" class="block">${isPause ? "Trotzdem jetzt versuchen" : "Nochmal versuchen"}</button>
       </div>`;
     document.getElementById("refresh")?.remove();
+    document.getElementById("pbar-text")?.replaceWith("Aktualisieren fehlgeschlagen");
     if (usable) $app.insertAdjacentHTML("afterbegin", card);
     else $app.innerHTML = card + lastOkLine();
     document.getElementById("b-retry").onclick = async () => {
@@ -241,14 +242,20 @@ async function showHome(fresh = false) {
 }
 
 /** Fortschrittsbalken; der Füllstand wird per Skript gesetzt (die CSP lässt keine style-Attribute zu). */
-const progressBar = () => `<div id="refresh" class="refresh"><div class="pbar"><span id="pbar-fill"></span></div>
-  <span id="pbar-text" class="small muted">wird aktualisiert …</span></div>`;
+// Dünne Linie am oberen Rand, über dem Inhalt statt in ihm: Erscheinen und
+// Verschwinden verschieben nichts. Der Text dazu steht im Footer (bzw. beim
+// ersten Laden im Platzhalter); läuft, bis die erste Zahl kommt.
+const progressBar = () => `<div id="refresh" class="refresh pbar-run"><span id="pbar-fill"></span></div>`;
+const progressText = (label) => `<span id="pbar-text" data-label="${label}">${label} …</span>`;
 
 function setProgress(done, total) {
   const fill = document.getElementById("pbar-fill");
   const text = document.getElementById("pbar-text");
-  if (fill) fill.style.width = `${Math.round((100 * done) / Math.max(total, 1))}%`;
-  if (text) text.textContent = `wird aktualisiert … ${done} von ${total} Tagen`;
+  if (fill) {
+    fill.parentElement.classList.remove("pbar-run");
+    fill.style.width = `${Math.round((100 * done) / Math.max(total, 1))}%`;
+  }
+  if (text) text.textContent = `${text.dataset.label} … ${done} von ${total} Tagen`;
 }
 
 /** Zeichnet die Übersicht; mit staleAt als gespeicherter Stand, der gerade aktualisiert wird. */
@@ -288,7 +295,7 @@ async function renderHome(my, days, { staleAt = null } = {}) {
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
     .format(new Date(staleAt || Date.now()));
   const pushInfo = store.push && store.lastPushOk ? ` · Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "";
-  $footer.innerHTML = `<span>${staleAt ? "Stand" : "Geprüft"} ${t}${pushInfo}</span>
+  $footer.innerHTML = `<span>${staleAt ? `Stand ${t} · ${progressText("wird aktualisiert")}` : `Geprüft ${t}${pushInfo}`}</span>
     <button id="b-heart" class="icon heart" title="Über diese App" aria-label="Über diese App">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART}"/></svg>
     </button>`;

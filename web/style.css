@@ -353,7 +353,18 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .srow-details .dd-value { font-weight: normal; font-size: .88rem; }
 
 /* Fortschritt beim Aktualisieren */
-.refresh { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+.refresh {
+  position: fixed;
+  top: env(safe-area-inset-top);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  height: 3px;
+  overflow: hidden;
+  background: var(--primary-container);
+  pointer-events: none;
+}
+.refresh span { display: block; height: 100%; width: 0; background: var(--primary); transition: width .3s; }
 .pbar { flex: 1; height: 4px; border-radius: 2px; background: var(--primary-container); overflow: hidden; }
 .pbar span { display: block; height: 100%; width: 0; background: var(--primary); transition: width .3s; }
 
