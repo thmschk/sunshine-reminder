@@ -101,10 +101,16 @@ button:disabled { opacity: .45; cursor: default; }
 .hero.open { background: var(--primary-container); color: var(--on-primary-container); }
 .hero.bad { background: var(--error-container); color: var(--on-error-container); }
 .hero.neutral { background: var(--surface-variant); color: var(--on-surface-variant); }
-.chips { display: flex; gap: 6px; overflow-x: auto; margin: 8px 0 0; }
-.chip { background: #fff; border-radius: 4px; padding: 2px 7px; font-size: .8rem; font-weight: 500; white-space: nowrap; }
+.chips { margin: 2px 0 0; font-size: .82rem; }
+.chip { font-weight: 500; white-space: nowrap; }
+.chip + .chip::before { content: ", "; font-weight: 400; }
 .hero button { margin-top: 10px; }
 .hero button.block { display: inline-block; width: auto; }
+/* Offene Tage: Titel und Tage links, Knopf rechts; der Erklärsatz steckt schon in „offen“. */
+.hero.open { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 10px; }
+.hero.open h2 { font-size: 1rem; margin: 0; }
+.hero.open p { display: none; }
+.hero.open button.block { grid-column: 2; grid-row: 1 / span 2; margin: 0; }
 .intro p { margin: 8px 0; }
 .intro p.small { font-size: .85rem; }
 
