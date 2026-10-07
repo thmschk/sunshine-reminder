@@ -28,7 +28,7 @@ steht im README unter „Architektur“.
 
 ## Code
 
-- Ein Repository für alles: `thmschk/sunshine-reminder` mit `android/`, `ibswatch/` (Python-Variante),
+- Ein Repository für alles: `thmschk/sunshine-reminder` mit `ibswatch/` (Python-Variante),
   `web/` (Web-App), `server/` (Push-Dienst und Konfiguration), `docs/`.
 - Auf dem Server liegt **kein** Git-Klon. `server/deploy.sh` kopiert per `rsync` aus der Arbeitskopie.
 

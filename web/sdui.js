@@ -1,5 +1,5 @@
-// Stundenplan aus Sdui, nur lesend. Portiert aus android/core SduiClient und
-// SubjectReminder. Sdui sperrt Browserzugriffe fremder Seiten, deshalb laufen die
+// Stundenplan aus Sdui, nur lesend (hervorgegangen aus SduiClient der eingestellten
+// Android-App). Sdui sperrt Browserzugriffe fremder Seiten, deshalb laufen die
 // Aufrufe über /api/sdui/ auf unserem Server, der sie nur durchreicht.
 //
 // Das Passwort wird nur beim Einrichten gebraucht: Sdui gibt einen Token aus, der
@@ -93,6 +93,7 @@ export async function timetable(token, userId, from, to) {
       hour: String(m.displayname_hour ?? ""),
       subject: m.displayname || m.shortname || "",
       short: shortLabel(m.shortname || m.displayname),
+      // Was kind für Ausfall oder Vertretung liefert, ist unbekannt: als Hinweis mitgeben.
       note: [o.kind, o.comment].filter((x) => x && x !== "null").join("; "),
     }];
   }).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));

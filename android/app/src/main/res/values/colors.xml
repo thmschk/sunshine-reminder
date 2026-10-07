@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Hausfarben des Anbieters, aus dem Logo ausgezaehlt. -->
-    <color name="brand_yellow">#F8D800</color>
-    <color name="brand_berry">#A01850</color>
-    <!-- Fensterhintergrund: wird beim Start gezeigt, bevor Compose zeichnet.
-         Ohne das blitzt kurz Weiss oder Schwarz auf. -->
-    <color name="app_background">#FFFCF0</color>
-</resources>

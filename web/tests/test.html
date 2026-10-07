@@ -1,8 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>ibs.js Tests</title>
-<!-- Vom Repo-Wurzelverzeichnis aus servieren (python3 -m http.server), damit die
-     Fixtures aus android/core/src/test/resources erreichbar sind. -->
+<!-- Über HTTP servieren (python3 -m http.server im Repo oder in web/), Testdaten in fixtures/. -->
 <pre id="out">läuft</pre>
 <script type="module">
 import {
@@ -19,11 +18,11 @@ const eq = (a, b, what = "") => {
 };
 const throws = (fn, what) => { try { fn(); } catch { return; } throw new Error(`${what}: kein Fehler`); };
 
-const res = (f) => fetch(`../../android/core/src/test/resources/${f}`).then((r) => r.text());
+const res = (f) => fetch(`fixtures/${f}`).then((r) => r.text());
 const kw35 = await res("weekplan_kw35.html");
 const kw42 = await res("weekplan_kw42_order.html");
 
-// Wie patchDay in WeekplanParserTest.kt: Ersetzungen nur in den Tags des Tages.
+// Ersetzungen nur in den Tags des einen Tages.
 const patchDay = (html, iso, ...reps) =>
   html.replace(new RegExp(`<[^>]*menu_quantity_${iso}_[\\s\\S]*?>`, "g"), (tag) => reps.reduce((t, [a, b]) => t.split(a).join(b), tag));
 const withoutOrders = (html, iso) =>
@@ -232,7 +231,7 @@ await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu",
   eq(await withSession(c, creds, async () => c.token, { persist: false }), "T3", "ohne Speichern kein gespeicherter Token");
 });
 
-// Sdui: Zeitzone, Kürzel, Zusammenfassen, Zeitleiste — gegen die Testdaten der App.
+// Sdui: Zeitzone, Kürzel, Zusammenfassen, Zeitleiste.
 const Sdui = await import("../sdui.js");
 {
   const fixture = await res("sdui_timetable.json");
@@ -261,7 +260,7 @@ await test("Sdui: Kürzel, Stunden, Schule, nächster Schultag", () => {
   eq([Sdui.nextSchoolDay("2026-10-09"), Sdui.nextSchoolDay("2026-10-05")], ["2026-10-12", "2026-10-06"], "Fr → Mo");
 });
 
-// Bestellen gegen einen Schein-Client, wie OrderPlacerTest.kt.
+// Bestellen gegen einen Schein-Client.
 class FakeClient {
   constructor({ extraInCart = 0, failSubmit = false } = {}) {
     Object.assign(this, { extraInCart, failSubmit, cart: [], calls: [], submitted: false });

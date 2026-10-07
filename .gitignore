@@ -12,15 +12,6 @@ venv/
 .idea/
 .vscode/
 
-# Android / Gradle
-android/.gradle/
-android/build/
-android/*/build/
-android/local.properties
-*.apk
-*.keystore
-*.jks
-
 # Signierschluessel — gehoeren NIE ins Repo
 *.jks
 *.keystore

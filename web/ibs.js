@@ -1,7 +1,7 @@
 // IBS5-Client, Wochenplan-Parser, Prüfung und Bestellung für den Browser.
 //
-// Portiert aus android/core (IbsClient, WeekplanParser, OrderChecker, OrderPlacer);
-// fachliche Begründungen stehen dort. Der Parser arbeitet bewusst mit regulären
+// Hervorgegangen aus der eingestellten Android-App (Git-Historie bis 6160aed,
+// android/core). Der Parser arbeitet bewusst mit regulären
 // Ausdrücken statt DOMParser, weil er auch im Service Worker laufen muss, und den
 // gibt es dort nicht.
 //
@@ -67,7 +67,7 @@ export const De = {
 // ---------------------------------------------------------------- Client
 
 /**
- * Zwei Eigenheiten des Servers (siehe IbsClient.kt): ohne Accept-Language kommt
+ * Zwei Eigenheiten des Servers: ohne Accept-Language kommt
  * HTTP 500 (setzt der Browser selbst), und authentifizierte Endpunkte wollen
  * X-Requested-With. Ohne gültigen Token leitet IBS5 per 302 auf eine Fehlerseite
  * ohne CORS-Freigabe um. Der Browser prüft CORS schon an der 302-Antwort, also
@@ -339,6 +339,7 @@ export class DayStatus {
   get label() { return STATE_LABEL[this.state]; }
 }
 
+// Ein unbekannter Status ergibt UNKNOWN und gilt nie stillschweigend als bestellt.
 function dayState(entries) {
   if (entries.some((e) => e.isOrdered)) return OrderState.ORDERED;
   if (entries.some((e) => e.quantityInCart !== "")) return OrderState.IN_CART;
@@ -381,6 +382,7 @@ export function parseWeekplan(html) {
       status: (a.get("data-order-status") || "").trim(),
       quantityOrdered: (a.get("data-quantity-ordered") || "").trim(),
       quantityInCart: (a.get("data-quantity-in-shopping-cart") || "").trim(),
+      // Bestellschluss meldet IBS5 selbst, geraten wird keine Uhrzeit.
       // Wochenplan: Attribut readonly; Tagesansicht: data-readonly="true".
       orderable: !a.has("readonly") && (a.get("data-readonly") || "").trim() !== "true",
       isKv: KV_NAME.test(name),
@@ -505,6 +507,7 @@ export async function collect(client, dates, { fresh = false, onProgress, histor
       client.dayView = true;
       return byDay();
     }
+    // „KW nn“ im Seitenkopf als Gegenprobe: eine andere Woche nie zuordnen.
     if (plan.displayedWeek != null && plan.displayedWeek !== w) {
       throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${plan.displayedWeek}`);
     }
@@ -703,6 +706,7 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
     for (const c of changes) {
       const anchor = c.target ?? c.current;
       touched.push(anchor);
+      // Erst leeren: ersetzt Liegengebliebenes des Tages, die Zählprüfung misst dann nur die Auswahl.
       await client.clearCart(anchor.customerId, anchor.date, anchor.menuGroupId);
       const added = changeKind(c) === "CANCEL" ? await client.cancelInCart(c.current) : await client.addToCart(c.target);
       if (!added.ok) {
