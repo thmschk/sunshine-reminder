@@ -48,8 +48,8 @@ sh = 505
 top = y
 # Bilder der Web-App (412 px breit, doppelte Auflösung), Startseite und Bestellansicht.
 for path, x, box in (
-    ("screenshot-web-start.png", M + 70, (0, 40, 780, 1380)),
-    ("screenshot-web-bestellen.png", W - M - 70 - 294, (0, 40, 780, 1380)),
+    ("screenshot-web-start.png", M + 70, (0, 0, 780, 1340)),
+    ("screenshot-web-bestellen.png", W - M - 70 - 294, (0, 0, 780, 1340)),
 ):
     s = Image.open(HERE / path).convert("RGB").crop(box)
     s = s.resize((int(s.width * sh / s.height), sh), Image.LANCZOS)
@@ -58,7 +58,7 @@ for path, x, box in (
 y = top + sh + 48
 
 # --- Kasten mit QR --------------------------------------------------------
-URL = "https://sunshine.thomschke.info"
+URL = "https://sunshine.thomschke.info/?installieren"  # zeigt die Installationskarte zuerst
 bh = 318
 d.rounded_rectangle([M, y, W - M, y + bh], radius=24,
                     fill=(255, 248, 214), outline=YELLOW, width=4)
@@ -74,7 +74,7 @@ d.text((tx, ty), "Im Handy öffnen:", font=font("Medium", 31), fill=INK); ty += 
 d.text((tx, ty), "sunshine.thomschke.info", font=font("Bold", 36), fill=BERRY); ty += 62
 d.text((tx, ty), "Dann zum Startbildschirm hinzufügen:", font=font("Medium", 25), fill=INK); ty += 38
 for line in ("iPhone: Teilen, dann „Zum Home-Bildschirm“",
-             "Android: Menü (drei Punkte), „App installieren“"):
+             "Android: Knopf „Als App installieren“ antippen"):
     d.text((tx, ty), line, font=font("Regular", 25), fill=GREY); ty += 34
 y += bh + 30
 

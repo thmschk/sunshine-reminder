@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="de">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screenshot-Bühne</title>
+<!-- Echte App mit erfundenen Daten für docs/ (siehe docs/screenshots.py); IBS5 wird nicht gefragt.
+     ?view=start oder ?view=bestellen. -->
+<link rel="stylesheet" href="../style.css">
+<body>
+<script type="module">
+import { addDays, isoWeek, todayBerlin, weekdayNo } from "../ibs.js";
+// Kopf, Hauptteil und Fuß wie in der echten Seite.
+document.body.innerHTML = new DOMParser().parseFromString(await (await fetch("../index.html")).text(), "text/html").body.innerHTML;
+const { secretSet, kvClear } = await import("../idb.js");
+await kvClear();
+await secretSet("creds", { customerNo: "1000", password: "x" });
+
+const DISHES = [
+  ["Spaghetti mit Tomatensoße und Reibekäse", "Gemüsecurry mit Reis", "Linseneintopf mit Brötchen"],
+  ["Hähnchenkeule mit Erbsen und Möhren", "Kartoffel-Gemüse-Auflauf", "Nudeln mit Brokkoli-Sahnesoße"],
+  ["Milchreis mit Apfelmus", "Fischstäbchen mit Kartoffelpüree", "Gemüsesuppe mit Brot"],
+  ["Pfannkuchen mit Kirschkompott", "Chili sin Carne mit Reis", "Spätzle mit Rahmchampignons"],
+  ["Kartoffelsuppe mit Würstchen", "Tortellini mit Tomatensoße", "Couscous-Gemüsepfanne"],
+];
+const today = todayBerlin();
+const tomorrow = addDays(today, 1);
+const firstMonday = addDays(today, 1 - weekdayNo(today));
+const lastOffered = addDays(firstMonday, 7 * 4 - 3); // vier Wochen Speiseplan
+// Bestellt ist alles bis auf den dritten Schultag ab morgen.
+const schoolDays = [];
+for (let d = tomorrow; schoolDays.length < 10; d = addDays(d, 1)) if (weekdayNo(d) <= 5) schoolDays.push(d);
+const openDay = schoolDays[3];
+const ordered = (d, i) => d !== openDay && d <= addDays(today, 14) && i === (Number(d.slice(8)) % 2);
+
+const button = (d, i, name, line) => {
+  const dmy = `${d.slice(8)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+  const isOrdered = ordered(d, i);
+  const readonly = d <= today ? ' readonly="readonly"' : "";
+  return `<button class="menuplan-checkbox" data-order-status="${isOrdered ? 2 : 0}" data-quantity-ordered="${isOrdered ? 1 : ""}"
+    data-quantity-in-shopping-cart="" data-date="${dmy}" data-name="${name}" id="menu_quantity_${d}_16_${line}"${readonly}
+    onclick="clickMenuCheckbox(this, 1, 'x', 'y', 'z', '1000')"></button>`;
+};
+const week = (year, kw) => {
+  // Montag der angefragten ISO-Woche
+  let mon = firstMonday;
+  while (isoWeek(mon)[1] !== kw || isoWeek(mon)[0] !== year) mon = addDays(mon, isoWeek(mon)[1] < kw || isoWeek(mon)[0] < year ? 7 : -7);
+  let html = `<div id="weekplan"><h2>KW ${kw}</h2>`;
+  for (let i = 0; i < 5; i++) {
+    const d = addDays(mon, i);
+    if (d > lastOffered) continue;
+    const names = DISHES[(i + 2 * Math.round((Date.parse(mon) - Date.parse(firstMonday)) / 6048e5)) % DISHES.length];
+    html += names.map((n, k) => button(d, k, n, 827 + k)).join("");
+  }
+  return new Response(html + "</div>");
+};
+
+window.fetch = async (url) => {
+  url = String(url);
+  if (url.includes("/Login/")) return new Response(JSON.stringify({ token: "t", name1: "Muster, Mia", institutionName1: "Grundschule" }));
+  const m = /year=(\d+)&week=(\d+)/.exec(url);
+  if (m) return week(Number(m[1]), Number(m[2]));
+  return new Response("{}");
+};
+
+await import("../app.js");
+// Fertig-Signal für docs/screenshots.py: Ansicht vollständig gezeichnet.
+const view = new URLSearchParams(location.search).get("view") || "start";
+const ready = setInterval(() => {
+  const home = document.querySelector(".days") && !document.getElementById("refresh");
+  if (view === "bestellen" && home && document.getElementById("b-all")) document.getElementById("b-all").click();
+  const done = view === "bestellen"
+    ? document.querySelector("fieldset.day-order") && !document.getElementById("o-more")
+    : home;
+  if (done) { clearInterval(ready); document.documentElement.dataset.ready = "1"; }
+}, 50);
+</script>
+</body>
+</html>
