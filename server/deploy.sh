@@ -22,19 +22,21 @@ if ! grep -q "/srv/sunshine/web" compose.yaml; then
   docker compose up -d
 fi
 docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null
-docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile
-# Der erste Reload nach dem Kopieren griff wiederholt nicht, der zweite immer.
-sleep 2
-docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile >/dev/null 2>&1
-EOF
-# Das Neuladen griff schon gelegentlich nicht: ausgelieferte CSP gegen die Datei prüfen.
-want=$(grep -o 'Content-Security-Policy "[^"]*"' server/sunshine.caddy | cut -d'"' -f2)
+# Neu laden, bis die geladene Konfiguration (Admin-API, dank network_mode: host
+# auf localhost:2019) der Datei entspricht. Das erste Reload nach dem Kopieren
+# griff wiederholt nicht; verglichen wird die ganze Konfiguration, nicht nur ein Header.
 for try in 1 2 3; do
-  got=$(curl -sI https://sunshine.thomschke.info/ | tr -d '\r' | sed -n 's/^content-security-policy: //Ip')
-  [ "$got" = "$want" ] && break
+  docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+  sleep 1
+  want=$(docker compose exec -T caddy caddy adapt --config /etc/caddy/Caddyfile 2>/dev/null)
+  got=$(curl -s localhost:2019/config/)
+  if python3 -c 'import json, sys; sys.exit(json.loads(sys.argv[1]) != json.loads(sys.argv[2]))' "$want" "$got" 2>/dev/null; then
+    exit 0
+  fi
   echo "Caddy hat die neue Konfiguration noch nicht, lade erneut ($try) …"
-  sleep 2
-  ssh "$HOST" 'cd /srv/caddy && docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile >/dev/null 2>&1'
 done
-[ "$got" = "$want" ] || { echo "FEHLER: ausgelieferte CSP weicht von server/sunshine.caddy ab" >&2; exit 1; }
+echo "FEHLER: geladene Caddy-Konfiguration weicht von /etc/caddy/Caddyfile ab" >&2
+exit 1
+EOF
+curl -sf -o /dev/null https://sunshine.thomschke.info/ || { echo "FEHLER: Seite antwortet nicht" >&2; exit 1; }
 echo "deployt: https://sunshine.thomschke.info/"

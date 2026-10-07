@@ -54,9 +54,10 @@ Caddy schreibt keine Zugriffs- und keine Fehlerprotokolle einzelner Anfragen
 server/deploy.sh
 ```
 
-Kopiert Web-Dateien und Push-Dienst, baut den Push-Container neu, kopiert die Caddy-Site, lädt Caddy
-(zweimal, der erste Reload griff wiederholt nicht) und prüft, ob die ausgelieferte Content-Security-Policy
-der Datei entspricht. Beide Docker-Stacks haben `restart: unless-stopped`.
+Kopiert Web-Dateien und Push-Dienst, baut den Push-Container neu, kopiert die Caddy-Site und lädt Caddy
+neu, bis die geladene Konfiguration (Admin-API `localhost:2019/config/`) der übersetzten Datei
+(`caddy adapt`) entspricht — höchstens dreimal, der erste Reload griff wiederholt nicht. Danach muss die
+Seite antworten. Beide Docker-Stacks haben `restart: unless-stopped`.
 
 Auf dem Handy erscheint eine neue Fassung, sobald die App einmal ganz geschlossen und neu geöffnet wird.
 
