@@ -93,7 +93,8 @@ function busy(text) {
  */
 let viewSeq = 0;
 
-function showSetup(message = "", prefill = {}) {
+/** retry: Zugangsdaten für „Trotzdem jetzt versuchen“, wenn die Anmeldung an einer Pause hing. */
+function showSetup(message = "", prefill = {}, retry = null) {
   viewSeq++;
   chrome(false);
   $app.innerHTML = `
@@ -111,6 +112,7 @@ function showSetup(message = "", prefill = {}) {
       <h2 class="u-mt0">Anmelden</h2>
       <p class="small muted">Mit Kundennummer und Passwort des Schulessen-Bestellsystems (IBS5).</p>
       ${message ? `<p class="error">${esc(message)}</p>` : ""}
+      ${retry ? `<div class="row"><button id="b-resume" type="button" class="block">Trotzdem jetzt versuchen</button></div>` : ""}
       <form id="f-login" autocomplete="on">
         <label for="cn">Kundennummer</label>
         <input id="cn" name="username" type="text" inputmode="numeric" autocomplete="username" required value="${esc(prefill.customerNo)}">
@@ -120,24 +122,33 @@ function showSetup(message = "", prefill = {}) {
         <div class="row"><button type="submit" class="block">Speichern und prüfen</button></div>
       </form>
     </div>`;
-  document.getElementById("f-login").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const creds = {
-      customerNo: document.getElementById("cn").value.trim(),
-      password: document.getElementById("pw").value,
-    };
-    const remember = document.getElementById("remember").checked;
+  const attempt = async (creds, remember) => {
     busy("Anmelden …");
     try {
       await login(client, creds, remember);
     } catch (e) {
-      showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}` : e.message, creds);
+      const isPause = e instanceof IbsPausedError;
+      showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}` : e.message, creds,
+        isPause ? { creds, remember } : null);
       return;
     }
     if (remember) await saveCreds(creds);
     else sessionCreds = creds;
     showHome();
+  };
+  document.getElementById("f-login").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    attempt({
+      customerNo: document.getElementById("cn").value.trim(),
+      password: document.getElementById("pw").value,
+    }, document.getElementById("remember").checked);
   });
+  if (retry) {
+    document.getElementById("b-resume").onclick = async () => {
+      await resume();
+      attempt(retry.creds, retry.remember);
+    };
+  }
 }
 
 /** Anleitung zum Installieren, nur für das eigene Gerät; entfällt in der installierten App. */

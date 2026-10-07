@@ -176,9 +176,14 @@ nacheinander mit Pausen und etwas Zufall; geladene Tage bleiben auf dem Gerät
 gespeichert (nach Bestellschluss bis zum Tag selbst, ohne Angebot eine Stunde,
 sonst zehn Minuten; widerspricht die Bestellhistorie, wird neu geladen), die
 Erinnerung höchstens die nächsten fünf Schultage, insgesamt höchstens 150
-Anfragen je Stunde und Gerät. Kommt beim Anmelden gar keine Antwort (so sieht
-die Sperre im Browser aus) oder ein 429, ruht die App drei Stunden und sagt das,
-statt die Sperre durch Wiederholungen zu verlängern. Die Erinnerung auf dem
+Anfragen je Stunde und Gerät. Kommt beim Anmelden ein 429 oder 403, ruht die
+App drei Stunden und sagt das, statt die Sperre durch Wiederholungen zu
+verlängern. Kommt gar keine Antwort (so sieht die Sperre im Browser aus, aber
+auch ein Aussetzer), ruht sie erst 15 Minuten, beim nächsten Mal binnen sechs
+Stunden drei. Wechselt das Gerät das Netz (WLAN ↔ Mobilfunk, auf Android
+erkennbar), endet die Pause, denn die Sperre gilt der IP-Adresse; „Trotzdem
+jetzt versuchen“ gibt es auf der Übersicht und beim Anmelden. Eine Weiterleitung
+oder 401/403 beim Anmelden gilt als Störung, nicht als falsches Passwort. Die Erinnerung auf dem
 iPhone ist noch nicht ausprobiert.
 
 **Damit Schweigen auffällt:** Die Startseite zeigt, wann die Erinnerung zuletzt

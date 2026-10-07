@@ -75,7 +75,7 @@ export const De = {
  * Solche Fehler bei angemeldeten Aufrufen tragen deshalb maybeAuth.
  */
 export class IbsClient {
-  /** hooks.before() vor jeder Anfrage, hooks.failed({path, status, network}) danach (siehe guard.js). */
+  /** hooks.before() vor jeder Anfrage, danach hooks.failed({path, status, network}) bzw. beim Login hooks.ok({path}) (siehe guard.js). */
   constructor(baseUrl = BASE_URL, hooks = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.token = null;
@@ -199,9 +199,13 @@ export class IbsClient {
     }
     if (!resp.ok && resp.type !== "opaqueredirect") await this.hooks.failed?.({ path, status: resp.status });
     if (resp.type === "opaqueredirect" || resp.status === 401 || resp.status === 403) {
+      // Falsche Zugangsdaten meldet der Login als errorMessage; eine Weiterleitung
+      // oder 401/403 dort ist eine Störung, keine Ablehnung.
+      if (!auth) throw new IbsError(`${path}: unerwartete Antwort (${resp.type === "opaqueredirect" ? "Weiterleitung" : `HTTP ${resp.status}`})`);
       throw new IbsAuthError(`${path}: Anmeldung abgelaufen oder abgelehnt`);
     }
     if (!resp.ok) throw new IbsError(`${path}: HTTP ${resp.status}`);
+    if (!auth) await this.hooks.ok?.({ path });
     return resp.text();
   }
 }

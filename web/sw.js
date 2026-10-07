@@ -9,7 +9,7 @@ import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 
-const VERSION = "v39";
+const VERSION = "v40";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js", "session.js"];
 

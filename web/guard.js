@@ -1,15 +1,20 @@
 // Schutz vor der IP-Sperre von IBS5. Gesperrt antwortet IBS5 auf alles mit 406
 // ohne CORS-Freigabe, im Browser kommt davon nur „Failed to fetch“ an — nicht von
-// einem Netzfehler zu unterscheiden. Scheitert deshalb selbst der Login so (oder
-// kommt 403/429), ruht jede Abfrage einige Stunden, statt die Sperre durch
-// Wiederholungen zu verlängern. Dazu eine Obergrenze je Stunde und Gerät, die
-// nur bremst, bis wieder Platz im Stundenfenster ist.
+// einem Netzfehler zu unterscheiden. Bei 403/429 auf den Login ruht jede Abfrage
+// drei Stunden, statt die Sperre durch Wiederholungen zu verlängern. Bleibt der
+// Login nur ohne Antwort, kann das auch ein Aussetzer sein: erst 15 Minuten, erst
+// beim nächsten Schweigen binnen sechs Stunden drei. Die Sperre gilt der
+// IP-Adresse, deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔
+// Mobilfunk, nur wo der Browser das verrät). Dazu eine Obergrenze je Stunde und
+// Gerät, die nur bremst, bis wieder Platz im Stundenfenster ist.
 // Seite und Service Worker teilen den Zustand über IndexedDB.
 
 import { IbsError } from "./ibs.js";
 import { kvDel, kvGet, kvSet } from "./idb.js";
 
 const PAUSE_MS = 3 * 3600 * 1000;
+const SILENT_PAUSE_MS = 15 * 60 * 1000;
+const SILENT_REPEAT_MS = 6 * 3600 * 1000;
 const HOUR_CAP = 150;
 
 export class IbsPausedError extends IbsError {
@@ -22,10 +27,19 @@ export class IbsPausedError extends IbsError {
   }
 }
 
-/** Aktive Pause oder null. */
+/** "wifi", "cellular" … oder null, wo der Browser es nicht sagt (iOS, Desktop). */
+const netType = () => (typeof navigator !== "undefined" && navigator.connection?.type) || null;
+
+/** Aktive Pause oder null; in einem anderen Netz als bei ihrem Beginn gilt sie nicht. */
 export async function paused() {
   const p = await kvGet("ibsPause");
-  return p && p.until > Date.now() ? p : null;
+  if (!p || p.until <= Date.now()) return null;
+  const net = netType();
+  if (p.net && net && net !== p.net) {
+    await kvDel("ibsPause");
+    return null;
+  }
+  return p;
 }
 
 /** „Trotzdem jetzt versuchen“: Pause und Zähler zurücksetzen. */
@@ -34,8 +48,8 @@ export async function resume() {
   await kvDel("ibsBudget");
 }
 
-async function pause(reason) {
-  await kvSet("ibsPause", { until: Date.now() + PAUSE_MS, reason, at: Date.now() });
+async function pause(reason, ms = PAUSE_MS) {
+  await kvSet("ibsPause", { until: Date.now() + ms, reason, at: Date.now(), net: netType() });
 }
 
 /**
@@ -60,6 +74,14 @@ export const guardHooks = {
     if (network && typeof navigator !== "undefined" && navigator.onLine === false) return;
     // 403 bei angemeldeten Aufrufen heißt meist nur „Token abgelaufen“, deshalb nur beim Login.
     if (status === 429 || (status === 403 && path.startsWith("/Login/"))) return pause(`HTTP ${status}`);
-    if (network && path.startsWith("/Login/")) return pause("keine Antwort beim Anmelden");
+    if (network && path.startsWith("/Login/")) {
+      const last = await kvGet("ibsSilentAt");
+      await kvSet("ibsSilentAt", Date.now());
+      return pause("keine Antwort beim Anmelden", last && Date.now() - last < SILENT_REPEAT_MS ? PAUSE_MS : SILENT_PAUSE_MS);
+    }
+  },
+  /** Ein geglückter Login beendet die Zählung des Schweigens. */
+  async ok({ path }) {
+    if (path.startsWith("/Login/")) await kvDel("ibsSilentAt");
   },
 };

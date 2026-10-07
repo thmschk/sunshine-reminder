@@ -4,9 +4,9 @@
 <!-- Mit echter Wartezeit aufrufen (Screenshot), nicht mit virtueller Zeit: IndexedDB hängt dort. -->
 <body style="font:16px monospace"><pre id="out">läuft</pre>
 <script type="module">
-import { IbsClient, collect } from "../ibs.js";
+import { IbsClient, IbsAuthError, collect } from "../ibs.js";
 import { guardHooks, paused, resume, IbsPausedError } from "../guard.js";
-import { kvDel, kvSet } from "../idb.js";
+import { kvDel, kvGet, kvSet } from "../idb.js";
 
 const lines = [];
 const out = document.getElementById("out");
@@ -14,7 +14,9 @@ const check = (name, ok, extra = "") => { lines.push(`${ok ? "ok  " : "FAIL"} ${
 window.addEventListener("unhandledrejection", (e) => { lines.push("REJ " + e.reason); out.textContent = lines.join("\n"); });
 const realFetch = window.fetch;
 let calls = 0;
-const reset = async () => { calls = 0; await resume(); await kvDel("ibsBudget"); };
+const reset = async () => { calls = 0; await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilentAt"); };
+const setNet = (type) => Object.defineProperty(navigator, "connection", { value: type ? { type } : undefined, configurable: true });
+const minutesLeft = async () => Math.round(((await paused())?.until - Date.now()) / 60000);
 
 try {
   // 1. Gesperrt: Login scheitert wie bei IBS5 mit einem Netzfehler → Pause, danach keine Anfrage mehr.
@@ -27,6 +29,41 @@ try {
   let e2 = null;
   try { await c.login("1", "x"); } catch (e) { e2 = e; }
   check("während der Pause keine Anfrage", e2 instanceof IbsPausedError && calls === 1, `Anfragen: ${calls}`);
+  check("erstes Schweigen: 15 Minuten", (await minutesLeft()) === 15, `${await minutesLeft()} min`);
+  await resume(); // „Trotzdem jetzt versuchen“
+  try { await c.login("1", "x"); } catch { /* erwartet */ }
+  check("zweites Schweigen binnen 6 h: 3 Stunden", (await minutesLeft()) === 180, `${await minutesLeft()} min`);
+
+  // 1b. Geglückter Login setzt die Zählung zurück.
+  await reset();
+  await kvSet("ibsSilentAt", Date.now() - 60000);
+  window.fetch = async () => { calls++; return new Response(JSON.stringify({ token: "t", name1: "" })); };
+  await new IbsClient(undefined, guardHooks).login("1", "x");
+  check("geglückter Login löscht die Zählung", (await kvGet("ibsSilentAt")) === undefined);
+
+  // 1c. Netzwechsel hebt die Pause auf (IP-Sperre), gleiches Netz nicht.
+  await reset();
+  setNet("wifi");
+  window.fetch = async () => { calls++; throw new TypeError("Failed to fetch"); };
+  try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch { /* */ }
+  check("Pause im WLAN", !!(await paused()));
+  setNet("cellular");
+  check("im Mobilfunk keine Pause", !(await paused()));
+  await reset();
+  try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch { /* */ }
+  setNet("cellular");
+  check("im selben Netz bleibt sie", !!(await paused()));
+  setNet(null);
+  check("ohne Netzangabe (iPhone) bleibt sie", !!(await paused()));
+
+  // 1d. Weiterleitung beim Login ist eine Störung: keine Ablehnung, keine Pause.
+  await reset();
+  for (const [what, resp] of [["Weiterleitung", { type: "opaqueredirect", ok: false, status: 0 }], ["HTTP 401", new Response("", { status: 401 })]]) {
+    window.fetch = async () => { calls++; return resp; };
+    let e1d = null;
+    try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch (e) { e1d = e; }
+    check(`${what} beim Login: keine Ablehnung, keine Pause`, e1d && !(e1d instanceof IbsAuthError) && !(await paused()), e1d?.message);
+  }
 
   // 2. Angemeldet, Abruf scheitert, genau ein erneuter Login, dann Pause.
   await reset();
@@ -80,6 +117,6 @@ try {
   lines.push("FAIL Ausnahme: " + e);
 }
 window.fetch = realFetch;
-await resume(); await kvDel("ibsBudget");
+await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilentAt");
 document.getElementById("out").textContent = lines.join("\n") + (lines.some((l) => l.startsWith("FAIL")) ? "\n\nFEHLGESCHLAGEN" : "\n\nALLE OK");
 </script>
