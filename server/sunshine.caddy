@@ -14,8 +14,10 @@ sunshine.thomschke.info {
 		-Server
 	}
 
-	# Hülle immer frisch prüfen lassen, sonst hängt ein Deploy am Browser-Cache.
-	@shell path / *.html *.js *.css *.webmanifest
+	# Hülle und Icons immer frisch prüfen lassen, sonst hängt ein Deploy am
+	# Browser-Cache (neue Icons zusätzlich mit ?v= im Manifest, sonst bleibt das
+	# alte beim Installieren hängen).
+	@shell path / *.html *.js *.css *.webmanifest *.png *.svg
 	header @shell Cache-Control "no-cache"
 
 	@manifest path *.webmanifest

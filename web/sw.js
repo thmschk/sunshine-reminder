@@ -9,9 +9,9 @@ import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 
-const VERSION = "v43";
+const VERSION = "v44";
 const PUSH_MAX_DAYS = 5;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg", "icon-192.png", "badge-96.png", "manifest.webmanifest", "sdui.js", "guard.js", "session.js"];
+const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -99,8 +99,8 @@ async function subjectReminder(isTest) {
     const lines = found.map((m) => m.subject + (m.label ? ` — ${m.label}` : "") + (m.notes.length ? ` (${m.notes.join("; ")})` : ""));
     await self.registration.showNotification(`${when} ${found.map((m) => m.subject).join(" und ")}`, {
       body: lines.join("\n") + (cfg.childName ? `\nfür ${cfg.childName}` : ""),
-      icon: "icon-192.png",
-      badge: "badge-96.png",
+      icon: "icon-192.png?v=2",
+      badge: "badge-96.png?v=2",
       tag: "hs-sdui",
       data: { url: "./" },
     });
@@ -159,9 +159,9 @@ async function checkAndNotify(isTest) {
 function notify(title, body, { silent = false, url = "./" } = {}) {
   return self.registration.showNotification(title, {
     body,
-    icon: "icon-192.png",
+    icon: "icon-192.png?v=2",
     // Kleines Symbol in Statusleiste und Kopf der Meldung; ohne zeigt Android das Chrome-Logo.
-    badge: "badge-96.png",
+    badge: "badge-96.png?v=2",
     tag: "hs-check",
     renotify: !silent,
     silent,
