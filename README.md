@@ -108,7 +108,11 @@ ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
 
 1. **Installieren**
    * **iPhone** (Safari): Teilen → „Zum Home-Bildschirm“
-   * **Android** (Chrome): ⋮ → „App installieren“ — nicht „Verknüpfung erstellen“
+   * **Android** (Chrome): Knopf „Als App installieren“ auf der Seite, sonst
+     ⋮ → „App installieren“ — nicht „Verknüpfung erstellen“
+   * Aus Instagram, WhatsApp & Co. geöffnet: erst „Im Browser“ bzw. „In Safari
+     öffnen“ — deren eingebaute Browser können nicht installieren.
+   * Für QR-Codes und Links: `…/?installieren` zeigt die Anleitung zuerst.
 2. **Über das neue Symbol öffnen**, nicht im Browser-Tab.
 3. **Anmelden** mit Kundennummer und Passwort von IBS5.
 4. **Erinnerung einschalten:** ⚙ → Uhrzeit wählen → „Erinnerung einschalten“.

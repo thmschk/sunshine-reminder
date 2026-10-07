@@ -222,6 +222,7 @@ pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
 .about .dialog-actions { justify-content: flex-end; }
 
 .tip h3 { font-size: 1.05rem; font-weight: 500; margin: 0 0 4px; }
+.tip-focus { box-shadow: 0 0 0 2px var(--primary); }
 .tip p { margin: 0 0 8px; }
 .tip-device { font-size: .78rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--secondary); margin: 12px 0 6px; }
 .tip-steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }

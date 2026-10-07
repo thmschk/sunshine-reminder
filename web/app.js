@@ -98,6 +98,7 @@ function showSetup(message = "", prefill = {}, retry = null) {
   viewSeq++;
   chrome(false);
   $app.innerHTML = `
+    ${wantInstall ? installTip() : ""}
     <div class="card hero open intro">
       <h2>Nie wieder Schulessen vergessen</h2>
       <p>Zeigt, für welche Tage im Bestellsystem IBS5 noch nichts bestellt ist, und bestellt, bestellt um
@@ -107,7 +108,7 @@ function showSetup(message = "", prefill = {}, retry = null) {
         deine Bestellungen. Nimmst du den Stundenplan aus Sdui dazu, laufen dessen Anmeldung und Abruf durch ihn.</p>
       <p class="small muted">Kein Angebot von Sunshine Catering oder dem Hersteller von IBS5.</p>
     </div>
-    ${installTip()}
+    ${wantInstall ? "" : installTip()}
     <div class="card">
       <h2 class="u-mt0">Anmelden</h2>
       <p class="small muted">Mit Kundennummer und Passwort des Schulessen-Bestellsystems (IBS5).</p>
@@ -122,6 +123,7 @@ function showSetup(message = "", prefill = {}, retry = null) {
         <div class="row"><button type="submit" class="block">Speichern und prüfen</button></div>
       </form>
     </div>`;
+  wireInstallTip();
   const attempt = async (creds, remember) => {
     busy("Anmelden …");
     try {
@@ -152,20 +154,66 @@ function showSetup(message = "", prefill = {}, retry = null) {
 }
 
 /** Anleitung zum Installieren, nur für das eigene Gerät; entfällt in der installierten App. */
+// Android-Browser melden über beforeinstallprompt, dass die Seite installierbar
+// ist; dann ersetzt ein Knopf die Schritte über das Menü. Safari kennt das nicht.
+// Wird der Dialog abgelehnt, bietet Chrome ihn eine Weile nicht an: dann wieder die Schritte.
+let installPrompt = null;
+addEventListener("beforeinstallprompt", (ev) => {
+  ev.preventDefault();
+  installPrompt = ev;
+  refreshInstallTip();
+});
+addEventListener("appinstalled", () => {
+  installPrompt = null;
+  for (const el of document.querySelectorAll(".tip")) el.remove();
+});
+
+/** …/?installieren (z. B. als QR-Code): Karte zuerst und hervorgehoben, auch angemeldet. */
+const wantInstall = new URLSearchParams(location.search).has("installieren");
+// Eingebaute Browser (Instagram, Facebook, TikTok … und Android-WebViews) können nicht
+// installieren. WhatsApp öffnet auf dem iPhone eine Safari-Ansicht, die sich nicht erkennen lässt.
+const inAppBrowser = /FBAN|FBAV|Instagram|LinkedInApp|Snapchat|musical_ly|BytedanceWebview|\bLine\/|; wv\)/.test(navigator.userAgent);
+
 function installTip() {
   if (standalone) return "";
   const android = /Android/.test(navigator.userAgent);
   const steps = (name, list) => `
     <div class="tip-device">${name}</div>
     <ol class="tip-steps">${list.map((x) => `<li><span>${x}</span></li>`).join("")}</ol>`;
-  const ios = steps("iPhone", ["In Safari unten auf <b>Teilen</b> tippen", "<b>Zum Home-Bildschirm</b> wählen", "Von dort öffnen"]);
+  const ios = steps("iPhone", ["In Safari unten auf <b>Teilen</b> tippen", "<b>Zum Home-Bildschirm</b> wählen", "Von dort öffnen"])
+    + `<p class="small muted">Fehlt „Zum Home-Bildschirm“, ist die Seite in einer anderen App geöffnet (etwa aus WhatsApp): erst „In Safari öffnen“.</p>`;
   const and = steps("Android", ["In Chrome oben rechts auf <b>⋮</b> tippen", "<b>App installieren</b> wählen, nicht „Verknüpfung“", "Von dort öffnen"]);
+  const body = inAppBrowser
+    ? `<p><b>Die Seite ist gerade in einer anderen App geöffnet.</b> Von hier lässt sie sich nicht installieren:
+        im Menü dieser App <b>${isIos ? "In Safari öffnen" : "Im Browser öffnen"}</b> wählen.</p>`
+    : installPrompt
+      ? `<div class="row"><button id="b-install" type="button" class="block">Als App installieren</button></div>`
+      : isIos ? ios : android ? and : ios + and;
   return `
-    <div class="card tip">
+    <div class="card tip${wantInstall ? " tip-focus" : ""}">
       <h3>Als App auf den Startbildschirm</h3>
       <p class="small muted">Dann öffnet sie sich wie eine App${android ? "" : ", und nur so kommen auf dem iPhone Erinnerungen an"}.</p>
-      ${isIos ? ios : android ? and : ios + and}
+      ${body}
     </div>`;
+}
+
+function wireInstallTip() {
+  const button = document.getElementById("b-install");
+  if (!button) return;
+  button.onclick = async () => {
+    const prompt = installPrompt;
+    installPrompt = null;
+    if (!prompt) return refreshInstallTip();
+    prompt.prompt();
+    const choice = await prompt.userChoice.catch(() => null);
+    if (choice?.outcome !== "accepted") refreshInstallTip();
+  };
+}
+
+/** Steht die Karte schon auf der Seite, mit dem aktuellen Stand neu zeichnen. */
+function refreshInstallTip() {
+  for (const el of document.querySelectorAll(".tip")) el.outerHTML = installTip();
+  wireInstallTip();
 }
 
 const EYE = "M12,4.5C7,4.5 2.73,7.61 1,12c1.73,4.39 6,7.5 11,7.5s9.27,-3.11 11,-7.5c-1.73,-4.39 -6,-7.5 -11,-7.5zM12,17c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5zM12,9c-1.66,0 -3,1.34 -3,3s1.34,3 3,3 3,-1.34 3,-3 -1.34,-3 -3,-3z";
@@ -279,6 +327,7 @@ async function renderHome(my, days, { staleAt = null } = {}) {
 
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
+    ${wantInstall ? installTip() : ""}
     ${heroCard(days, client.profile?.firstName || "")}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
@@ -287,6 +336,7 @@ async function renderHome(my, days, { staleAt = null } = {}) {
         <ul class="days">${week.map((d) => dayRow(d, strip)).join("")}</ul>`).join("")}` : ""}
     <div class="center"><button id="b-all" class="text">Alle bestellbaren Tage →</button></div>`;
 
+  wireInstallTip();
   for (const li of $app.querySelectorAll(".days li")) {
     li.onclick = () => {
       const d = days.find((x) => x.date === li.dataset.date);
