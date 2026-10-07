@@ -102,6 +102,17 @@ try {
   check("… nur bis die älteste Anfrage herausfällt, ohne Dauerpause",
     Math.abs(e4.until - (oldest + 3600 * 1000)) < 1000 && !(await paused()));
 
+  // 4b. Abfragen mit Token zählen doppelt (CORS-Vorabfrage), der Login einfach.
+  await reset();
+  await kvSet("ibsBudget", Array.from({ length: 149 }, () => Date.now()));
+  window.fetch = async () => { calls++; return new Response(JSON.stringify({ token: "t", name1: "" })); };
+  const c4 = new IbsClient(undefined, guardHooks); c4.token = "t";
+  let e4b = null;
+  try { await c4.weekplan(2026, 41); } catch (e) { e4b = e; }
+  check("Abfrage mit Token braucht zwei Plätze", e4b instanceof IbsPausedError && calls === 0);
+  await new IbsClient(undefined, guardHooks).login("1", "x");
+  check("Login passt in den letzten Platz", calls === 1 && (await kvGet("ibsBudget")).length === 150);
+
   // 5. Eingeschleustes HTML im Gerichtsnamen landet nur als Text auf der Seite.
   await reset();
   window.__xss = 0;

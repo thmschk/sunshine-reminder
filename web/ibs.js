@@ -75,7 +75,7 @@ export const De = {
  * Solche Fehler bei angemeldeten Aufrufen tragen deshalb maybeAuth.
  */
 export class IbsClient {
-  /** hooks.before() vor jeder Anfrage, danach hooks.failed({path, status, network}) bzw. beim Login hooks.ok({path}) (siehe guard.js). */
+  /** hooks.before({path, weight}) vor jeder Anfrage, danach hooks.failed({path, status, network}) bzw. beim Login hooks.ok({path}) (siehe guard.js). */
   constructor(baseUrl = BASE_URL, hooks = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.token = null;
@@ -181,7 +181,9 @@ export class IbsClient {
       headers.Authorization = `Bearer ${this.token}`;
       headers["X-Requested-With"] = "XMLHttpRequest";
     }
-    await this.hooks.before?.();
+    // Mit Token schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
+    // nicht, sie zwischenzuspeichern): bei IBS5 kommen zwei Anfragen an.
+    await this.hooks.before?.({ path, weight: auth ? 2 : 1 });
     let resp;
     try {
       resp = await fetch(this.base + path, {
@@ -522,7 +524,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // sich durch Bestellen (eigene Bestellungen laden den Tag danach ohnehin neu).
 const DAY_TTL_MS = { [OrderState.DEADLINE_PASSED]: Infinity, [OrderState.NO_OFFER]: 60 * 60 * 1000 };
 const DAY_CACHE_MS = 10 * 60 * 1000;
-const isFresh = (hit) => Date.now() - hit.at < (DAY_TTL_MS[hit.day.state] ?? DAY_CACHE_MS);
+// Ab nächster Woche länger: dort ist kein Bestellschluss nah, und ob anderswo
+// bestellt wurde, gleicht die Übersicht über die Bestellhistorie ab.
+const FAR_CACHE_MS = 6 * 60 * 60 * 1000;
+const isFresh = (hit) => {
+  const nextMonday = addDays(todayBerlin(), 8 - weekdayNo(todayBerlin()));
+  const ttl = DAY_TTL_MS[hit.day.state] ?? (hit.day.date >= nextMonday ? FAR_CACHE_MS : DAY_CACHE_MS);
+  return Date.now() - hit.at < ttl;
+};
 
 /**
  * Zwischenspeicher der Tagesansichten, je Kundennummer (die Tage tragen deren

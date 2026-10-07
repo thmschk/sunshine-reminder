@@ -180,14 +180,20 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
 {
   const t = todayBerlin();
   const [d1, d2, d3] = [addDays(t, 3), addDays(t, 4), addDays(t, 5)];
-  await test("Zwischenspeicher: nach Bestellschluss für immer, offen nur 10 Minuten", async () => {
+  await test("Zwischenspeicher: nach Bestellschluss für immer, offen 10 Minuten, ab nächster Woche 6 Stunden", async () => {
+    const [near, far, farther] = [t, addDays(t, 14), addDays(t, 21)];
     const asked = [];
-    const store = memStore([row(d1, OrderState.DEADLINE_PASSED, 600), row(d2, OrderState.NOT_ORDERED, 15), row(d3, OrderState.NOT_ORDERED, 2)]);
+    const store = memStore([
+      row(farther, OrderState.DEADLINE_PASSED, 600),
+      row(near, OrderState.NOT_ORDERED, 15), // diese Woche, abgelaufen
+      row(far, OrderState.NOT_ORDERED, 180), // ab nächster Woche, noch gültig
+      row(addDays(t, 15), OrderState.ORDERED, 7 * 60), // ab nächster Woche, abgelaufen
+    ]);
     const fake = { customerNo: "1000", dayView: true, dayStore: store, async dayplan(d) { asked.push(d); return emptyDay; } };
-    const days = await collect(fake, [d1, d2, d3]);
-    eq(asked, [d2], "nur der abgelaufene Tag");
-    eq(days.map((d) => d.state), [OrderState.DEADLINE_PASSED, OrderState.NO_OFFER, OrderState.NOT_ORDERED]);
-    eq(store.rows.find((r) => r.date === d2).day.state, OrderState.NO_OFFER, "gespeichert");
+    const days = await collect(fake, [near, far, addDays(t, 15), farther]);
+    eq(asked.sort(), [near, addDays(t, 15)].sort(), "nur die abgelaufenen Tage");
+    eq(days.map((d) => d.state), [OrderState.NO_OFFER, OrderState.NOT_ORDERED, OrderState.NO_OFFER, OrderState.DEADLINE_PASSED]);
+    eq(store.rows.find((r) => r.date === near).day.state, OrderState.NO_OFFER, "gespeichert");
   });
   await test("Zwischenspeicher: Widerspruch zur Historie verwirft den Tag", async () => {
     const asked = [];

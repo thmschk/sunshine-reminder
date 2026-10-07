@@ -6,7 +6,8 @@
 // beim nächsten Schweigen binnen sechs Stunden drei. Die Sperre gilt der
 // IP-Adresse, deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔
 // Mobilfunk, nur wo der Browser das verrät). Dazu eine Obergrenze je Stunde und
-// Gerät, die nur bremst, bis wieder Platz im Stundenfenster ist.
+// Gerät, die nur bremst, bis wieder Platz im Stundenfenster ist; gezählt wird, was
+// bei IBS5 ankommt (Abfragen mit Token samt CORS-Vorabfrage doppelt).
 // Seite und Service Worker teilen den Zustand über IndexedDB.
 
 import { IbsError } from "./ibs.js";
@@ -57,16 +58,17 @@ async function pause(reason, ms = PAUSE_MS) {
  * einem Fehlschlag entscheiden, ob pausiert wird.
  */
 export const guardHooks = {
-  async before() {
+  async before({ weight = 1 } = {}) {
     const p = await paused();
     if (p) throw new IbsPausedError(p.until, p.reason);
     const now = Date.now();
     const recent = ((await kvGet("ibsBudget")) || []).filter((t) => now - t < 3600 * 1000);
-    // Volles Kontingent ist keine Sperre: nur warten, bis die älteste Anfrage aus der Stunde fällt.
-    if (recent.length >= HOUR_CAP) {
-      throw new IbsPausedError(Math.min(...recent) + 3600 * 1000, `mehr als ${HOUR_CAP} Anfragen in einer Stunde`);
+    // Volles Kontingent ist keine Sperre: nur warten, bis genug aus der Stunde gefallen ist.
+    if (recent.length + weight > HOUR_CAP) {
+      const until = recent.sort((a, b) => a - b)[recent.length + weight - HOUR_CAP - 1] + 3600 * 1000;
+      throw new IbsPausedError(until, `mehr als ${HOUR_CAP} Anfragen in einer Stunde`);
     }
-    recent.push(now);
+    for (let i = 0; i < weight; i++) recent.push(now);
     await kvSet("ibsBudget", recent);
   },
   async failed({ path, status, network }) {

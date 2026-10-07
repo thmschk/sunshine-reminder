@@ -174,9 +174,10 @@ braucht alle Tage einzeln, lädt Woche für Woche, zeigt jede sofort und hört a
 wenn Montag und Dienstag einer Woche noch keinen Speiseplan haben. Tage
 nacheinander mit Pausen und etwas Zufall; geladene Tage bleiben auf dem Gerät
 gespeichert (nach Bestellschluss bis zum Tag selbst, ohne Angebot eine Stunde,
-sonst zehn Minuten; widerspricht die Bestellhistorie, wird neu geladen), die
-Erinnerung höchstens die nächsten fünf Schultage, insgesamt höchstens 150
-Anfragen je Stunde und Gerät. Kommt beim Anmelden ein 429 oder 403, ruht die
+andere Tage ab nächster Woche sechs Stunden, sonst zehn Minuten; widerspricht
+die Bestellhistorie, wird neu geladen), die Erinnerung prüft höchstens die
+nächsten fünf Schultage, und insgesamt gehen höchstens 150 Anfragen je Stunde
+und Gerät an IBS5 (CORS-Vorabfragen mitgezählt). Kommt beim Anmelden ein 429 oder 403, ruht die
 App drei Stunden und sagt das, statt die Sperre durch Wiederholungen zu
 verlängern. Kommt gar keine Antwort (so sieht die Sperre im Browser aus, aber
 auch ein Aussetzer), ruht sie erst 15 Minuten, beim nächsten Mal binnen sechs
