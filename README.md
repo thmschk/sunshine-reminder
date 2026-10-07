@@ -29,6 +29,10 @@ offen ist.
 
 * Übersicht der nächsten Tage, bestellen, umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit
   dem Bestellsystem.
+* **Eigene Termine** (＋ oben): Ausflug, Sportfest … mit Erinnerung 1 bis 7 Tage
+  vorher, in derselben Meldung wie das Essen. Mit „kein Schulessen an dem Tag“
+  gilt der Tag nicht als offen, und ist dort doch bestellt, erinnert sie ans
+  Abbestellen. Die Termine liegen nur auf dem Gerät, nicht auf dem Server.
 * Für die Erinnerung weckt ein kleiner Server das Gerät werktags zur gewählten
   Uhrzeit mit einer leeren Push-Nachricht. Geprüft wird dann **auf dem Gerät**.
   Der Server kennt weder die IBS5-Zugangsdaten noch den Bestellstand. Für die
@@ -198,7 +202,7 @@ und von IBS5. Ob der ausgelieferte Code dem Repository entspricht, lässt sich
 nachprüfen:
 
 ```sh
-for f in index.html app.js ibs.js idb.js guard.js session.js sdui.js sw.js style.css; do
+for f in index.html app.js ibs.js idb.js guard.js session.js events.js sdui.js sw.js style.css; do
   curl -s "https://<adresse>/$f" | cmp -s - "web/$f" && echo "ok    $f" || echo "ANDERS $f"
 done
 ```

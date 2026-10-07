@@ -231,6 +231,57 @@ await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu",
   eq(await withSession(c, creds, async () => c.token, { persist: false }), "T3", "ohne Speichern kein gespeicherter Token");
 });
 
+// Eigene Termine und die Meldung des Weckrufs.
+{
+  const Ev = await import("../events.js");
+  const { compose } = await import("../sw.js");
+  const { kvSet } = await import("../idb.js");
+  const t = todayBerlin();
+  const ev = (id, date, lead, noMeal = false, title = id) => ({ id, title, date, lead, noMeal });
+  const day = (date, state) => new DayStatus(date, state, state === OrderState.ORDERED ? [{ isOrdered: true, name: "Nudeln" }] : []);
+
+  await test("Termine: fällig ab Vorlauf bis zum Tag, vergangene fallen weg", async () => {
+    const list = [ev("a", addDays(t, 3), 2), ev("b", addDays(t, 3), 3), ev("c", t, 1), ev("d", addDays(t, -1), 7)];
+    eq(Ev.dueEvents(list, t).map((e) => e.id), ["b", "c"]);
+    await kvSet("events", list);
+    eq((await Ev.loadEvents(t)).map((e) => e.id), ["c", "a", "b"], "vergangener gelöscht, nach Datum");
+    await kvSet("events", []);
+  });
+  await test("Termine: Zeilen je nach Bestellstand", () => {
+    const d = addDays(t, 2);
+    eq(Ev.eventLine(ev("x", t, 1, false, "Sportfest"), null, t), "Heute: Sportfest");
+    eq(Ev.eventLine(ev("x", d, 2, true, "Ausflug"), day(d, OrderState.ORDERED), t).endsWith("Essen ist bestellt, bitte abbestellen"), true, "bestellt");
+    eq(Ev.eventLine(ev("x", d, 2, true, "Ausflug"), day(d, OrderState.NOT_ORDERED), t).endsWith("nichts bestellt ✓"), true, "nicht bestellt");
+  });
+  await test("Weckruf: alles bestellt ohne Termin bleibt still", () => {
+    const days = [day(addDays(t, 1), OrderState.ORDERED)];
+    const m = compose({ checked: days, due: [], days, today: t });
+    eq([m.title, m.quiet], ["satt … theoretisch ✓", true]);
+  });
+  await test("Weckruf: Termin in derselben Meldung, laut, ohne Bestellwarnung", () => {
+    const d = addDays(t, 1);
+    const days = [day(d, OrderState.ORDERED)];
+    const m = compose({ checked: days, due: [ev("w", d, 2, false, "Wandertag")], days, today: t });
+    eq([m.title, m.quiet, m.url], ["Termin: Wandertag", false, "./"]);
+    eq(m.body.includes("Morgen: Wandertag") && m.body.includes("alles bestellt"), true, m.body);
+  });
+  await test("Weckruf: Tag ohne Schulessen bestellt → abbestellen, Tippen öffnet den Tag", () => {
+    const d = addDays(t, 2);
+    const days = [day(d, OrderState.ORDERED)];
+    const m = compose({ checked: [], due: [ev("a", d, 2, true, "Ausflug")], days, today: t });
+    eq([m.title, m.url], ["Essen abbestellen: Ausflug", `./?order=${d}`]);
+    eq(m.keys, [`${d}:ev:a:cancel`]);
+  });
+  await test("Weckruf: offener Tag und Termin zusammen", () => {
+    const [d1, d2] = [addDays(t, 1), addDays(t, 2)];
+    const days = [day(d1, OrderState.NOT_ORDERED), day(d2, OrderState.ORDERED)];
+    const m = compose({ checked: days, due: [ev("s", d2, 1, false, "Sportfest")], days, today: t, firstName: "Mia" });
+    eq(m.title, "1 ausstehende Bestellung für Mia");
+    eq(m.body.includes("Bestellen ist noch möglich") && m.body.includes("Sportfest"), true, m.body);
+    eq(m.url, `./?order=${d1}`);
+  });
+}
+
 // Sdui: Zeitzone, Kürzel, Zusammenfassen, Zeitleiste.
 const Sdui = await import("../sdui.js");
 {

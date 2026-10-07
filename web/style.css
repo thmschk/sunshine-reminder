@@ -170,7 +170,7 @@ button:disabled { opacity: .45; cursor: default; }
 .settings hr { border: 0; border-top: 1px solid var(--surface-variant); margin: 14px 0; }
 
 label { display: block; margin: 12px 0 4px; font-weight: 500; }
-input[type=text], input[type=password] {
+input[type=text], input[type=password], input[type=date], select {
   width: 100%;
   font: inherit;
   padding: 8px 10px;
@@ -374,3 +374,15 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 
 /* Kopfzeile ohne Überschrift: nur die Symbole, rechtsbündig */
 header { justify-content: flex-end; min-height: 44px; }
+
+/* Eigene Termine */
+.events { padding: 8px 12px; }
+.event-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .88rem; padding: 3px 0; }
+.event-row + .event-row { border-top: 1px solid var(--surface-variant); }
+.event-row button { flex: none; }
+.events-dialog { width: min(420px, calc(100vw - 48px)); }
+.events-dialog .section { margin-top: 16px; }
+.event-list { list-style: none; margin: 0; padding: 0; }
+.event-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .88rem; padding: 4px 0; }
+.event-list li + li { border-top: 1px solid var(--surface-variant); }
+.events-dialog p { display: block; -webkit-line-clamp: unset; }

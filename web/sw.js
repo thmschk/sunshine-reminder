@@ -8,10 +8,11 @@ import { kvGet, kvSet, secretGet } from "./idb.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
+import { dueEvents, eventLine, loadEvents, needsCancel, noMealDates } from "./events.js";
 
-const VERSION = "v44";
+const VERSION = "v45";
 const PUSH_MAX_DAYS = 5;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js"];
+const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -118,9 +119,15 @@ async function checkAndNotify(isTest) {
     return notify(`${prefix}Nicht angemeldet`, "Bitte die Seite öffnen und anmelden.", { url: "./" });
   }
   const daysAhead = (await kvGet("daysAhead")) || 7;
+  const today = todayBerlin();
   // Höchstens die nächsten Schultage: auf dem Handy kostet jeder Tag eine
   // Anfrage, und zu viele quittiert IBS5 mit einer IP-Sperre.
-  const dates = targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead }).slice(0, PUSH_MAX_DAYS);
+  const checkDates = targetDates(today, { ...DEFAULT_CHECK, daysAhead }).slice(0, PUSH_MAX_DAYS);
+  // Eigene Termine: fällige Tage ohne Schulessen mitprüfen (abbestellen?), dort aber nie „offen“ melden.
+  const events = await loadEvents(today).catch(() => []);
+  const due = dueEvents(events, today);
+  const noMeal = noMealDates(events);
+  const dates = [...new Set([...checkDates, ...due.filter((e) => e.noMeal).map((e) => e.date)])].sort();
   const client = new IbsClient(undefined, guardHooks);
   client.dayView = !!(await kvGet("ibsDayView"));
   client.dayStore = { load: () => kvGet("dayCache"), save: (rows) => kvSet("dayCache", rows) };
@@ -136,24 +143,50 @@ async function checkAndNotify(isTest) {
   }
 
   await kvSet("lastPushOk", { at: Date.now() });
-  const alarm = evaluate(days);
-  if (alarm.kind === "ok") {
-    const until = days.length ? `bis ${De.long(days.at(-1).date)}` : "Keine Schultage im Prüfzeitraum";
-    return notify(`${prefix}satt … theoretisch ✓`, until, { silent: true, url: "./" });
-  }
+  const checked = days.filter((d) => checkDates.includes(d.date) && !noMeal.has(d.date));
+  const msg = compose({ checked, due, days, today, firstName });
 
-  // Wie NotifiedDays der App: laut nur, wenn ein Tag in diesem Zustand neu ist.
-  const today = todayBerlin();
+  // Wie NotifiedDays der App: laut nur, wenn ein Tag oder Termin in diesem Zustand neu ist.
   const known = new Set(((await kvGet("notified")) || []).filter((k) => k.slice(0, 10) >= today));
-  const keys = [...alarm.actionable, ...alarm.tooLate, ...alarm.unclear].map((d) => `${d.date}:${d.state}`);
-  const fresh = isTest || keys.some((k) => !known.has(k));
-  await kvSet("notified", [...new Set([...known, ...keys])]);
+  const fresh = isTest || msg.keys.some((k) => !known.has(k));
+  await kvSet("notified", [...new Set([...known, ...msg.keys])]);
+  return notify(prefix + msg.title, msg.body, { silent: msg.quiet || !fresh, url: msg.url });
+}
 
-  const first = alarm.actionable[0]?.date;
-  return notify(prefix + AlarmText.title(alarm, firstName), AlarmText.body(alarm), {
-    silent: !fresh,
+/**
+ * Meldung aus Bestellstand (checked: geprüfte Tage ohne „kein Schulessen“) und
+ * fälligen eigenen Terminen. keys: Zustände für „laut nur bei Neuem“, je mit dem
+ * Datum vorn, damit Vergangenes herausfällt; quiet: „alles bestellt“ kommt immer still.
+ */
+export function compose({ checked, due, days, today, firstName = "" }) {
+  const alarm = evaluate(checked);
+  const dayOf = (date) => days.find((d) => d.date === date);
+  const cancel = due.find((e) => needsCancel(e, dayOf(e.date)));
+  const keys = [
+    ...[...alarm.actionable, ...alarm.tooLate, ...alarm.unclear].map((d) => `${d.date}:${d.state}`),
+    ...due.map((e) => `${e.date}:ev:${e.id}${needsCancel(e, dayOf(e.date)) ? ":cancel" : ""}`),
+  ];
+  const evText = due.length ? `Termine:\n${due.map((e) => `  • ${eventLine(e, dayOf(e.date), today)}`).join("\n")}` : "";
+
+  if (alarm.kind === "ok") {
+    const until = checked.length ? `bis ${De.long(checked.at(-1).date)}` : "Keine Schultage im Prüfzeitraum";
+    if (!due.length) return { title: "satt … theoretisch ✓", body: until, url: "./", keys, quiet: true };
+    return {
+      title: cancel ? `Essen abbestellen: ${cancel.title}` : due.length === 1 ? `Termin: ${due[0].title}` : `${due.length} Termine`,
+      body: `${evText}\n\nSchulessen: alles bestellt ${until}`,
+      url: cancel ? `./?order=${cancel.date}` : "./",
+      keys,
+      quiet: false,
+    };
+  }
+  const first = alarm.actionable[0]?.date ?? cancel?.date;
+  return {
+    title: AlarmText.title(alarm, firstName),
+    body: [AlarmText.body(alarm), evText].filter(Boolean).join("\n\n"),
     url: first ? `./?order=${first}` : "./",
-  });
+    keys,
+    quiet: false,
+  };
 }
 
 function notify(title, body, { silent = false, url = "./" } = {}) {

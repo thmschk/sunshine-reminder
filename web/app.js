@@ -6,6 +6,7 @@ import { kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks, resume } from "./guard.js";
 import { login, withSession } from "./session.js";
+import { LEADS, addEvent, dueEvents, eventLine, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
 
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
 // diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
@@ -51,13 +52,14 @@ const $app = document.getElementById("app");
 const $reload = document.getElementById("btn-reload");
 const $settings = document.getElementById("btn-settings");
 const $web = document.getElementById("btn-web");
+const $add = document.getElementById("btn-add");
 const $footer = document.getElementById("footer");
 
 const $header = document.querySelector("header");
 
 function chrome(visible) {
   $header.hidden = false;
-  $reload.hidden = $settings.hidden = $web.hidden = !visible;
+  $reload.hidden = $settings.hidden = $web.hidden = $add.hidden = !visible;
   if (!visible) $footer.hidden = true;
 }
 
@@ -259,7 +261,10 @@ async function showHome(fresh = false) {
 
   const today = todayBerlin();
   const cfg = { ...DEFAULT_CHECK, daysAhead: loadDaysAhead() };
-  const dates = targetDates(today, cfg);
+  // Fällige Tage ohne Schulessen kommen dazu, auch hinter dem Prüfzeitraum:
+  // nur so steht fest, ob dort noch abbestellt werden muss.
+  const events = await loadEvents(today).catch(() => []);
+  const dates = [...new Set([...targetDates(today, cfg), ...dueEvents(events, today).filter((e) => e.noMeal).map((e) => e.date)])].sort();
   // Ob IBS5 diesem Gerät nur Tagesansichten liefert, ist gemerkt: spart die Probe-Anfrage.
   client.dayView ||= !!(await kvGet("ibsDayView").catch(() => false));
   const cached = await kvGet("lastDays").catch(() => null);
@@ -323,17 +328,23 @@ async function renderHome(my, days, { staleAt = null } = {}) {
   const sdui = await Sdui.cachedPlan().catch(() => null);
   const scfg = sdui ? await Sdui.sduiConfig() : null;
   const strip = sdui ? stripMaker(sdui.lessons, scfg?.subjects || []) : null;
+  const today = todayBerlin();
+  const events = await loadEvents(today).catch(() => []);
+  // An Tagen ohne Schulessen ist „nicht bestellt“ gewollt: kein „offen“ in der Statuskarte.
+  const noMeal = noMealDates(events);
+  const relevant = days.filter((d) => !noMeal.has(d.date));
   if (my !== viewSeq) return;
 
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
     ${wantInstall ? installTip() : ""}
-    ${heroCard(days, client.profile?.firstName || "")}
+    ${heroCard(relevant, client.profile?.firstName || "")}
+    ${eventsCard(events, days, today)}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
       <div class="section">DIE NÄCHSTEN TAGE</div>
       ${byWeek(days.slice(0, DAY_LIST_LENGTH)).map((week) => `
-        <ul class="days">${week.map((d) => dayRow(d, strip)).join("")}</ul>`).join("")}` : ""}
+        <ul class="days">${week.map((d) => dayRow(d, strip, events.filter((e) => e.date === d.date))).join("")}</ul>`).join("")}` : ""}
     <div class="center"><button id="b-all" class="text">Alle bestellbaren Tage →</button></div>`;
 
   wireInstallTip();
@@ -346,7 +357,8 @@ async function renderHome(my, days, { staleAt = null } = {}) {
   }
   document.getElementById("b-all").onclick = () => showOrder();
   const now = document.getElementById("b-order-now");
-  if (now) now.onclick = () => showOrder(days.find((d) => d.isActionable).date);
+  if (now) now.onclick = () => showOrder(relevant.find((d) => d.isActionable).date);
+  for (const b of $app.querySelectorAll("[data-cancel]")) b.onclick = () => showOrder(b.dataset.cancel);
 
   if (!staleAt) await kvSet("lastOk", { at: Date.now(), via: "app" }).catch(() => {});
   store.lastPushOk = await kvGet("lastPushOk").catch(() => null);
@@ -476,20 +488,36 @@ const SUB = {
   UNKNOWN: ["unklar · bitte selbst nachsehen", "bad"],
 };
 
-/** Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts. */
-function dayRow(d, strip = null) {
-  const dish = d.state === OrderState.NOT_ORDERED ? "Gericht wählen"
+/** Fällige eigene Termine; an Tagen ohne Schulessen mit Knopf, solange dort noch bestellt ist. */
+function eventsCard(events, days, today) {
+  const due = dueEvents(events, today);
+  if (!due.length) return "";
+  return `<div class="card events">${due.map((e) => {
+    const day = days.find((d) => d.date === e.date);
+    return `<div class="event-row"><span>${esc(eventLine(e, day, today))}</span>${
+      needsCancel(e, day) ? `<button class="text" data-cancel="${e.date}">Abbestellen</button>` : ""}</div>`;
+  }).join("")}</div>`;
+}
+
+/** Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts; eigene Termine im Status. */
+function dayRow(d, strip = null, dayEvents = []) {
+  let dish = d.state === OrderState.NOT_ORDERED ? "Gericht wählen"
     : d.state === OrderState.DEADLINE_PASSED ? "nicht bestellt"
     : d.orderedItems[0] || "—";
-  const [sub, subCls] = SUB[d.state];
+  let [sub, subCls] = SUB[d.state];
   const timeline = strip?.(d.date) || "";
-  const [sym, symCls] = d.state === OrderState.ORDERED ? ["✓", "ok"] : d.isActionable ? ["!", "open"] : ["✕", "bad"];
+  let [sym, symCls] = d.state === OrderState.ORDERED ? ["✓", "ok"] : d.isActionable ? ["!", "open"] : ["✕", "bad"];
+  const titles = dayEvents.map((e) => e.title).join(", ");
+  if (dayEvents.some((e) => e.noMeal)) {
+    if (d.state === OrderState.ORDERED) [sub, subCls, sym, symCls] = [`${titles} · bestellt, abbestellen?`, "open", "!", "open"];
+    else [dish, sub, subCls, sym, symCls] = ["kein Schulessen", titles, "", "✓", "ok"];
+  } else if (titles) sub = `${titles} · ${sub}`;
   return `
     <li data-date="${d.date}">
       <div class="date"><div class="wd">${esc(De.chip(d.date).slice(0, 2))}</div><div class="dom">${Number(d.date.slice(8, 10))}</div></div>
       <div class="text"><div class="dish">${esc(dish)}</div>${
         // Mit Zeitleiste sagt der Haken rechts schon „bestellt“, wie in der App.
-        timeline && d.state === OrderState.ORDERED ? "" : `<div class="sub ${subCls}">${esc(sub)}</div>`}${timeline}</div>
+        timeline && d.state === OrderState.ORDERED && !titles ? "" : `<div class="sub ${subCls}">${esc(sub)}</div>`}${timeline}</div>
       <div class="sym ${symCls}">${sym}</div>
     </li>`;
 }
@@ -712,6 +740,67 @@ function confirmDialog(title, lines) {
     dlg.querySelectorAll("button").forEach((b) => { b.onclick = () => done(b.dataset.v === "1"); });
     dlg.showModal();
   });
+}
+
+// ---------------------------------------------------------------- Termine
+
+const leadText = (n) => (n === 7 ? "eine Woche" : n === 1 ? "einen Tag" : `${n} Tage`) + " vorher";
+
+/** Plus oben: eigenen Termin eintragen; eingetragene sehen und löschen. Nur auf dem Gerät. */
+function showEvents() {
+  const today = todayBerlin();
+  let changed = false;
+  const dlg = document.createElement("dialog");
+  dlg.className = "dialog events-dialog";
+  const close = () => {
+    dlg.close();
+    dlg.remove();
+    if (changed) showHome();
+  };
+  const render = async () => {
+    const list = await loadEvents(today).catch(() => []);
+    dlg.innerHTML = `
+      <h3>Termin eintragen</h3>
+      <form id="f-event">
+        <label for="ev-title">Was</label>
+        <input id="ev-title" type="text" maxlength="60" required placeholder="z. B. Wandertag">
+        <label for="ev-date">Wann</label>
+        <input id="ev-date" type="date" min="${today}" required>
+        <label for="ev-lead">Erinnern</label>
+        <select id="ev-lead">${LEADS.map((n) => `<option value="${n}"${n === 2 ? " selected" : ""}>${leadText(n)}</option>`).join("")}</select>
+        <label class="check"><input id="ev-nomeal" type="checkbox"> kein Schulessen an dem Tag</label>
+        <p class="small muted">Bleibt nur auf diesem Gerät: nicht auf anderen Handys, und „Abmelden“ löscht es.
+          ${store.push ? "Erinnert wird mit der täglichen Erinnerung." : "Die Erinnerung ist aus (⚙) — dann steht es nur hier auf der Startseite."}</p>
+        <div class="dialog-actions">
+          <button type="button" class="text" id="ev-close">Schließen</button>
+          <button type="submit" class="text">Speichern</button>
+        </div>
+      </form>
+      ${list.length ? `<div class="section">EINGETRAGEN</div>
+        <ul class="event-list">${list.map((e) => `
+          <li><span>${esc(De.chip(e.date))} ${esc(e.title)}<span class="muted"> · ${e.noMeal ? "kein Schulessen · " : ""}${leadText(e.lead)}</span></span>
+            <button type="button" class="text" data-del="${e.id}" aria-label="Termin löschen">Löschen</button></li>`).join("")}</ul>` : ""}`;
+    dlg.querySelector("#ev-close").onclick = close;
+    dlg.querySelector("#f-event").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const title = dlg.querySelector("#ev-title").value.trim();
+      const date = dlg.querySelector("#ev-date").value;
+      if (!title || !/^\d{4}-\d{2}-\d{2}$/.test(date) || date < today) return;
+      await addEvent(today, { title, date, lead: Number(dlg.querySelector("#ev-lead").value), noMeal: dlg.querySelector("#ev-nomeal").checked });
+      changed = true;
+      close();
+    };
+    for (const b of dlg.querySelectorAll("[data-del]")) {
+      b.onclick = async () => {
+        await removeEvent(today, b.dataset.del);
+        changed = true;
+        render();
+      };
+    }
+  };
+  dlg.addEventListener("cancel", (ev) => { ev.preventDefault(); close(); });
+  document.body.append(dlg);
+  render().then(() => dlg.showModal());
 }
 
 // ---------------------------------------------------------------- Einstellungen
@@ -1069,6 +1158,7 @@ async function pushDisable() {
 
 $reload.onclick = () => showHome(true);
 $settings.onclick = showSettings;
+$add.onclick = showEvents;
 
 // Ohne Service Worker läuft die Seite weiter, nur Erinnerungen gehen dann nicht.
 const swReady = "serviceWorker" in navigator

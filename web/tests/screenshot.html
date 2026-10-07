@@ -4,7 +4,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Screenshot-Bühne</title>
 <!-- Echte App mit erfundenen Daten für docs/ (siehe docs/screenshots.py); IBS5 wird nicht gefragt.
-     ?view=start oder ?view=bestellen. -->
+     ?view=start, ?view=bestellen oder ?view=termin (Dialog), dazu &termine für Beispieltermine. -->
 <link rel="stylesheet" href="../style.css">
 <body>
 <script type="module">
@@ -54,6 +54,16 @@ const week = (year, kw) => {
   return new Response(html + "</div>");
 };
 
+const params = new URLSearchParams(location.search);
+if (params.has("termine")) {
+  const { kvSet } = await import("../idb.js");
+  await kvSet("events", [
+    { id: "a", title: "Wandertag", date: schoolDays[1], lead: 3, noMeal: true },
+    { id: "b", title: "Sportfest", date: schoolDays[2], lead: 3, noMeal: false },
+    { id: "c", title: "Laternenumzug", date: addDays(today, 30), lead: 7, noMeal: false },
+  ]);
+}
+
 window.fetch = async (url) => {
   url = String(url);
   if (url.includes("/Login/")) return new Response(JSON.stringify({ token: "t", name1: "Muster, Mia", institutionName1: "Grundschule" }));
@@ -64,13 +74,14 @@ window.fetch = async (url) => {
 
 await import("../app.js");
 // Fertig-Signal für docs/screenshots.py: Ansicht vollständig gezeichnet.
-const view = new URLSearchParams(location.search).get("view") || "start";
+const view = params.get("view") || "start";
 const ready = setInterval(() => {
   const home = document.querySelector(".days") && !document.getElementById("refresh");
   if (view === "bestellen" && home && document.getElementById("b-all")) document.getElementById("b-all").click();
+  if (view === "termin" && home && !document.querySelector(".events-dialog")) document.getElementById("btn-add").click();
   const done = view === "bestellen"
     ? document.querySelector("fieldset.day-order") && !document.getElementById("o-more")
-    : home;
+    : view === "termin" ? document.querySelector(".events-dialog[open] .event-list") : home;
   if (done) { clearInterval(ready); document.documentElement.dataset.ready = "1"; }
 }, 50);
 </script>
