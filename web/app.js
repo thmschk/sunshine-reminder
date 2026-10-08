@@ -207,11 +207,13 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false } 
         <label for="pw">Passwort</label>
         ${passwordField("pw", 'name="password"')}
         <label class="check"><input id="remember" type="checkbox" checked> Auf diesem Gerät merken</label>
+        ${pushSupported ? `<label class="check"><input id="want-push" type="checkbox" checked> Werktags um ${DEFAULT_PUSH_TIME} Uhr erinnern</label>` : ""}
         <div class="row"><button type="submit" class="block">Speichern und prüfen</button></div>
       </form>
     </div>`;
   wireInstallTip();
-  const attempt = async (creds, remember) => {
+  // perm: bereits gestartete Abfrage der Benachrichtigungs-Erlaubnis, wenn die Erinnerung gleich mit an soll.
+  const attempt = async (creds, remember, perm = null) => {
     if (adding && store.accounts.some((a) => a.customerNo === creds.customerNo)) {
       return showSetup("Diese Kundennummer ist schon eingerichtet.", creds, null, { adding });
     }
@@ -227,15 +229,27 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false } 
     }
     if (remember) await saveCreds(creds, c.profile?.name || "");
     else sessionCreds = creds;
+    if (perm && remember) {
+      busy("Erinnerung wird eingeschaltet …");
+      pushNotice = await enableAfterLogin(perm);
+    }
     showHome();
   };
   document.getElementById("b-add-cancel")?.addEventListener("click", () => showSettings());
+  // Erinnerung braucht gespeicherte Zugangsdaten.
+  const rememberBox = document.getElementById("remember");
+  const pushBox = document.getElementById("want-push");
+  if (rememberBox && pushBox) rememberBox.onchange = () => { pushBox.disabled = !rememberBox.checked; };
   document.getElementById("f-login").addEventListener("submit", (ev) => {
     ev.preventDefault();
+    const remember = adding || document.getElementById("remember").checked;
+    // Die Erlaubnis muss noch im Klick erfragt werden (iOS verlangt das), also vor der Anmeldung.
+    const wantPush = !adding && remember && !store.push && !!document.getElementById("want-push")?.checked;
+    const perm = wantPush ? Notification.requestPermission().catch(() => "denied") : null;
     attempt({
       customerNo: document.getElementById("cn").value.trim(),
       password: document.getElementById("pw").value,
-    }, adding || document.getElementById("remember").checked);
+    }, remember, perm);
   });
   if (retry) {
     document.getElementById("b-resume").onclick = async () => {
@@ -334,6 +348,18 @@ document.addEventListener("click", (ev) => {
 });
 
 let sessionCreds = null;
+
+/** Hinweis für die nächste Übersicht, wenn die Erinnerung beim Anmelden nicht anging. */
+let pushNotice = "";
+async function enableAfterLogin(perm) {
+  if ((await perm) !== "granted") return "Erinnerung ist aus, weil Benachrichtigungen nicht erlaubt wurden. Einschalten unter ⚙.";
+  try {
+    await pushEnable(DEFAULT_PUSH_TIME);
+    return "";
+  } catch (e) {
+    return `Erinnerung ist aus: ${e.message}`;
+  }
+}
 const currentCreds = () => loadCreds() ?? sessionCreds;
 
 // ---------------------------------------------------------------- Startseite
@@ -437,6 +463,7 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
     ${kidTabs()}
+    ${pushNotice ? `<p class="small error">${esc(pushNotice)}</p>` : ""}
     ${wantInstall ? installTip() : ""}
     ${heroCard(relevant, kidName(creds))}
     ${eventsCard(events, days, today)}
@@ -448,6 +475,7 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
     <div class="center"><button id="b-all" class="text">Alle bestellbaren Tage →</button></div>`;
 
   wireInstallTip();
+  if (!staleAt) pushNotice = "";
   for (const li of $app.querySelectorAll(".days li")) {
     li.onclick = () => {
       const d = days.find((x) => x.date === li.dataset.date);

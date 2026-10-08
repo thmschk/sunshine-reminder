@@ -125,7 +125,9 @@ ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
    Geschwister mit eigener Kundennummer: ⚙ → „Kind hinzufügen“. Die Übersicht
    bekommt dann oben einen Reiter je Kind, die Erinnerung prüft alle Kinder
    nacheinander und meldet sich mit einer gemeinsamen Nachricht.
-4. **Erinnerung einschalten:** ⚙ → Uhrzeit wählen → „Erinnerung einschalten“.
+4. **Erinnerung:** ist beim Anmelden schon angehakt („Werktags um 17:00 Uhr
+   erinnern“), der Browser fragt dann nach der Erlaubnis. Uhrzeit ändern oder
+   ausschalten unter ⚙.
    Unter „Tage“ lassen sich Wochentage abwählen. Jeder Weckruf prüft bis zum
    nächsten, es fällt also kein Tag durch; ein offener Tag fällt nur später auf.
 5. **Ausprobieren:** ⚙ → „Jetzt testen“.

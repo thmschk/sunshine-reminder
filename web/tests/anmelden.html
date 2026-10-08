@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Anmelden mit Erinnerung</title>
+<!-- Erstanmeldung mit „Werktags erinnern“ (Standard an) gegen vorgetäuschtes IBS5, Push-Dienst und Server.
+     ?mode=granted | denied | off (Haken abgewählt). -->
+<link rel="stylesheet" href="../style.css">
+<body><pre id="out">läuft</pre>
+<header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
+<main id="app"></main><footer id="footer" hidden></footer>
+<script type="module">
+const mode = new URLSearchParams(location.search).get("mode") || "granted";
+const lines = [];
+const P = (m) => lines.push(m);
+window.addEventListener("error", (e) => P("FAIL ERR " + e.message + " " + e.filename + ":" + e.lineno));
+window.addEventListener("unhandledrejection", (e) => P("FAIL REJ " + (e.reason?.stack || e.reason)));
+window.setTimeout = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => fn(); c.port2.postMessage(0); return 0; };
+const { kvClear, kvGet } = await import("../idb.js");
+await kvClear();
+
+let asked = 0;
+Notification.requestPermission = async () => { asked++; return mode === "denied" ? "denied" : "granted"; };
+const fakeSub = { toJSON: () => ({ endpoint: "https://push.example/x", keys: { p256dh: "p", auth: "a" } }) };
+PushManager.prototype.getSubscription = async () => null;
+PushManager.prototype.subscribe = async () => fakeSub;
+const posted = [];
+window.fetch = async (url, init = {}) => {
+  url = String(url);
+  if (url.endsWith("/api/vapid")) return new Response(JSON.stringify({ publicKey: "AAAA" }));
+  if (url.endsWith("/api/subscriptions")) { posted.push(JSON.parse(init.body)); return new Response(JSON.stringify({ id: "s1", secret: "z" })); }
+  if (url.includes("/Login/")) return new Response(JSON.stringify({ token: "t", name1: "Muster, Mia" }));
+  const d = (/date=([\d-]+)/.exec(url) || [])[1] || "2026-10-06";
+  return new Response(`<li id="dayplan"><button class="menuplan-checkbox" data-order-status="2" data-quantity-ordered="1" data-quantity-in-shopping-cart="" data-date="x" data-readonly="false" data-name="Nudeln" id="menu_quantity_mobile-${d}_16_827" onclick="DayPlan.changeItemQuantity('', 1, 'x', '1000', '827', '${d}', 'u', true, '16', 'n');"></button></li>`);
+};
+// Die Seite liegt in tests/, der Service Worker eine Ebene höher.
+const register = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+navigator.serviceWorker.register = (u, o) => register("../" + u, o);
+await import("../app.js");
+const until = (cond) => new Promise((r) => { let n = 0; (function tick() { if (cond() || ++n > 200000) r(); else window.setTimeout(tick); })(); });
+const check = (ok, what) => P(`${ok ? "ok  " : "FAIL"} ${what}`);
+
+await until(() => document.getElementById("f-login"));
+const box = document.getElementById("want-push");
+check(box && box.checked, "Haken „Werktags erinnern“ ist gesetzt");
+document.getElementById("remember").checked = false;
+document.getElementById("remember").dispatchEvent(new Event("change"));
+check(box.disabled, "ohne „merken“ nicht wählbar");
+document.getElementById("remember").checked = true;
+document.getElementById("remember").dispatchEvent(new Event("change"));
+if (mode === "off") box.checked = false;
+document.getElementById("cn").value = "1000";
+document.getElementById("pw").value = "x";
+document.querySelector("#f-login button[type=submit]").click();
+await until(() => document.querySelector(".days") && !document.getElementById("refresh"));
+
+const push = await kvGet("push");
+const notice = document.querySelector("#app p.error")?.textContent || "";
+if (mode === "granted") {
+  check(asked >= 1, "Erlaubnis erfragt");
+  check(push?.id === "s1" && push.time === "17:00", "Erinnerung an, 17:00");
+  check(posted[0]?.time === "17:00" && JSON.stringify(posted[0]?.weekdays) === "[1,2,3,4,5]", "Server: 17:00, Mo–Fr");
+  check(!notice, `kein Hinweis: ${notice} (gefragt: ${asked})`);
+} else if (mode === "denied") {
+  check(!push && !posted.length, "Erinnerung aus, nichts an den Server");
+  check(/nicht erlaubt/.test(notice), `Hinweis in der Übersicht: ${notice}`);
+} else {
+  check(asked === 0 && !push && !posted.length, "nicht gefragt, Erinnerung aus");
+}
+check(!!document.querySelector(".hero"), "Übersicht geladen");
+
+document.getElementById("out").textContent = `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
+</script>
