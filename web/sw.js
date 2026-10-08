@@ -11,7 +11,7 @@ import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 
-const VERSION = "v47";
+const VERSION = "v48";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js"];
 

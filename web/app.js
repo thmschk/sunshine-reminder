@@ -1173,7 +1173,7 @@ function pushBoxHtml(message = "") {
     ${srow("bell", "Erinnerung werktags", { right: toggle("push-switch", on, "Erinnerung") })}
     ${srow("clock", "Uhrzeit", { hint: "Meldung kommt bis zu 30 min später",
       right: `<input id="push-time" class="time-value" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit">` })}
-    ${srow("calendar", "Tage", { hint: "Weniger Tage, weniger Meldungen. Jeder Weckruf prüft bis zum nächsten, ein offener Tag fällt aber später auf.",
+    ${srow("calendar", "Tage", { hint: "Tage, an denen geprüft wird.",
       right: `<span class="wd-pick">${WEEKDAYS.map((n, i) => `<button type="button" class="wd-btn${store.pushWeekdays.includes(i + 1) ? " on" : ""}"
         data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}">${n}</button>`).join("")}</span>` })}
     ${daysAheadRow()}
