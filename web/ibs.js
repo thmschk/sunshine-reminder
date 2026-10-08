@@ -473,10 +473,32 @@ function historyDay(date, lines) {
 
 export const DEFAULT_CHECK = Object.freeze({ daysAhead: 9, weekdays: [1, 2, 3, 4, 5], includeToday: false });
 
+/** Erster Tag nach today, dessen Wochentag (1 = Mo … 7 = So) in weekdays liegt. */
+export function nextWeekday(today, weekdays) {
+  for (let i = 1; i <= 7; i++) {
+    const d = addDays(today, i);
+    if (weekdays.includes(weekdayNo(d))) return d;
+  }
+  return addDays(today, 1);
+}
+
+/** Längste Lücke in Kalendertagen zwischen zwei aufeinanderfolgenden Wochentagen aus weekdays (Mo–Fr: 3, Fr → Mo). */
+export function longestGap(weekdays) {
+  const days = [...new Set(weekdays)].sort((a, b) => a - b);
+  if (!days.length) return 7;
+  return Math.max(...days.map((d, i) => (i + 1 < days.length ? days[i + 1] - d : days[0] + 7 - d)));
+}
+
+/**
+ * Zu prüfende Tage: daysAhead Kalendertage voraus, mindestens aber bis zum
+ * nächsten Schultag bzw. bis cfg.coverUntil (Tag des nächsten Weckrufs). Sonst
+ * fiele bei kurzer Vorwarnzeit oder seltenen Weckrufen ein Tag durch, etwa der
+ * Montag zwischen Freitag (sieht nur das Wochenende) und Montag (sieht ab Dienstag).
+ */
 export function targetDates(today, cfg = DEFAULT_CHECK) {
   const out = [];
-  for (let i = cfg.includeToday ? 0 : 1; i <= cfg.daysAhead; i++) {
-    const d = addDays(today, i);
+  const end = [addDays(today, cfg.daysAhead), cfg.coverUntil ?? nextWeekday(today, cfg.weekdays)].sort().at(-1);
+  for (let d = addDays(today, cfg.includeToday ? 0 : 1); d <= end; d = addDays(d, 1)) {
     if (cfg.weekdays.includes(weekdayNo(d))) out.push(d);
   }
   return out;

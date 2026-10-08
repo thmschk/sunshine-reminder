@@ -103,11 +103,11 @@ button:disabled { opacity: .45; cursor: default; }
 .hero.neutral { background: var(--surface-variant); color: var(--on-surface-variant); }
 .chips { margin: 2px 0 0; font-size: .82rem; }
 .chip { font-weight: 500; white-space: nowrap; }
-.chip + .chip::before { content: ", "; font-weight: 400; }
 .hero button { margin-top: 10px; }
 .hero button.block { display: inline-block; width: auto; }
 /* Offene Tage: Titel und Tage links, Knopf rechts; der Erklärsatz steckt schon in „offen“. */
-.hero.open { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 10px; }
+/* minmax(0, 1fr): die Textspalte darf schmaler werden als eine lange Chip-Zeile, sonst schiebt sie den Knopf aus der Karte. */
+.hero.open { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px; }
 .hero.open h2 { font-size: 1rem; margin: 0; }
 .hero.open p { display: none; }
 .hero.open button.block { grid-column: 2; grid-row: 1 / span 2; margin: 0; }
@@ -395,3 +395,11 @@ header { justify-content: flex-end; min-height: 44px; }
 }
 .kid-tab.on { background: var(--secondary); border-color: var(--secondary); color: #fff; }
 .srow-x { margin-left: 6px; padding: 4px 6px; font-size: .85rem; }
+
+/* Wochentage der Erinnerung. */
+.wd-pick { display: flex; gap: 4px; flex: none; }
+.wd-btn {
+  min-width: 34px; padding: 5px 0; font-size: .82rem; font-weight: 500; border-radius: 8px;
+  background: transparent; color: var(--on-surface-variant); border: 1px solid var(--surface-variant);
+}
+.wd-btn.on { background: var(--secondary); border-color: var(--secondary); color: #fff; }

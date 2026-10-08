@@ -1,6 +1,6 @@
 import {
   DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
-  addDays, changeKind, collect, daysFromJson, daysToJson, isoWeek, placeOrders, targetDates, todayBerlin, weekdayNo,
+  addDays, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
 import {
@@ -24,7 +24,8 @@ const DAYS_AHEAD = { def: 7, min: 1, max: 14 };
 // 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
 const DEFAULT_PUSH_TIME = "17:00";
 // accounts: je Kind ein IBS5-Konto (siehe accounts.js), active: Kundennummer des gewählten Reiters.
-const store = { accounts: [], active: null, daysAhead: DAYS_AHEAD.def, push: null };
+// pushWeekdays: Tage des Weckrufs (1 = Mo); gemerkt auch bei ausgeschalteter Erinnerung, der Service Worker liest sie mit.
+const store = { accounts: [], active: null, daysAhead: DAYS_AHEAD.def, push: null, pushWeekdays: [1, 2, 3, 4, 5] };
 
 async function loadStore() {
   try {
@@ -42,6 +43,8 @@ async function loadStore() {
   const n = await kvGet("daysAhead");
   store.daysAhead = n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
   store.push = (await kvGet("push")) || null;
+  const wd = await kvGet("pushWeekdays");
+  if (Array.isArray(wd) && wd.length) store.pushWeekdays = wd;
   store.lastOk = (await kvGet("lastOk")) || null;
   store.lastPushOk = (await kvGet("lastPushOk")) || null;
 }
@@ -102,6 +105,7 @@ function selectAccount(customerNo) {
 async function clearCreds() {
   store.accounts = [];
   store.active = null;
+  store.pushWeekdays = [1, 2, 3, 4, 5];
   clients.clear();
   await kvClear().catch(() => {});
   store.lastOk = store.lastPushOk = null;
@@ -497,7 +501,9 @@ function lastOkLine() {
 function pushStale() {
   if (!store.push) return "";
   const since = store.lastPushOk?.at || store.push.created || 0;
-  if (!since || Date.now() - since < 4 * 86400000) return "";
+  // Mindestens vier Tage, bei seltenen Weckrufen die längste Lücke plus einen Tag.
+  const days = Math.max(4, longestGap(store.pushWeekdays) + 1);
+  if (!since || Date.now() - since < days * 86400000) return "";
   return `<div class="card hero bad"><h2>Erinnerung schweigt</h2>
     <p>Die Erinnerung hat zuletzt ${esc(since === store.lastPushOk?.at ? when(since) : "noch nie")} erfolgreich geprüft.
       Unter ⚙ → „Jetzt testen“ ausprobieren, sonst aus- und wieder einschalten.</p></div>`;
@@ -528,7 +534,7 @@ function heroCard(days, firstName) {
       <p>${open.some((d) => d.state === OrderState.IN_CART)
         ? "Bestellen ist noch möglich — etwas liegt nur im Warenkorb."
         : "Bestellen ist noch möglich."}</p>
-      <div class="chips">${open.map((d) => `<span class="chip">${esc(De.chip(d.date))}</span>`).join("")}</div>
+      <div class="chips">${open.map((d) => `<span class="chip">${esc(De.chip(d.date))}</span>`).join(", ")}</div>
       <button id="b-order-now" class="block">Jetzt bestellen</button>
     </div>`;
   }
@@ -1144,6 +1150,8 @@ const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent);
 const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const pushSupported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 
+const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr"];
+
 const toggle = (id, on, label) =>
   `<button type="button" id="${id}" class="switch${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="${label}"></button>`;
 
@@ -1165,6 +1173,9 @@ function pushBoxHtml(message = "") {
     ${srow("bell", "Erinnerung werktags", { right: toggle("push-switch", on, "Erinnerung") })}
     ${srow("clock", "Uhrzeit", { hint: "Meldung kommt bis zu 30 min später",
       right: `<input id="push-time" class="time-value" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit">` })}
+    ${srow("calendar", "Tage", { hint: "Weniger Tage, weniger Meldungen. Jeder Weckruf prüft bis zum nächsten, ein offener Tag fällt aber später auf.",
+      right: `<span class="wd-pick">${WEEKDAYS.map((n, i) => `<button type="button" class="wd-btn${store.pushWeekdays.includes(i + 1) ? " on" : ""}"
+        data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}">${n}</button>`).join("")}</span>` })}
     ${daysAheadRow()}
     ${on ? srow("play", "Jetzt testen", { tag: "button", id: "b-push-test" }) : ""}
     ${admin}`;
@@ -1200,6 +1211,14 @@ function wirePushBox(message = "") {
   });
   // Ohne Abo merkt sich das Feld nur die Wahl fürs Einschalten.
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
+  for (const b of box.querySelectorAll(".wd-pick .wd-btn")) {
+    b.onclick = guard(async () => {
+      const n = Number(b.dataset.wd);
+      const next = store.pushWeekdays.includes(n) ? store.pushWeekdays.filter((x) => x !== n) : [...store.pushWeekdays, n].sort();
+      if (!next.length) throw new Error("Mindestens ein Tag muss bleiben. Ganz aus geht mit dem Schalter oben.");
+      await pushSetWeekdays(next);
+    });
+  }
 }
 
 const b64ToBytes = (b64) => {
@@ -1232,10 +1251,17 @@ async function pushEnable(time) {
   const sub = (await reg.pushManager.getSubscription())
     ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
   const { id, secret } = await api("POST", "/subscriptions", {
-    subscription: sub.toJSON(), time, weekdays: [1, 2, 3, 4, 5], tz: "Europe/Berlin",
+    subscription: sub.toJSON(), time, weekdays: store.pushWeekdays, tz: "Europe/Berlin",
   });
   store.push = { id, secret, time, created: Date.now() };
   await kvSet("push", store.push);
+}
+
+/** Tage merken (auch für den Service Worker) und, wenn die Erinnerung läuft, dem Server melden. */
+async function pushSetWeekdays(weekdays) {
+  if (store.push) await api("PUT", `/subscriptions/${store.push.id}`, { weekdays }, store.push.secret);
+  store.pushWeekdays = weekdays;
+  await kvSet("pushWeekdays", weekdays);
 }
 
 async function pushSetTime(time) {

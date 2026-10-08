@@ -39,8 +39,11 @@ offen ist.
   Erinnerung speichert er nur das Push-Abo und die Uhrzeit. Nur wer Sdui dazunimmt,
   schickt dessen Anmeldung und Abrufe durch ihn (siehe
   [unten](#was-der-server-sieht-und-speichert)).
-* Jeder Weckruf zeigt eine Meldung, auch wenn alles bestellt ist — dann still,
-  ohne Ton. Browser und vor allem iOS verlangen das, sonst kündigen sie das Abo.
+* Jeder Weckruf zeigt eine Meldung, auch wenn alles bestellt ist. Browser und
+  vor allem iOS verlangen das, sonst kündigen sie das Abo. Auf Android kommt
+  „alles bestellt“ still und ersetzt die Meldung vom Vortag; auf dem iPhone
+  geht das nicht (Safari kennt weder stille noch ersetzende Meldungen), dort
+  klingelt jede. Wem das zu viel ist: unter ⚙ → „Tage“ seltener wecken lassen.
 * Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
   Schlüssel, den der Browser erzeugt und nicht herausgibt. Das schützt davor,
   dass jemand die Speicherdatei kopiert und ausliest, etwa aus einem Backup.
@@ -123,6 +126,8 @@ ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
    bekommt dann oben einen Reiter je Kind, die Erinnerung prüft alle Kinder
    nacheinander und meldet sich mit einer gemeinsamen Nachricht.
 4. **Erinnerung einschalten:** ⚙ → Uhrzeit wählen → „Erinnerung einschalten“.
+   Unter „Tage“ lassen sich Wochentage abwählen. Jeder Weckruf prüft bis zum
+   nächsten, es fällt also kein Tag durch; ein offener Tag fällt nur später auf.
 5. **Ausprobieren:** ⚙ → „Jetzt testen“.
 6. **Stundenplan (freiwillig):** ⚙ → „Stundenplan (Sdui)“ → „Einrichten …“,
    dann Schule, E-Mail und Passwort von Sdui. Danach unter „Erinnern an“ die

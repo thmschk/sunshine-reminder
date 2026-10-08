@@ -2,7 +2,7 @@
 // Weckruf des Servers selbst bei IBS5, ob etwas offen ist. Der Server erfährt
 // davon nichts; er schickt nur {"t":"check"} zur gewählten Uhrzeit.
 import {
-  AlarmText, DEFAULT_CHECK, De, IbsAuthError, IbsClient, addDays, collect, evaluate, targetDates, todayBerlin,
+  AlarmText, DEFAULT_CHECK, De, IbsAuthError, IbsClient, addDays, collect, evaluate, nextWeekday, targetDates, todayBerlin,
 } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
 import { accountLabel, dayStore, loadAccounts, upsertAccount } from "./accounts.js";
@@ -11,7 +11,7 @@ import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 
-const VERSION = "v46";
+const VERSION = "v47";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js"];
 
@@ -155,7 +155,11 @@ async function checkAndNotify(isTest) {
   const today = todayBerlin();
   // Höchstens die nächsten Schultage: auf dem Handy kostet jeder Tag eine
   // Anfrage, und zu viele quittiert IBS5 mit einer IP-Sperre.
-  const checkDates = targetDates(today, { ...DEFAULT_CHECK, daysAhead }).slice(0, PUSH_MAX_DAYS);
+  // Bis einschließlich zum nächsten Weckruf-Tag: dazwischen schaut keiner mehr nach.
+  // Höchstens 5 Schultage reichen dafür auch bei nur einem Weckruf pro Woche.
+  const pushDays = (await kvGet("pushWeekdays")) || DEFAULT_CHECK.weekdays;
+  const coverUntil = nextWeekday(today, pushDays);
+  const checkDates = targetDates(today, { ...DEFAULT_CHECK, daysAhead, coverUntil }).slice(0, PUSH_MAX_DAYS);
   const events = await loadEvents(today).catch(() => []);
   const kids = [];
   for (const account of accounts) kids.push(await checkAccount(account, checkDates, events, today));
