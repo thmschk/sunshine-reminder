@@ -119,6 +119,9 @@ ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
    * Für QR-Codes und Links: `…/?installieren` zeigt die Anleitung zuerst.
 2. **Über das neue Symbol öffnen**, nicht im Browser-Tab.
 3. **Anmelden** mit Kundennummer und Passwort von IBS5.
+   Geschwister mit eigener Kundennummer: ⚙ → „Kind hinzufügen“. Die Übersicht
+   bekommt dann oben einen Reiter je Kind, die Erinnerung prüft alle Kinder
+   nacheinander und meldet sich mit einer gemeinsamen Nachricht.
 4. **Erinnerung einschalten:** ⚙ → Uhrzeit wählen → „Erinnerung einschalten“.
 5. **Ausprobieren:** ⚙ → „Jetzt testen“.
 6. **Stundenplan (freiwillig):** ⚙ → „Stundenplan (Sdui)“ → „Einrichten …“,

@@ -231,6 +231,64 @@ await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu",
   eq(await withSession(c, creds, async () => c.token, { persist: false }), "T3", "ohne Speichern kein gespeicherter Token");
 });
 
+await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async () => {
+  const stamp = Date.now();
+  const [ca, cb] = [{ customerNo: `a-${stamp}`, password: "x" }, { customerNo: `b-${stamp}`, password: "y" }];
+  let logins = 0;
+  const mk = () => ({ async login(no) { logins++; this.token = `${no}-T${logins}`; return new Profile("Muster, Max", ""); } });
+  const x = mk();
+  await withSession(x, ca, async () => 0);
+  await withSession(x, cb, async () => 0);
+  const y = mk();
+  eq(await withSession(y, ca, async () => y.token), `a-${stamp}-T1`, "Token von A überlebt B");
+  eq(logins, 2, "kein dritter Login");
+});
+
+// Mehrere Kinder: Konten, Übernahme, Zwischenspeicher.
+{
+  const Acc = await import("../accounts.js");
+  const { kvGet, kvSet, secretGet, secretSet, kvDel } = await import("../idb.js");
+  const backup = { accounts: await secretGet("accounts"), creds: await secretGet("creds"), events: await kvGet("events") };
+  await test("Konten: alter Eintrag creds wird übernommen und gelöscht", async () => {
+    await kvDel("accounts");
+    await secretSet("creds", { customerNo: "1111", password: "p" });
+    eq((await Acc.loadAccounts()).map((a) => a.customerNo), ["1111"]);
+    eq(await kvGet("creds"), undefined, "creds weg");
+    eq((await Acc.loadAccounts()).length, 1, "zweites Lesen gleich");
+  });
+  await test("Konten: hinzufügen, ersetzen, entfernen samt Speicher und Terminen", async () => {
+    await Acc.upsertAccount({ customerNo: "2222", password: "q", name: "Muster, Ben" });
+    await Acc.upsertAccount({ customerNo: "1111", password: "neu" });
+    eq((await Acc.loadAccounts()).map((a) => [a.customerNo, a.password]), [["1111", "neu"], ["2222", "q"]]);
+    eq(Acc.accountLabel((await Acc.loadAccounts())[1]), "Ben");
+    eq(Acc.accountLabel({ customerNo: "1111" }), "Kd. 1111");
+    await kvSet("dayCache:2222", { customerNo: "2222", rows: [] });
+    await kvSet("events", [{ id: "a", who: "2222" }, { id: "b", who: null }, { id: "c", who: "1111" }]);
+    await Acc.removeAccount("2222");
+    eq((await Acc.loadAccounts()).map((a) => a.customerNo), ["1111"]);
+    eq(await kvGet("dayCache:2222"), undefined, "Speicher weg");
+    eq((await kvGet("events")).map((e) => e.id), ["b", "c"], "nur seine Termine weg");
+  });
+  await test("Tages-Speicher je Kundennummer, alter Eintrag als Rückfall", async () => {
+    const c = { customerNo: "1111" };
+    const st = Acc.dayStore(c);
+    await kvSet("dayCache", { customerNo: "1111", rows: ["alt"] });
+    eq((await st.load()).rows, ["alt"], "Rückfall");
+    await st.save({ customerNo: "1111", rows: ["neu"] });
+    c.customerNo = "3333";
+    eq((await st.load()).rows, ["alt"], "anderes Konto: nicht der von 1111");
+    c.customerNo = "1111";
+    eq((await st.load()).rows, ["neu"]);
+    await kvDel("dayCache:1111");
+    await kvDel("dayCache");
+  });
+  // Echte Daten der Testseite wiederherstellen.
+  await kvDel("accounts");
+  if (backup.accounts) await secretSet("accounts", backup.accounts);
+  if (backup.creds) await secretSet("creds", backup.creds);
+  await kvSet("events", backup.events || []);
+}
+
 // Eigene Termine und die Meldung des Weckrufs.
 {
   const Ev = await import("../events.js");
@@ -279,6 +337,48 @@ await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu",
     eq(m.title, "1 ausstehende Bestellung für Mia");
     eq(m.body.includes("Bestellen ist noch möglich") && m.body.includes("Sportfest"), true, m.body);
     eq(m.url, `./?order=${d1}`);
+  });
+}
+
+// Weckruf mit mehreren Kindern.
+{
+  const Ev = await import("../events.js");
+  const { composeAll } = await import("../sw.js");
+  const t = todayBerlin();
+  const [d1, d2] = [addDays(t, 1), addDays(t, 2)];
+  const day = (date, state) => new DayStatus(date, state, state === OrderState.ORDERED ? [{ isOrdered: true, name: "Nudeln" }] : []);
+  const kid = (no, firstName, days, due = [], checked = days) => ({ customerNo: no, firstName, days, checked, due });
+
+  await test("Termine je Kind: eigene und die für alle", () => {
+    const list = [{ id: "a", who: "1" }, { id: "b", who: null }, { id: "c", who: "2" }, { id: "d" }];
+    eq(Ev.eventsFor(list, "1").map((e) => e.id), ["a", "b", "d"]);
+  });
+  await test("Zwei Kinder alles bestellt: still, beide genannt", () => {
+    const m = composeAll([kid("1", "Anna", [day(d1, OrderState.ORDERED)]), kid("2", "Ben", [day(d1, OrderState.ORDERED)])], t);
+    eq([m.title, m.quiet, m.url], ["satt … theoretisch ✓", true, "./"]);
+    eq(m.body.includes("Anna: alles bestellt") && m.body.includes("Ben: alles bestellt"), true, m.body);
+  });
+  await test("Zwei Kinder, eins offen: Titel mit Namen, Tippen öffnet dieses Kind", () => {
+    const m = composeAll([kid("1", "Anna", [day(d1, OrderState.ORDERED)]), kid("2", "Ben", [day(d2, OrderState.NOT_ORDERED)])], t);
+    eq([m.title, m.quiet, m.url], ["1 ausstehende Bestellung für Ben", false, `./?order=${d2}&k=2`]);
+    eq(m.keys, [`${d2}:2:NOT_ORDERED`]);
+  });
+  await test("Zwei Kinder offen: gemeinsamer Titel", () => {
+    const m = composeAll([kid("1", "Anna", [day(d1, OrderState.NOT_ORDERED)]), kid("2", "Ben", [day(d2, OrderState.NOT_ORDERED)])], t);
+    eq([m.title, m.url], ["Schulessen prüfen für Anna und Ben", `./?order=${d1}&k=1`]);
+  });
+  await test("Ein Kind scheitert: laut, Fehler genannt, das andere trotzdem geprüft", () => {
+    const err = { customerNo: "2", firstName: "Ben", due: [], error: new Error("Netz weg"), failTitle: "Bestellstand unbekannt" };
+    const m = composeAll([kid("1", "Anna", [day(d1, OrderState.ORDERED)]), err], t);
+    eq([m.title, m.quiet], ["Bestellstand unbekannt für Ben", false]);
+    eq(m.body.includes("Anna: alles bestellt") && m.body.includes("Netz weg"), true, m.body);
+  });
+  await test("Termin für alle einmal gemeldet, abbestellen nur beim bestellten Kind", () => {
+    const ev = { id: "w", title: "Wandertag", date: d1, lead: 2, noMeal: true, who: null };
+    const m = composeAll([kid("1", "Anna", [day(d1, OrderState.ORDERED)], [ev], []), kid("2", "Ben", [day(d1, OrderState.NOT_ORDERED)], [ev], [])], t);
+    eq([m.title, m.url], ["Essen abbestellen: Wandertag", `./?order=${d1}&k=1`]);
+    eq(m.body.match(/Wandertag/g).length, 1, m.body);
+    eq(m.body.includes("bitte abbestellen (Anna)"), true, m.body);
   });
 }
 

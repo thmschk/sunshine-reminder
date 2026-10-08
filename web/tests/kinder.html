@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Zwei Kinder in der Oberfläche</title>
+<!-- Echte Seite mit zwei Konten gegen ein vorgetäuschtes IBS5: Reiter, Wechsel, Token je Kind, Einstellungen, Termine. -->
+<link rel="stylesheet" href="../style.css">
+<body><pre id="out">läuft</pre>
+<header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
+<main id="app"></main><footer id="footer" hidden></footer>
+<script type="module">
+const lines = [];
+const P = (m) => { lines.push(m); };
+window.addEventListener("error", (e) => P("FAIL ERR " + e.message + " " + e.filename + ":" + e.lineno));
+window.addEventListener("unhandledrejection", (e) => P("FAIL REJ " + (e.reason?.stack || e.reason)));
+window.setTimeout = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => fn(); c.port2.postMessage(0); return 0; };
+window.confirm = () => true;
+const { kvClear } = await import("../idb.js");
+const { saveAccounts } = await import("../accounts.js");
+await kvClear();
+await saveAccounts([{ customerNo: "1000", password: "a", name: "" }, { customerNo: "2000", password: "b", name: "" }]);
+
+// Kind 1000 (Mia) hat alles bestellt, Kind 2000 (Ben) nichts. Der Token verrät, wessen Anfrage es ist.
+const NAMES = { 1000: "Muster, Mia", 2000: "Muster, Ben" };
+const seen = [];
+window.fetch = async (url, init = {}) => {
+  url = String(url);
+  if (url.includes("/Login/")) {
+    const no = new URLSearchParams(init.body).get("identifierValue");
+    return new Response(JSON.stringify({ token: `tok-${no}`, name1: NAMES[no] }));
+  }
+  const auth = new Headers(init.headers).get("Authorization") || "";
+  const no = auth.replace(/^Bearer tok-/, "");
+  seen.push(no);
+  const d = (/date=([\d-]+)/.exec(url) || [])[1] || "2026-10-06";
+  const ordered = no === "1000";
+  return new Response(`<li id="dayplan"><button class="menuplan-checkbox" data-order-status="${ordered ? 2 : 0}" data-quantity-ordered="${ordered ? 1 : ""}" data-quantity-in-shopping-cart="" data-date="x" data-readonly="false" data-name="Nudeln" id="menu_quantity_mobile-${d}_16_827" onclick="DayPlan.changeItemQuantity('', 1, 'x', '${no}', '827', '${d}', 'u', true, '16', 'n');"></button></li>`);
+};
+await import("../app.js");
+const until = (cond) => new Promise((r) => { let n = 0; (function tick() { if (cond() || ++n > 200000) r(); else window.setTimeout(tick); })(); });
+const check = (ok, what) => P(`${ok ? "ok  " : "FAIL"} ${what}`);
+const hero = () => document.querySelector(".hero h2")?.textContent || "";
+const tabs = () => [...document.querySelectorAll(".kid-tab")].map((b) => b.textContent.trim() + (b.classList.contains("on") ? "*" : ""));
+
+// Bens Name kennt das Gerät erst nach seiner ersten Anmeldung (sonst schon beim Hinzufügen).
+await until(() => document.querySelector(".days") && !document.getElementById("refresh") && tabs()[0] === "Mia*");
+check(tabs().join() === "Mia*,Kd. 2000", `Reiter, Name aus IBS5 nach dem Laden: ${tabs()}`);
+check(hero().startsWith("satt"), `Mia: alles bestellt (${hero()})`);
+check(seen.length && seen.every((n) => n === "1000"), "nur Mias Token benutzt");
+
+seen.length = 0;
+document.querySelector('[data-kid="2000"]').click();
+await until(() => /Ben/.test(hero()) && !document.getElementById("refresh"));
+check(/offen für Ben/.test(hero()), `Wechsel zu Ben: ${hero()}`);
+check(tabs().join() === "Mia,Ben*", `Reiter umgeschaltet: ${tabs()}`);
+check(seen.length && seen.every((n) => n === "2000"), "nur Bens Token benutzt");
+
+document.getElementById("btn-settings").click();
+await until(() => document.getElementById("b-kid-add"));
+const rows = [...document.querySelectorAll(".srow-t")].map((x) => x.textContent);
+check(rows.includes("Muster, Mia") && rows.includes("Muster, Ben"), `Einstellungen: beide Kinder (${rows.filter((r) => r.startsWith("Muster"))})`);
+check(document.querySelectorAll("[data-remove]").length === 2, "Entfernen je Kind");
+check(!document.querySelector(".error"), "keine Fehlermeldung in den Einstellungen");
+
+document.getElementById("b-kid-add").click();
+await until(() => document.getElementById("b-add-cancel"));
+document.getElementById("cn").value = "1000";
+document.getElementById("pw").value = "x";
+document.querySelector("#f-login button[type=submit]").click();
+await until(() => /schon eingerichtet/.test(document.querySelector(".error")?.textContent || ""));
+check(/schon eingerichtet/.test(document.querySelector(".error")?.textContent || ""), "doppelte Kundennummer abgewiesen");
+document.getElementById("b-add-cancel").click();
+await until(() => document.querySelector("[data-remove]"));
+
+document.querySelector('[data-remove="2000"]').click();
+await until(() => !document.querySelector("[data-remove]"));
+check(!document.querySelector("[data-remove]"), "Ben entfernt, bei einem Kind kein Entfernen mehr");
+document.getElementById("b-back").click();
+await until(() => document.querySelector(".hero") && !document.getElementById("refresh"));
+check(!document.querySelector(".kids") && hero().startsWith("satt"), `ein Kind: keine Reiter, Mia aktiv (${hero()})`);
+
+document.getElementById("out").textContent = `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
+</script>

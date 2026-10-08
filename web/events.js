@@ -2,6 +2,7 @@
 // Liegen nur auf dem Gerät (IndexedDB), nie auf dem Server; Seite und Service
 // Worker teilen sie. „kein Schulessen“ heißt: an dem Tag wird nichts gebraucht —
 // ein offener Tag ist dann kein Alarm, ein bestellter soll abbestellt werden.
+// who: Kundennummer, wenn der Termin nur ein Kind betrifft; sonst gilt er für alle.
 
 import { addDays, De, OrderState } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
@@ -18,15 +19,18 @@ export async function loadEvents(today) {
   return upcoming;
 }
 
-export async function addEvent(today, { title, date, lead, noMeal }) {
+export async function addEvent(today, { title, date, lead, noMeal, who = null }) {
   const list = await loadEvents(today);
-  list.push({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, title, date, lead, noMeal: !!noMeal });
+  list.push({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, title, date, lead, noMeal: !!noMeal, who: who || null });
   await kvSet(KEY, list.sort((a, b) => a.date.localeCompare(b.date)));
 }
 
 export async function removeEvent(today, id) {
   await kvSet(KEY, (await loadEvents(today)).filter((e) => e.id !== id));
 }
+
+/** Termine, die ein Konto betreffen: seine eigenen und die für alle. */
+export const eventsFor = (events, customerNo) => events.filter((e) => !e.who || e.who === customerNo);
 
 /** Fällig: ab „Vorlauf Tage vorher“ bis zum Tag selbst. So erinnert auch ein Weckruf nach dem Wochenende. */
 export const dueEvents = (events, today) => events.filter((e) => e.date >= today && addDays(e.date, -e.lead) <= today);

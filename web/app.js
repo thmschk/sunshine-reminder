@@ -2,11 +2,14 @@ import {
   DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
   addDays, changeKind, collect, daysFromJson, daysToJson, isoWeek, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
-import { kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
+import { kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
+import {
+  accountKey, accountLabel, dayStore, loadAccounts, loadActive, removeAccount, saveActive, upsertAccount,
+} from "./accounts.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks, resume } from "./guard.js";
 import { login, withSession } from "./session.js";
-import { LEADS, addEvent, dueEvents, eventLine, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
+import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
 
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
 // diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
@@ -20,7 +23,8 @@ const DAY_LIST_LENGTH = 5;
 const DAYS_AHEAD = { def: 7, min: 1, max: 14 };
 // 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
 const DEFAULT_PUSH_TIME = "17:00";
-const store = { creds: null, daysAhead: DAYS_AHEAD.def, push: null };
+// accounts: je Kind ein IBS5-Konto (siehe accounts.js), active: Kundennummer des gewählten Reiters.
+const store = { accounts: [], active: null, daysAhead: DAYS_AHEAD.def, push: null };
 
 async function loadStore() {
   try {
@@ -33,15 +37,17 @@ async function loadStore() {
       localStorage.removeItem("hs.daysAhead");
     }
   } catch { /* kein localStorage */ }
-  const c = await secretGet("creds").catch(() => undefined);
-  store.creds = c?.customerNo && c?.password ? c : null;
+  store.accounts = await loadAccounts().catch(() => []);
+  store.active = (await loadActive()) || null;
   const n = await kvGet("daysAhead");
   store.daysAhead = n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
   store.push = (await kvGet("push")) || null;
   store.lastOk = (await kvGet("lastOk")) || null;
   store.lastPushOk = (await kvGet("lastPushOk")) || null;
 }
-const loadCreds = () => store.creds;
+/** Gespeichertes Konto des gewählten Reiters, sonst das erste. */
+const loadCreds = () => store.accounts.find((a) => a.customerNo === store.active) ?? store.accounts[0] ?? null;
+const multi = () => store.accounts.length > 1;
 const loadDaysAhead = () => store.daysAhead;
 function saveDaysAhead(n) {
   store.daysAhead = n;
@@ -63,25 +69,81 @@ function chrome(visible) {
   if (!visible) $footer.hidden = true;
 }
 
-const client = new IbsClient(undefined, guardHooks);
-// Geladene Tage teilt die Seite über IndexedDB mit dem Service Worker (siehe dayCache in ibs.js).
-client.dayStore = { load: () => kvGet("dayCache"), save: (rows) => kvSet("dayCache", rows) };
+/**
+ * Ein Client je Kundennummer: lädt beim Reiterwechsel das vorige Kind noch,
+ * laufen dessen Abfragen mit dessen Token weiter und landen in dessen Speicher.
+ */
+const clients = new Map();
+function clientFor(customerNo) {
+  let c = clients.get(customerNo);
+  if (!c) {
+    c = new IbsClient(undefined, guardHooks);
+    // Geladene Tage teilt die Seite über IndexedDB mit dem Service Worker (siehe dayCache in ibs.js).
+    c.dayStore = dayStore(c);
+    kvGet("ibsDayView").then((v) => { if (v) c.dayView = true; }, () => {});
+    clients.set(customerNo, c);
+  }
+  return c;
+}
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-async function saveCreds(c) {
-  store.creds = c;
-  await secretSet("creds", c).catch(() => {});
+/** Konto speichern (neu oder mit aktuellem Namen) und als Reiter wählen. */
+async function saveCreds(c, name = "") {
+  store.accounts = await upsertAccount({ customerNo: c.customerNo, password: c.password, ...(name ? { name } : {}) })
+    .catch(() => store.accounts);
+  selectAccount(c.customerNo);
+}
+function selectAccount(customerNo) {
+  store.active = customerNo;
+  saveActive(customerNo);
 }
 /** Abmelden: alles, was diese Seite auf dem Gerät abgelegt hat, samt Schlüssel. */
 async function clearCreds() {
-  store.creds = null;
+  store.accounts = [];
+  store.active = null;
+  clients.clear();
   await kvClear().catch(() => {});
   store.lastOk = store.lastPushOk = null;
 }
 
-/** Token nur speichern, wenn auch die Zugangsdaten gespeichert sind („Auf diesem Gerät merken“). */
-const withLogin = (creds, fn) => withSession(client, creds, fn, { persist: loadCreds()?.customerNo === creds.customerNo });
+/** Vorname des Kindes: gespeichert beim Konto, sonst aus der laufenden Anmeldung. */
+function kidName(creds) {
+  const acc = store.accounts.find((a) => a.customerNo === creds?.customerNo);
+  return (acc?.name && accountLabel(acc)) || clients.get(creds?.customerNo)?.profile?.firstName || "";
+}
+
+/** Den Namen aus IBS5 beim Konto ablegen, sobald er bekannt ist (Reiter, Meldungen). */
+async function rememberName(creds) {
+  const name = clients.get(creds.customerNo)?.profile?.name;
+  const acc = store.accounts.find((a) => a.customerNo === creds.customerNo);
+  if (!name || !acc || acc.name === name) return;
+  store.accounts = await upsertAccount({ ...acc, name }).catch(() => store.accounts);
+}
+
+/**
+ * fn(client) mit angemeldetem Client des Kontos. Token nur speichern, wenn auch
+ * die Zugangsdaten gespeichert sind („Auf diesem Gerät merken“).
+ */
+const withLogin = (creds, fn) => {
+  const c = clientFor(creds.customerNo);
+  return withSession(c, creds, () => fn(c), { persist: store.accounts.some((a) => a.customerNo === creds.customerNo) });
+};
+
+/** Reiter je Kind; nur bei mehr als einem Konto. */
+function kidTabs() {
+  if (!multi()) return "";
+  const active = currentCreds()?.customerNo;
+  return `<div class="kids" role="tablist">${store.accounts.map((a) => `
+    <button type="button" role="tab" class="kid-tab${a.customerNo === active ? " on" : ""}" aria-selected="${a.customerNo === active}"
+      data-kid="${esc(a.customerNo)}">${esc(accountLabel(a))}</button>`).join("")}</div>`;
+}
+document.addEventListener("click", (ev) => {
+  const tab = ev.target.closest?.("[data-kid]");
+  if (!tab || tab.dataset.kid === currentCreds()?.customerNo) return;
+  selectAccount(tab.dataset.kid);
+  showHome();
+});
 
 function busy(text) {
   $app.innerHTML = `<p class="muted">${esc(text)}</p>`;
@@ -95,11 +157,30 @@ function busy(text) {
  */
 let viewSeq = 0;
 
-/** retry: Zugangsdaten für „Trotzdem jetzt versuchen“, wenn die Anmeldung an einer Pause hing. */
-function showSetup(message = "", prefill = {}, retry = null) {
+/**
+ * retry: Zugangsdaten für „Trotzdem jetzt versuchen“, wenn die Anmeldung an einer Pause hing.
+ * adding: weiteres Kind zu gespeicherten Konten; dann ohne Einleitung und immer gemerkt
+ * (die Erinnerung prüft nur gespeicherte Konten).
+ */
+function showSetup(message = "", prefill = {}, retry = null, { adding = false } = {}) {
   viewSeq++;
   chrome(false);
-  $app.innerHTML = `
+  if (adding) $header.hidden = true;
+  $app.innerHTML = adding ? `
+    <div class="card">
+      <h2 class="u-mt0">Weiteres Kind</h2>
+      <p class="small muted">Jedes Kind hat im Bestellsystem (IBS5) eine eigene Kundennummer und ein eigenes Passwort.</p>
+      ${message ? `<p class="error">${esc(message)}</p>` : ""}
+      ${retry ? `<div class="row"><button id="b-resume" type="button" class="block">Trotzdem jetzt versuchen</button></div>` : ""}
+      <form id="f-login" autocomplete="on">
+        <label for="cn">Kundennummer</label>
+        <input id="cn" name="username" type="text" inputmode="numeric" autocomplete="username" required value="${esc(prefill.customerNo)}">
+        <label for="pw">Passwort</label>
+        ${passwordField("pw", 'name="password"')}
+        <div class="row"><button type="submit" class="block">Hinzufügen und prüfen</button></div>
+        <div class="row u-mt4"><button type="button" id="b-add-cancel" class="text">Abbrechen</button></div>
+      </form>
+    </div>` : `
     ${wantInstall ? installTip() : ""}
     <div class="card hero open intro">
       <h2>Nie wieder Schulessen vergessen</h2>
@@ -127,25 +208,30 @@ function showSetup(message = "", prefill = {}, retry = null) {
     </div>`;
   wireInstallTip();
   const attempt = async (creds, remember) => {
+    if (adding && store.accounts.some((a) => a.customerNo === creds.customerNo)) {
+      return showSetup("Diese Kundennummer ist schon eingerichtet.", creds, null, { adding });
+    }
     busy("Anmelden …");
+    const c = clientFor(creds.customerNo);
     try {
-      await login(client, creds, remember);
+      await login(c, creds, remember);
     } catch (e) {
       const isPause = e instanceof IbsPausedError;
       showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}` : e.message, creds,
-        isPause ? { creds, remember } : null);
+        isPause ? { creds, remember } : null, { adding });
       return;
     }
-    if (remember) await saveCreds(creds);
+    if (remember) await saveCreds(creds, c.profile?.name || "");
     else sessionCreds = creds;
     showHome();
   };
+  document.getElementById("b-add-cancel")?.addEventListener("click", () => showSettings());
   document.getElementById("f-login").addEventListener("submit", (ev) => {
     ev.preventDefault();
     attempt({
       customerNo: document.getElementById("cn").value.trim(),
       password: document.getElementById("pw").value,
-    }, document.getElementById("remember").checked);
+    }, adding || document.getElementById("remember").checked);
   });
   if (retry) {
     document.getElementById("b-resume").onclick = async () => {
@@ -263,22 +349,28 @@ async function showHome(fresh = false) {
   const cfg = { ...DEFAULT_CHECK, daysAhead: loadDaysAhead() };
   // Fällige Tage ohne Schulessen kommen dazu, auch hinter dem Prüfzeitraum:
   // nur so steht fest, ob dort noch abbestellt werden muss.
-  const events = await loadEvents(today).catch(() => []);
+  const events = eventsFor(await loadEvents(today).catch(() => []), creds.customerNo);
   const dates = [...new Set([...targetDates(today, cfg), ...dueEvents(events, today).filter((e) => e.noMeal).map((e) => e.date)])].sort();
+  const client = clientFor(creds.customerNo);
   // Ob IBS5 diesem Gerät nur Tagesansichten liefert, ist gemerkt: spart die Probe-Anfrage.
   client.dayView ||= !!(await kvGet("ibsDayView").catch(() => false));
-  const cached = await kvGet("lastDays").catch(() => null);
+  const lastKey = accountKey("lastDays", creds.customerNo);
+  // Ohne eigenen Eintrag gilt der aus der Zeit mit einem Konto (prüft unten die Kundennummer).
+  const cached = (await kvGet(lastKey).catch(() => null)) ?? (await kvGet("lastDays").catch(() => null));
   const usable = cached && cached.from === today && cached.daysAhead === cfg.daysAhead && cached.customerNo === creds.customerNo;
   if (my !== viewSeq) return;
-  if (usable) await renderHome(my, daysFromJson(cached.days), { staleAt: cached.at });
-  else $app.innerHTML = `<p class="muted">${progressText("Wochenplan wird geladen")}</p>${progressBar()}`;
+  if (usable) await renderHome(my, creds, daysFromJson(cached.days), { staleAt: cached.at });
+  else $app.innerHTML = `${kidTabs()}<p class="muted">${progressText("Wochenplan wird geladen")}</p>${progressBar()}`;
 
   let days;
   try {
-    days = await withLogin(creds, () => collect(client, dates, { fresh, onProgress: setProgress, history: true }));
+    days = await withLogin(creds, (c) => collect(c, dates, { fresh, onProgress: setProgress, history: true }));
   } catch (e) {
     if (my !== viewSeq) return;
-    if (e instanceof IbsAuthError && !client.token) return showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
+    if (e instanceof IbsAuthError && !client.token) {
+      return multi() ? showSettings(`${kidName(creds) || creds.customerNo}: Anmeldung abgelehnt: ${e.message}`)
+        : showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
+    }
     const isPause = e instanceof IbsPausedError;
     const card = `
       <div class="card hero ${isPause ? "bad" : "neutral"}">
@@ -290,8 +382,10 @@ async function showHome(fresh = false) {
       </div>`;
     document.getElementById("refresh")?.remove();
     document.getElementById("pbar-text")?.replaceWith("Aktualisieren fehlgeschlagen");
-    if (usable) $app.insertAdjacentHTML("afterbegin", card);
-    else $app.innerHTML = card + lastOkLine();
+    const tabs = document.querySelector(".kids");
+    if (usable && tabs) tabs.insertAdjacentHTML("afterend", card);
+    else if (usable) $app.insertAdjacentHTML("afterbegin", card);
+    else $app.innerHTML = kidTabs() + card + lastOkLine();
     document.getElementById("b-retry").onclick = async () => {
       if (isPause) await resume();
       showHome(true);
@@ -299,10 +393,11 @@ async function showHome(fresh = false) {
     return;
   }
   if (client.dayView) kvSet("ibsDayView", true).catch(() => {});
-  kvSet("lastDays", { at: Date.now(), from: today, daysAhead: cfg.daysAhead, customerNo: creds.customerNo, days: daysToJson(days) })
+  kvSet(lastKey, { at: Date.now(), from: today, daysAhead: cfg.daysAhead, customerNo: creds.customerNo, days: daysToJson(days) })
     .catch(() => {});
+  await rememberName(creds);
   if (my !== viewSeq) return;
-  await renderHome(my, days);
+  await renderHome(my, creds, days);
 }
 
 /** Fortschrittsbalken; der Füllstand wird per Skript gesetzt (die CSP lässt keine style-Attribute zu). */
@@ -323,13 +418,13 @@ function setProgress(done, total) {
 }
 
 /** Zeichnet die Übersicht; mit staleAt als gespeicherter Stand, der gerade aktualisiert wird. */
-async function renderHome(my, days, { staleAt = null } = {}) {
+async function renderHome(my, creds, days, { staleAt = null } = {}) {
   // Stundenplan nur, wenn eingerichtet; ein Sdui-Fehler darf den Bestellstand nicht aufhalten.
   const sdui = await Sdui.cachedPlan().catch(() => null);
   const scfg = sdui ? await Sdui.sduiConfig() : null;
   const strip = sdui ? stripMaker(sdui.lessons, scfg?.subjects || []) : null;
   const today = todayBerlin();
-  const events = await loadEvents(today).catch(() => []);
+  const events = eventsFor(await loadEvents(today).catch(() => []), creds.customerNo);
   // An Tagen ohne Schulessen ist „nicht bestellt“ gewollt: kein „offen“ in der Statuskarte.
   const noMeal = noMealDates(events);
   const relevant = days.filter((d) => !noMeal.has(d.date));
@@ -337,8 +432,9 @@ async function renderHome(my, days, { staleAt = null } = {}) {
 
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
+    ${kidTabs()}
     ${wantInstall ? installTip() : ""}
-    ${heroCard(relevant, client.profile?.firstName || "")}
+    ${heroCard(relevant, kidName(creds))}
     ${eventsCard(events, days, today)}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
@@ -365,6 +461,7 @@ async function renderHome(my, days, { staleAt = null } = {}) {
   if (my !== viewSeq) return;
   const stale = pushStale();
   if (stale) document.querySelector(".hero")?.insertAdjacentHTML("beforebegin", stale);
+
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
     .format(new Date(staleAt || Date.now()));
   const pushInfo = store.push && store.lastPushOk ? ` · Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "";
@@ -532,11 +629,14 @@ function dayRow(d, strip = null, dayEvents = []) {
 async function showOrder(focusDate = null) {
   const creds = currentCreds();
   if (!creds) return showSetup();
+  const client = clientFor(creds.customerNo);
   const my = ++viewSeq;
   chrome(false);
   $header.hidden = true; // wie OrderScreen der App: nur „Bestellen“ und „Zurück“
+  // Bei mehreren Kindern steht im Kopf, für wen bestellt wird.
+  const forKid = multi() && kidName(creds) ? ` für ${esc(kidName(creds))}` : "";
   $app.innerHTML = `
-    <div class="order-head"><h2>Bestellen</h2><button id="b-back" class="text">Zurück</button></div>
+    <div class="order-head"><h2>Bestellen${forKid}</h2><button id="b-back" class="text">Zurück</button></div>
     <div id="o-progress" class="progress"></div>
     <div id="o-result"></div>
     <form id="f-order"></form>`;
@@ -597,7 +697,7 @@ async function showOrder(focusDate = null) {
     const $more = document.getElementById("o-more");
     const today = todayBerlin();
     const monday = addDays(today, 1 - weekdayNo(today));
-    const get = (dates) => withLogin(creds, () => collect(client, dates));
+    const get = (dates) => withLogin(creds, (c) => collect(c, dates));
     const offered = (ds) => ds.some((d) => d.state !== OrderState.NO_OFFER);
     days = [];
     all = [];
@@ -677,8 +777,8 @@ async function showOrder(focusDate = null) {
     document.getElementById("b-submit").disabled = true;
     working(true);
     const previouslyInCart = all.flatMap((d) => d.entries.filter((e) => e.quantityInCart === "1" && e.selectable));
-    const outcome = await withLogin(creds, () =>
-      placeOrders(client, changes, { previouslyInCart, reload: (ds) => collect(client, ds, { fresh: true }) }),
+    const outcome = await withLogin(creds, (c) =>
+      placeOrders(c, changes, { previouslyInCart, reload: (ds) => collect(c, ds, { fresh: true }) }),
     ).catch((e) => ({ kind: "aborted", reason: e.message }));
     working(false);
 
@@ -744,6 +844,12 @@ function confirmDialog(title, lines) {
 
 // ---------------------------------------------------------------- Termine
 
+/** „Anna · “ vor einem Termin, der nur ein Kind betrifft; leer bei einem Kind. */
+function whoText(e) {
+  const acc = e.who && store.accounts.find((a) => a.customerNo === e.who);
+  return multi() && acc ? `${esc(accountLabel(acc))} · ` : "";
+}
+
 const leadText = (n) => (n === 7 ? "eine Woche" : n === 1 ? "einen Tag" : `${n} Tage`) + " vorher";
 
 /** Plus oben: eigenen Termin eintragen; eingetragene sehen und löschen. Nur auf dem Gerät. */
@@ -768,6 +874,9 @@ function showEvents() {
         <input id="ev-date" type="date" min="${today}" required>
         <label for="ev-lead">Erinnern</label>
         <select id="ev-lead">${LEADS.map((n) => `<option value="${n}"${n === 2 ? " selected" : ""}>${leadText(n)}</option>`).join("")}</select>
+        ${multi() ? `<label for="ev-who">Für</label>
+        <select id="ev-who"><option value="">alle Kinder</option>${store.accounts.map((a) =>
+          `<option value="${esc(a.customerNo)}"${a.customerNo === currentCreds()?.customerNo ? " selected" : ""}>${esc(accountLabel(a))}</option>`).join("")}</select>` : ""}
         <label class="check"><input id="ev-nomeal" type="checkbox"> kein Schulessen an dem Tag</label>
         <p class="small muted">Bleibt nur auf diesem Gerät: nicht auf anderen Handys, und „Abmelden“ löscht es.
           ${store.push ? "Erinnert wird mit der täglichen Erinnerung." : "Die Erinnerung ist aus (⚙) — dann steht es nur hier auf der Startseite."}</p>
@@ -778,7 +887,7 @@ function showEvents() {
       </form>
       ${list.length ? `<div class="section">EINGETRAGEN</div>
         <ul class="event-list">${list.map((e) => `
-          <li><span>${esc(De.chip(e.date))} ${esc(e.title)}<span class="muted"> · ${e.noMeal ? "kein Schulessen · " : ""}${leadText(e.lead)}</span></span>
+          <li><span>${esc(De.chip(e.date))} ${esc(e.title)}<span class="muted"> · ${whoText(e)}${e.noMeal ? "kein Schulessen · " : ""}${leadText(e.lead)}</span></span>
             <button type="button" class="text" data-del="${e.id}" aria-label="Termin löschen">Löschen</button></li>`).join("")}</ul>` : ""}`;
     dlg.querySelector("#ev-close").onclick = close;
     dlg.querySelector("#f-event").onsubmit = async (ev) => {
@@ -786,7 +895,8 @@ function showEvents() {
       const title = dlg.querySelector("#ev-title").value.trim();
       const date = dlg.querySelector("#ev-date").value;
       if (!title || !/^\d{4}-\d{2}-\d{2}$/.test(date) || date < today) return;
-      await addEvent(today, { title, date, lead: Number(dlg.querySelector("#ev-lead").value), noMeal: dlg.querySelector("#ev-nomeal").checked });
+      await addEvent(today, { title, date, lead: Number(dlg.querySelector("#ev-lead").value),
+        noMeal: dlg.querySelector("#ev-nomeal").checked, who: dlg.querySelector("#ev-who")?.value || null });
       changed = true;
       close();
     };
@@ -816,6 +926,7 @@ const ICON = {
   star: "M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z",
   person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
   logout: "M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z",
+  add: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
   key: "M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z",
 };
 const ico = (name) => `<svg class="s-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
@@ -830,8 +941,21 @@ function srow(icon, title, { value = "", hint = "", right = "", cls = "", tag = 
     ${hint ? `<div class="srow-hint">${hint}</div>` : ""}`;
 }
 
+/** Kinder: je Konto eine Zeile, Entfernen erst ab zwei (sonst „Abmelden und alles löschen“). */
+function accountRows(creds) {
+  if (!store.accounts.length) {
+    const c = clients.get(creds?.customerNo);
+    return srow("person", esc(c?.profile?.name || "Angemeldet"), { value: `Kd. ${esc(creds?.customerNo || "")}` });
+  }
+  return store.accounts.map((a) => srow("person", esc(a.name || accountLabel(a)), {
+    value: `Kd. ${esc(a.customerNo)}`,
+    right: multi() ? `<button type="button" class="text srow-x" data-remove="${esc(a.customerNo)}">Entfernen</button>` : "",
+  })).join("") + srow("add", "Kind hinzufügen", { tag: "button", id: "b-kid-add",
+    hint: multi() ? "" : "für Geschwister mit eigener Kundennummer" });
+}
+
 /** Einstellungen im Android-Stil: Bereiche ohne Karten, Werte rechts, Ändern per Antippen. */
-function showSettings() {
+function showSettings(message = "") {
   viewSeq++;
   const creds = currentCreds();
   chrome(false);
@@ -847,9 +971,10 @@ function showSettings() {
     <div class="group-title">Stundenplan (Sdui)</div>
     <div class="group" id="sdui-box"></div>
 
-    <div class="group-title">Konto</div>
+    <div class="group-title">${multi() ? "Kinder" : "Konto"}</div>
     <div class="group">
-      ${srow("person", esc(client.profile?.name || "Angemeldet"), { value: `Kd. ${esc(creds?.customerNo || "")}` })}
+      ${message ? `<p class="small error group-pad">${esc(message)}</p>` : ""}
+      ${accountRows(creds)}
       ${srow("logout", "Abmelden und alles löschen", { tag: "button", id: "b-logout", cls: "danger-row" })}
     </div>
 
@@ -859,13 +984,23 @@ function showSettings() {
   document.getElementById("b-about").onclick = showAbout;
   wirePushBox();
   wireSduiBox();
+  const add = document.getElementById("b-kid-add");
+  if (add) add.onclick = () => showSetup("", {}, null, { adding: true });
+  for (const b of $app.querySelectorAll("[data-remove]")) {
+    b.onclick = async () => {
+      const acc = store.accounts.find((a) => a.customerNo === b.dataset.remove);
+      if (!acc || !confirm(`${accountLabel(acc)} (Kd. ${acc.customerNo}) von diesem Gerät entfernen? Seine Termine gehen mit.`)) return;
+      store.accounts = await removeAccount(acc.customerNo);
+      clients.delete(acc.customerNo);
+      if (store.active === acc.customerNo) selectAccount(store.accounts[0].customerNo);
+      showSettings();
+    };
+  }
   document.getElementById("b-logout").onclick = async () => {
     if (!confirm("Alles auf diesem Gerät löschen? Zugangsdaten, Sdui, Einstellungen und Erinnerung.")) return;
     await pushDisable().catch(() => {});
     await clearCreds();
     sessionCreds = null;
-    client.token = client.profile = client.customerNo = null;
-    client.dayCache = null;
     showSetup();
   };
 }
@@ -910,6 +1045,7 @@ async function wireSduiBox(message = "") {
   const box = document.getElementById("sdui-box");
   if (!box) return;
   const cfg = await Sdui.sduiConfig();
+  if (!box.isConnected) return; // inzwischen eine andere Ansicht
   const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
   if (!cfg) {
     box.innerHTML = `${msg}
@@ -920,6 +1056,7 @@ async function wireSduiBox(message = "") {
   }
   const known = (await kvGet("sduiKnown")) || [];
   const shorts = new Map(((await kvGet("sduiPlan"))?.lessons || []).map((l) => [l.subject, l.short]));
+  if (!box.isConnected) return;
   // „Erinnern an“ ist selbst die Zeile: zugeklappt rechts die Kürzel, aufgeklappt die Fächerliste darunter.
   box.innerHTML = `${msg}
     ${srow("school", esc(cfg.childName || "verbunden"), { hint: esc(cfg.slink || ""),
@@ -1157,7 +1294,7 @@ async function pushDisable() {
 }
 
 $reload.onclick = () => showHome(true);
-$settings.onclick = showSettings;
+$settings.onclick = () => showSettings();
 $add.onclick = showEvents;
 
 // Ohne Service Worker läuft die Seite weiter, nur Erinnerungen gehen dann nicht.
@@ -1165,9 +1302,11 @@ const swReady = "serviceWorker" in navigator
   ? navigator.serviceWorker.register("sw.js", { type: "module" }).then(() => true, () => false)
   : Promise.resolve(false);
 
-// Antippen der Erinnerung öffnet ./?order=<Tag> → direkt in die Bestellansicht.
+// Antippen der Erinnerung öffnet ./?order=<Tag>[&k=<Kundennummer>] → direkt in die Bestellansicht.
 await loadStore();
 const orderDate = new URLSearchParams(location.search).get("order");
+const orderKid = new URLSearchParams(location.search).get("k");
+if (orderKid && store.accounts.some((a) => a.customerNo === orderKid)) selectAccount(orderKid);
 if (orderDate && /^\d{4}-\d{2}-\d{2}$/.test(orderDate)) {
   history.replaceState(null, "", "./");
   if (currentCreds()) {

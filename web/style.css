@@ -386,3 +386,12 @@ header { justify-content: flex-end; min-height: 44px; }
 .event-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .88rem; padding: 4px 0; }
 .event-list li + li { border-top: 1px solid var(--surface-variant); }
 .events-dialog p { display: block; -webkit-line-clamp: unset; }
+
+/* Reiter je Kind (nur bei mehreren IBS5-Konten). */
+.kids { display: flex; gap: 6px; margin: 0 0 10px; overflow-x: auto; }
+.kid-tab {
+  flex: 0 0 auto; background: transparent; color: var(--on-surface-variant);
+  border: 1px solid var(--surface-variant); border-radius: 999px; padding: 6px 14px; font-weight: 500;
+}
+.kid-tab.on { background: var(--secondary); border-color: var(--secondary); color: #fff; }
+.srow-x { margin-left: 6px; padding: 4px 6px; font-size: .85rem; }
