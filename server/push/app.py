@@ -350,17 +350,19 @@ def selfcheck() -> list[str]:
             with urllib.request.urlopen(r, timeout=20) as resp:
                 return resp.status, resp.headers, resp.read(limit)
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.headers, b""
+            return exc.code, exc.headers, exc.read(limit)
 
     ibs = "https://ibs.sunshine-catering.de/ibs5"
     try:
-        # Anmeldung mit Kundennummer 0: gibt es nicht, IBS5 antwortet mit errorMessage
-        # (leere Felder bekämen 403 und taugen nicht als Probe).
+        # Anmeldung mit Kundennummer 0: gibt es nicht, IBS5 antwortet mit errorMessage —
+        # bis 09.10.2026 als HTTP 200, seit dem neuen Layout als 403. Beides heißt: der
+        # Login ist ohne Preflight erreichbar und antwortet lesbar (CORS).
         st, hd, body = req("POST", f"{ibs}/Login/Login", {"Accept-Language": "de-DE",
                            "Content-Type": "application/x-www-form-urlencoded"},
                            b"identifierValue=0&secretValue=x&identifierType=0&secretType=0")
-        if st != 200 or hd.get("Access-Control-Allow-Origin") not in ("*", ORIGIN) or b"errorMessage" not in body:
-            problems.append(f"IBS5-Login ohne Preflight: HTTP {st}, Allow-Origin={hd.get('Access-Control-Allow-Origin')}")
+        if st not in (200, 403) or hd.get("Access-Control-Allow-Origin") not in ("*", ORIGIN) or b"errorMessage" not in body:
+            snippet = body[:80].decode("utf-8", "replace").replace("\n", " ")
+            problems.append(f"IBS5-Login ohne Preflight: HTTP {st}, Allow-Origin={hd.get('Access-Control-Allow-Origin')}, Antwort: {snippet!r}")
         st, hd, _ = req("OPTIONS", f"{ibs}/Mealplan/WeekplanMobile", {"Access-Control-Request-Method": "GET",
                         "Access-Control-Request-Headers": "authorization,x-requested-with", "Accept-Language": "de-DE"})
         if st != 200 or hd.get("Access-Control-Allow-Origin") not in ("*", ORIGIN):
