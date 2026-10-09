@@ -80,6 +80,13 @@ try {
   try { await c2.weekplan(2026, 41); } catch { /* erwartet: pausiert */ }
   check("ein Folgeversuch, dann Pause", calls === 3 && !!(await paused()), `Anfragen: ${calls}`);
 
+  // 403 beim Login: falsches Passwort (IBS5-Layout seit 09.10.2026), keine Pause.
+  await reset();
+  window.fetch = async () => { calls++; return new Response("", { status: 403 }); };
+  let e1f = null;
+  try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch (e) { e1f = e; }
+  check("HTTP 403 beim Login: Ablehnung, keine Pause", e1f instanceof IbsAuthError && !(await paused()), e1f?.message);
+
   // 3. 429 pausiert, 403 nach Login nicht.
   await reset();
   window.fetch = async () => { calls++; return new Response("", { status: 429 }); };

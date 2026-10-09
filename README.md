@@ -195,14 +195,15 @@ gespeichert (nach Bestellschluss bis zum Tag selbst, ohne Angebot eine Stunde,
 andere Tage ab nächster Woche sechs Stunden, sonst zehn Minuten; widerspricht
 die Bestellhistorie, wird neu geladen), die Erinnerung prüft höchstens die
 nächsten fünf Schultage, und insgesamt gehen höchstens 150 Anfragen je Stunde
-und Gerät an IBS5 (CORS-Vorabfragen mitgezählt). Kommt beim Anmelden ein 429 oder 403, ruht die
+und Gerät an IBS5 (CORS-Vorabfragen mitgezählt). Kommt beim Anmelden ein 429, ruht die
 App drei Stunden und sagt das, statt die Sperre durch Wiederholungen zu
 verlängern. Kommt gar keine Antwort (so sieht die Sperre im Browser aus, aber
 auch ein Aussetzer), ruht sie erst 15 Minuten, beim nächsten Mal binnen sechs
 Stunden drei. Wechselt das Gerät das Netz (WLAN ↔ Mobilfunk, auf Android
 erkennbar), endet die Pause, denn die Sperre gilt der IP-Adresse; „Trotzdem
-jetzt versuchen“ gibt es auf der Übersicht und beim Anmelden. Eine Weiterleitung
-oder 401/403 beim Anmelden gilt als Störung, nicht als falsches Passwort. Die Erinnerung auf dem
+jetzt versuchen“ gibt es auf der Übersicht und beim Anmelden. Ein 403 beim Anmelden
+heißt „Kundennummer oder Passwort falsch“ (so antwortet IBS5 seit dem neuen Layout vom
+9. Oktober 2026), eine Weiterleitung oder 401 gilt als Störung. Die Erinnerung auf dem
 iPhone ist noch nicht ausprobiert.
 
 **Damit Schweigen auffällt:** Die Startseite zeigt, wann die Erinnerung zuletzt

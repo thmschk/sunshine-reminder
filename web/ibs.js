@@ -209,8 +209,10 @@ export class IbsClient {
     }
     if (!resp.ok && resp.type !== "opaqueredirect") await this.hooks.failed?.({ path, status: resp.status });
     if (resp.type === "opaqueredirect" || resp.status === 401 || resp.status === 403) {
-      // Falsche Zugangsdaten meldet der Login als errorMessage; eine Weiterleitung
-      // oder 401/403 dort ist eine Störung, keine Ablehnung.
+      // Falsche Zugangsdaten beantwortet der Login seit dem IBS5-Layout vom 09.10.2026
+      // mit 403 ohne Inhalt (vorher 200 mit errorMessage, das gilt weiter). Eine
+      // Weiterleitung oder 401 dort ist eine Störung, keine Ablehnung.
+      if (!auth && resp.status === 403) throw new IbsAuthError("Kundennummer oder Passwort falsch.");
       if (!auth) throw new IbsError(`${path}: unerwartete Antwort (${resp.type === "opaqueredirect" ? "Weiterleitung" : `HTTP ${resp.status}`})`);
       throw new IbsAuthError(`${path}: Anmeldung abgelaufen oder abgelehnt`);
     }

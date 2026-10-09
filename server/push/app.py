@@ -356,13 +356,14 @@ def selfcheck() -> list[str]:
 
     ibs = "https://ibs.sunshine-catering.de/ibs5"
     try:
-        # Anmeldung mit Kundennummer 0: gibt es nicht, IBS5 antwortet mit errorMessage —
-        # bis 09.10.2026 als HTTP 200, seit dem neuen Layout als 403. Beides heißt: der
-        # Login ist ohne Preflight erreichbar und antwortet lesbar (CORS).
+        # Anmeldung mit Kundennummer 0: gibt es nicht. Bis 09.10.2026 kam HTTP 200 mit
+        # errorMessage, seit dem neuen Layout 403 ohne Inhalt (wie bei jedem falschen
+        # Passwort). Beides heißt: der Login ist ohne Preflight erreichbar und lesbar (CORS).
         st, hd, body = req("POST", f"{ibs}/Login/Login", {"Accept-Language": "de-DE",
                            "Content-Type": "application/x-www-form-urlencoded"},
                            b"identifierValue=0&secretValue=x&identifierType=0&secretType=0")
-        if st not in (200, 403) or hd.get("Access-Control-Allow-Origin") not in ("*", ORIGIN) or b"errorMessage" not in body:
+        rejected = st == 403 or (st == 200 and b"errorMessage" in body)
+        if not rejected or hd.get("Access-Control-Allow-Origin") not in ("*", ORIGIN):
             snippet = body[:80].decode("utf-8", "replace").replace("\n", " ")
             problems.append(f"IBS5-Login ohne Preflight: HTTP {st}, Allow-Origin={hd.get('Access-Control-Allow-Origin')}, Antwort: {snippet!r}")
         st, hd, _ = req("OPTIONS", f"{ibs}/Mealplan/WeekplanMobile", {"Access-Control-Request-Method": "GET",

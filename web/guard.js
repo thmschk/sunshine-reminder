@@ -1,7 +1,7 @@
 // Schutz vor der IP-Sperre von IBS5. Gesperrt antwortet IBS5 auf alles mit 406
 // ohne CORS-Freigabe, im Browser kommt davon nur „Failed to fetch“ an — nicht von
-// einem Netzfehler zu unterscheiden. Bei 403/429 auf den Login ruht jede Abfrage
-// drei Stunden, statt die Sperre durch Wiederholungen zu verlängern. Bleibt der
+// einem Netzfehler zu unterscheiden. Bei 429 auf den Login ruht jede Abfrage
+// drei Stunden (403 dort heißt seit 09.10.2026 nur „Passwort falsch“), statt die Sperre durch Wiederholungen zu verlängern. Bleibt der
 // Login nur ohne Antwort, kann das auch ein Aussetzer sein: erst 15 Minuten, erst
 // beim nächsten Schweigen binnen sechs Stunden drei. Die Sperre gilt der
 // IP-Adresse, deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔
@@ -74,8 +74,8 @@ export const guardHooks = {
   async failed({ path, status, network }) {
     // Ohne Netz ist es keine Sperre; dann nichts pausieren.
     if (network && typeof navigator !== "undefined" && navigator.onLine === false) return;
-    // 403 bei angemeldeten Aufrufen heißt meist nur „Token abgelaufen“, deshalb nur beim Login.
-    if (status === 429 || (status === 403 && path.startsWith("/Login/"))) return pause(`HTTP ${status}`);
+    // 403 heißt beim Login „Passwort falsch“, sonst meist „Token abgelaufen“: beides keine Sperre.
+    if (status === 429) return pause(`HTTP ${status}`);
     if (network && path.startsWith("/Login/")) {
       const last = await kvGet("ibsSilentAt");
       await kvSet("ibsSilentAt", Date.now());
