@@ -229,7 +229,7 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
   });
 }
 
-const { withSession } = await import("../session.js");
+const { login, withSession } = await import("../session.js");
 // Token werden nur für gespeicherte Konten abgelegt; die Testkonten danach wieder entfernen.
 const SessAcc = await import("../accounts.js");
 await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu", async () => {
@@ -258,6 +258,17 @@ await test("Sitzung: kein Token für ein inzwischen entferntes Konto", async () 
   await withSession(a, creds, async () => 0);
   const b = mk();
   eq(await withSession(b, creds, async () => b.token), "T2", "nicht gespeichert, neu angemeldet");
+});
+
+await test("Sitzung: erste Anmeldung mit „merken“ speichert den Token, Konto kommt erst danach", async () => {
+  const creds = { customerNo: `neu-${Date.now()}`, password: "x" };
+  let logins = 0;
+  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max", ""); } });
+  await login(mk(), creds, true); // wie attempt() in app.js: erst anmelden, dann saveCreds
+  await SessAcc.upsertAccount(creds);
+  const b = mk();
+  eq(await withSession(b, creds, async () => b.token), "T1", "gespeicherter Token wiederverwendet");
+  await SessAcc.removeAccount(creds.customerNo);
 });
 
 await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async () => {

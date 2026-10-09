@@ -317,11 +317,11 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
         log.warning("Push fehlgeschlagen: Umleitung nicht gefolgt")
         return False
     except ValueError:
-        # Schlüssel nicht verwendbar (vor der Kurvenprüfung angelegt): wird nie zustellbar.
+        # Schlüssel oder Adresse nicht verwendbar (z. B. vor der Kurvenprüfung angelegt): wird nie zustellbar.
         with db_lock:
             CONN.execute("DELETE FROM subs WHERE id = ?", (row["id"],))
             CONN.commit()
-        log.warning("Abo mit unbrauchbarem Schlüssel gelöscht")
+        log.warning("Unbrauchbares Abo gelöscht")
         return False
     except Exception:
         log.exception("Push nicht versendbar")

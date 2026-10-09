@@ -27,9 +27,7 @@ export async function login(client, creds, persist) {
   client.token = null;
   client.profile = await client.login(creds.customerNo, creds.password);
   client.customerNo = creds.customerNo;
-  // Nur für ein Konto, das noch gespeichert ist: ein Weckruf kann ein inzwischen
-  // entferntes Kind (oder „Alles löschen“) überdauern.
-  if (persist && (await loadAccounts()).some((a) => a.customerNo === creds.customerNo)) {
+  if (persist) {
     const { name, institution } = client.profile;
     await secretSet(keyOf(creds.customerNo), { customerNo: creds.customerNo, token: client.token, name, institution }).catch(() => {});
   }
@@ -48,12 +46,15 @@ export async function withSession(client, creds, fn, { persist = true } = {}) {
       client.customerNo = creds.customerNo;
     }
   }
-  if (!client.token) await login(client, creds, persist);
+  // Neuer Token nur für ein Konto, das noch gespeichert ist: ein Weckruf kann ein
+  // inzwischen entferntes Kind (oder „Alles löschen“) überdauern.
+  const keep = async () => persist && (await loadAccounts()).some((a) => a.customerNo === creds.customerNo);
+  if (!client.token) await login(client, creds, await keep());
   try {
     return await fn();
   } catch (e) {
     if (!(e instanceof IbsAuthError || e.maybeAuth)) throw e;
-    await login(client, creds, persist);
+    await login(client, creds, await keep());
     return fn();
   }
 }
