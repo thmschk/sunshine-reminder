@@ -337,6 +337,7 @@ ORIGIN = "https://sunshine.thomschke.info"
 # So lange vorher mahnt die Selbstprüfung, ferien.json neu zu erzeugen (tools/ferien.py).
 FERIEN_WARN_DAYS = 180
 selfcheck_state = {"at": None, "ok": None, "problems": []}
+BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
 
 
 def selfcheck() -> list[str]:
@@ -344,7 +345,8 @@ def selfcheck() -> list[str]:
     problems = []
 
     def req(method, url, headers=None, data=None, limit=2000):
-        h = {"Origin": ORIGIN, "User-Agent": "theoretisch-satt Selbstprüfung", **(headers or {})}
+        # Wie ein Browser: das IBS5-Layout seit 09.10.2026 weist fremde Kennungen womöglich ab.
+        h = {"Origin": ORIGIN, "User-Agent": BROWSER_UA, **(headers or {})}
         r = urllib.request.Request(url, data=data, method=method, headers=h)
         try:
             with urllib.request.urlopen(r, timeout=20) as resp:
