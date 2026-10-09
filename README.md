@@ -83,6 +83,7 @@ Was nach dem Eingeben der Zugangsdaten passiert:
 4. **Jeden Werktag zur gewählten Zeit** läuft der Weckruf so:
 
    ```mermaid
+   %%{init: {"sequence": {"mirrorActors": false}}}%%
    sequenceDiagram
        participant S as Unser Server
        participant P as Push-Dienst (Google/Apple)
