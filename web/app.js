@@ -10,7 +10,10 @@ import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks, resume } from "./guard.js";
 import { login, withSession } from "./session.js";
 import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
-import { holidayOn, loadHolidays, loadMealPref, nextHoliday, rangeText, saveMealPref, skipDates } from "./holidays.js";
+import {
+  askLater, askWithin, askedLater, holidayOn, loadHolidays, loadMealPref, nextHoliday, openWeeks, rangeText, saveMealPref, skipDates,
+  unanswered, weekText,
+} from "./holidays.js";
 
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
 // diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
@@ -159,6 +162,8 @@ function busy(text) {
  * eine andere Ansicht offen ist, darf sie danach nicht mehr zeichnen.
  */
 let viewSeq = 0;
+/** Zuletzt gezeichnete Startseite; der Ferien-Dialog überlebt das zweite Zeichnen und zeichnet danach damit neu. */
+let homeState = null;
 
 /**
  * retry: Zugangsdaten für „Trotzdem jetzt versuchen“, wenn die Anmeldung an einer Pause hing.
@@ -460,7 +465,9 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const noMeal = noMealDates(events);
   const skip = skipDates(ferien, pref, days.map((d) => d.date));
   const relevant = days.filter((d) => !noMeal.has(d.date) && !skip.has(d.date));
+  const ferienAsk = await ferienQuestion(ferien, pref, today, creds);
   if (my !== viewSeq) return;
+  homeState = { creds, days, staleAt };
 
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
@@ -468,7 +475,7 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
     ${pushNotice ? `<p class="small error">${esc(pushNotice)}</p>` : ""}
     ${wantInstall ? installTip() : ""}
     ${heroCard(relevant, kidName(creds))}
-    ${ferienCard(ferien, pref, today, creds)}
+    ${ferienHint(ferienAsk)}
     ${eventsCard(events, days, today)}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
@@ -491,11 +498,13 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const now = document.getElementById("b-order-now");
   if (now) now.onclick = () => showOrder(relevant.find((d) => d.isActionable).date);
   for (const b of $app.querySelectorAll("[data-cancel]")) b.onclick = () => showOrder(b.dataset.cancel);
-  for (const b of $app.querySelectorAll("[data-ferien]")) {
-    b.onclick = async () => {
-      await saveMealPref(creds.customerNo, b.dataset.ferien === "1").catch(() => {});
-      renderHome(viewSeq, creds, days, { staleAt });
-    };
+  if (ferienAsk) {
+    const ask = () => showFerien(creds, ferienAsk.h, () => {
+      const st = homeState;
+      if (st?.creds.customerNo === creds.customerNo) renderHome(viewSeq, st.creds, st.days, { staleAt: st.staleAt });
+    });
+    if (ferienAsk.popup) ask();
+    else if (ferienAsk.hint) document.getElementById("b-ferien").onclick = ask;
   }
 
   if (!staleAt) await kvSet("lastOk", { at: Date.now(), via: "app" }).catch(() => {});
@@ -640,17 +649,72 @@ function eventsCard(events, days, today) {
   }).join("")}</div>`;
 }
 
-/** Vor den nächsten Ferien einmal je Kind fragen, ob dort bestellt und erinnert werden soll. */
-function ferienCard(ferien, pref, today, creds) {
-  if (pref != null) return "";
-  const h = nextHoliday(ferien, today);
-  if (!h) return "";
+/** Je Kind und Ferien einmal je Seitenaufruf von selbst fragen (renderHome läuft mehrfach). */
+const ferienAsked = new Set();
+
+/**
+ * Stehen Ferien an (askWithin der Vorwarnzeit) und sind dort Wochen ohne Antwort, fragt ein
+ * Dialog nach; nach „Später“ bleibt bis morgen nur die Zeile auf der Startseite.
+ * null: nichts zu fragen.
+ */
+async function ferienQuestion(ferien, pref, today, creds) {
+  const h = nextHoliday(ferien, today, askWithin(loadDaysAhead()));
+  if (!h || !unanswered(ferien, h, pref, today).length) return null;
+  const key = `${creds.customerNo}:${h.start}`;
+  const popup = !ferienAsked.has(key) && !(await askedLater(creds.customerNo, today)) && !document.querySelector("dialog[open]");
+  if (popup) ferienAsked.add(key);
+  return { h, popup, hint: !popup && !document.querySelector("dialog.ferien-dialog[open]") };
+}
+
+const ferienHint = (ask) => (ask?.hint ? `<p class="ferien-hint small">${esc(ask.h.name)} ${esc(rangeText(ask.h))}:
+  <button type="button" id="b-ferien" class="linklike">Essen bestellen?</button></p>` : "");
+
+/**
+ * Je Ferienwoche: Essen bestellen und erinnern? Vorbelegt mit der gespeicherten
+ * Antwort, sonst „ja“ (so wird ohne Antwort auch erinnert). Speichern legt alle
+ * gezeigten Wochen fest; „Später“ fragt erst morgen wieder von selbst
+ * (aus den Einstellungen heißt er „Abbrechen“ und ändert nichts).
+ */
+async function showFerien(creds, h, onDone, { fromSettings = false } = {}) {
+  const today = todayBerlin();
+  const ferien = await loadHolidays();
+  const pref = await loadMealPref(creds.customerNo);
+  const weeks = openWeeks(ferien, h, today);
   const name = kidName(creds);
-  return `<div class="card events ferien-ask">
-    <p>${esc(h.name)} ${esc(rangeText(h))}: Soll ${name ? `für ${esc(name)} ` : ""}in den Ferien Essen bestellt und daran erinnert werden?</p>
-    <div class="row"><button class="text" data-ferien="1">Ja, erinnern</button><button class="text" data-ferien="0">Nein, kein Essen</button></div>
-    <p class="small muted">Bis zur Antwort wird auch in den Ferien erinnert. Ändern unter ⚙ → Ferien.</p>
-  </div>`;
+  const days = (n) => (n === 5 ? "ganze Woche" : `${n} ${n === 1 ? "Tag" : "Tage"}`);
+  const dlg = document.createElement("dialog");
+  dlg.className = "dialog ferien-dialog";
+  dlg.innerHTML = `
+    <h3>${esc(h.name)} ${esc(rangeText(h))}</h3>
+    <p>Soll ${name ? `für ${esc(name)} ` : ""}in diesen Wochen Essen bestellt und daran erinnert werden?</p>
+    <div class="ferien-weeks">${weeks.map((w, i) => `
+      <div class="ferien-week"><span>${esc(weekText(w))}<span class="muted"> · ${days(w.dates.length)}</span></span>
+        ${toggle(`fw-${i}`, pref[w.monday] !== false, `Essen ${weekText(w)}`)}</div>`).join("")}</div>
+    <p class="small muted">Aus: offene Tage dieser Woche sind kein Alarm (kein Hort-Essen). Vor den nächsten Ferien wird neu gefragt.</p>
+    <div class="dialog-actions">
+      <button type="button" class="text" data-v="later">${fromSettings ? "Abbrechen" : "Später"}</button>
+      <button type="button" class="text" data-v="save">Speichern</button>
+    </div>`;
+  document.body.append(dlg);
+  weeks.forEach((w, i) => {
+    const sw = dlg.querySelector(`#fw-${i}`);
+    sw.onclick = () => {
+      const on = !sw.classList.contains("on");
+      sw.classList.toggle("on", on);
+      sw.setAttribute("aria-checked", on);
+    };
+  });
+  const done = async (save) => {
+    const answers = Object.fromEntries(weeks.map((w, i) => [w.monday, dlg.querySelector(`#fw-${i}`).classList.contains("on")]));
+    dlg.close();
+    dlg.remove();
+    if (save) await saveMealPref(creds.customerNo, answers, today).catch(() => {});
+    else if (!fromSettings && unanswered(ferien, h, pref, today).length) await askLater(creds.customerNo, today).catch(() => {});
+    onDone?.();
+  };
+  dlg.addEventListener("cancel", (ev) => { ev.preventDefault(); done(false); });
+  dlg.querySelectorAll("[data-v]").forEach((b) => { b.onclick = () => done(b.dataset.v === "save"); });
+  dlg.showModal();
 }
 
 /**
@@ -1114,7 +1178,7 @@ function wireDaysAhead() {
   document.getElementById("days-plus").onclick = step(1);
 }
 
-/** Je Kind: in den Ferien bestellen und erinnern? Ohne Antwort wird erinnert. */
+/** Je Kind die nächsten Ferien; antippen öffnet die Frage je Woche. Ohne Antwort wird erinnert. */
 async function wireFerienBox() {
   const box = document.getElementById("ferien-box");
   if (!box) return;
@@ -1123,16 +1187,26 @@ async function wireFerienBox() {
   const prefs = await Promise.all(kids.map((a) => loadMealPref(a.customerNo)));
   const ferien = await loadHolidays();
   if (!document.body.contains(box)) return;
+  const today = todayBerlin();
+  const h = nextHoliday(ferien, today, 400);
   const known = ferien.until ? `Termine bekannt bis ${De.long(ferien.until)}.` : "Termine gerade nicht verfügbar.";
-  box.innerHTML = kids.map((a, i) => srow("school", multi() ? `In den Ferien erinnern: ${esc(accountLabel(a))}` : "In den Ferien erinnern", {
-    right: toggle(`ferien-${i}`, prefs[i] !== false, "In den Ferien erinnern"),
-    hint: i < kids.length - 1 ? "" : `Aus: offene Ferientage sind kein Alarm (kein Hort-Essen). ${known}`,
+  if (!h) {
+    box.innerHTML = srow("school", "Keine Ferien bekannt", { hint: known });
+    return;
+  }
+  const weeks = openWeeks(ferien, h, today);
+  const state = (pref) => {
+    if (unanswered(ferien, h, pref, today).length) return "noch offen";
+    const on = weeks.filter((w) => pref[w.monday]).length;
+    return on === weeks.length ? "Essen" : on ? `Essen ${on} von ${weeks.length} Wochen` : "kein Essen";
+  };
+  const title = `${esc(h.name)} ${esc(rangeText(h))}`;
+  box.innerHTML = kids.map((a, i) => srow("school", multi() ? `${esc(accountLabel(a))}: ${title}` : title, {
+    tag: "button", id: `ferien-${i}`, value: esc(state(prefs[i])),
+    hint: i < kids.length - 1 ? "" : `Gefragt wird je Ferienwoche, vor allen Ferien neu. Ohne Antwort wird erinnert. ${known}`,
   })).join("");
   kids.forEach((a, i) => {
-    document.getElementById(`ferien-${i}`).onclick = async () => {
-      await saveMealPref(a.customerNo, prefs[i] === false).catch(() => {});
-      wireFerienBox();
-    };
+    document.getElementById(`ferien-${i}`).onclick = () => showFerien(a, h, wireFerienBox, { fromSettings: true });
   });
 }
 

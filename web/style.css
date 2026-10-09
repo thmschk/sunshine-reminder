@@ -407,3 +407,12 @@ header { justify-content: flex-end; min-height: 44px; }
   background: transparent; color: var(--on-surface-variant); border: 1px solid var(--surface-variant);
 }
 .wd-btn.on { background: var(--secondary); border-color: var(--secondary); color: #fff; }
+
+/* Ferien: Frage je Woche als Dialog, nach „Später“ nur eine Zeile auf der Startseite. */
+.ferien-dialog { width: min(420px, calc(100vw - 48px)); }
+.ferien-dialog p { display: block; -webkit-line-clamp: unset; }
+.ferien-weeks { margin: 10px 0 4px; }
+.ferien-week { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; font-size: .9rem; }
+.ferien-week + .ferien-week { border-top: 1px solid var(--surface-variant); }
+.ferien-hint { margin: 0 0 10px; color: var(--on-surface-variant); }
+.ferien-hint .linklike { color: var(--secondary); }

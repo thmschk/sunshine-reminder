@@ -89,7 +89,7 @@ das; dann das Skript laufen lassen, Diff ansehen, committen und `server/deploy.s
 | | |
 |---|---|
 | Server | `ssh privat 'cd /srv/sunshine && docker compose run --rm -T -v /srv/sunshine/push:/app push python -m unittest test_app'` |
-| Web | `python3 -m http.server` im Repo, dann `web/tests/test.html`, `web/tests/guard.html`, `web/tests/xss.html`, `web/tests/kinder.html`, `web/tests/anmelden.html?mode=granted|denied|off` und `web/tests/crypto.html` im Browser |
+| Web | `python3 -m http.server` im Repo, dann `web/tests/test.html`, `web/tests/guard.html`, `web/tests/xss.html`, `web/tests/kinder.html`, `web/tests/ferien.html`, `web/tests/anmelden.html?mode=granted|denied|off` und `web/tests/crypto.html` im Browser |
 
 ## Offen
 

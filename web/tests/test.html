@@ -410,17 +410,41 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     const d = { until: "2026-12-31", holidays: [{ start: "2026-12-23", end: "2027-01-02", name: "Weihnachtsferien" }] };
     eq([Fe.holidayOn(d, "2026-12-28"), Fe.holidayOn(d, "2027-01-01")], ["Weihnachtsferien", null]);
   });
-  await test("Ferien: Frage nur bis 3 Wochen vorher und während der Ferien", () => {
-    eq(Fe.nextHoliday(doc, "2026-09-20"), null, "zu früh");
-    eq(Fe.nextHoliday(doc, t)?.name, "Herbstferien", "10 Tage vorher");
-    eq(Fe.nextHoliday(doc, "2026-10-28")?.name, "Herbstferien", "mittendrin");
-    eq(Fe.rangeText(Fe.nextHoliday(doc, t)), "19.10.–31.10.");
+  await test("Ferien: Frage ab Vorwarnzeit + 2 Tage vorher und während der Ferien", () => {
+    const w7 = Fe.askWithin(7);
+    eq(Fe.nextHoliday(doc, t, w7), null, "Vorwarnzeit 7: 10 Tage vorher zu früh");
+    eq(Fe.nextHoliday(doc, "2026-10-10", w7)?.name, "Herbstferien", "Vorwarnzeit 7: 9 Tage vorher");
+    eq(Fe.nextHoliday(doc, t, Fe.askWithin(14))?.name, "Herbstferien", "Vorwarnzeit 14");
+    eq(Fe.nextHoliday(doc, "2026-10-13", Fe.askWithin(3)), null, "Vorwarnzeit 3: 6 Tage vorher zu früh");
+    eq(Fe.nextHoliday(doc, "2026-10-14", Fe.askWithin(3))?.name, "Herbstferien", "Vorwarnzeit 3: 5 Tage vorher");
+    eq(Fe.nextHoliday(doc, "2026-10-28", w7)?.name, "Herbstferien", "mittendrin");
+    eq(Fe.rangeText(Fe.nextHoliday(doc, t, 400)), "19.10.–31.10.");
+    eq(Fe.nextHoliday(doc, "2026-10-31", 400)?.name, "Weihnachtsferien", "Samstag am Ende: nichts mehr offen");
   });
-  await test("Ferien: nur ohne Ferienessen übersprungen", () => {
-    const ds = ["2026-10-16", "2026-10-19", "2026-10-20"];
-    eq([...Fe.skipDates(doc, false, ds)], ["2026-10-19", "2026-10-20"], "nein");
-    eq(Fe.skipDates(doc, true, ds).size, 0, "ja");
-    eq(Fe.skipDates(doc, undefined, ds).size, 0, "nicht gefragt");
+  await test("Ferien: Wochen nur mit Werktagen, Teilwochen", () => {
+    const herbst = doc.holidays.find((h) => h.start === "2026-10-19");
+    eq(Fe.holidayWeeks(doc, herbst).map((w) => [w.monday, w.dates.length]), [["2026-10-19", 5], ["2026-10-26", 5]]);
+    eq(Fe.openWeeks(doc, herbst, "2026-10-24").map((w) => w.monday), ["2026-10-26"], "erste Woche vorbei");
+    const sommer28 = doc.holidays.find((h) => h.start === "2028-07-01");
+    eq(Fe.holidayWeeks(doc, sommer28)[0].monday, "2028-07-03", "Beginn Samstag");
+    const weihn = doc.holidays.find((h) => h.start === "2026-12-23");
+    eq(Fe.holidayWeeks(doc, weihn).map((w) => Fe.weekText(w)), ["23.12.–25.12.", "28.12.–01.01."]);
+    eq(Fe.holidayWeeks(doc, { start: "2026-05-15", end: "2026-05-15" }).map((w) => w.dates), [["2026-05-15"]], "ein Tag");
+  });
+  await test("Ferien: nur Wochen ohne Ferienessen übersprungen", () => {
+    const ds = ["2026-10-16", "2026-10-19", "2026-10-20", "2026-10-26", "2026-11-02"];
+    eq([...Fe.skipDates(doc, { "2026-10-19": false, "2026-10-26": true }, ds)], ["2026-10-19", "2026-10-20"], "erste Woche nein");
+    eq([...Fe.skipDates(doc, { "2026-10-12": false, "2026-10-26": false }, ds)], ["2026-10-26"], "Woche vor den Ferien zählt nicht");
+    eq(Fe.skipDates(doc, {}, ds).size, 0, "nicht gefragt");
+    // Ferien ab Mittwoch: Mo/Di derselben Woche bleiben Schultage.
+    const d = { until: "2027-12-31", holidays: [{ start: "2027-03-24", end: "2027-03-26", name: "X" }] };
+    eq([...Fe.skipDates(d, { "2027-03-22": false }, ["2027-03-22", "2027-03-23", "2027-03-24"])], ["2027-03-24"]);
+  });
+  await test("Ferien: offene Wochen ohne Antwort", () => {
+    const herbst = doc.holidays.find((h) => h.start === "2026-10-19");
+    eq(Fe.unanswered(doc, herbst, {}, t).length, 2);
+    eq(Fe.unanswered(doc, herbst, { "2026-10-19": false }, t).map((w) => w.monday), ["2026-10-26"]);
+    eq(Fe.unanswered(doc, herbst, { "2026-10-19": false, "2026-10-26": true }, t).length, 0);
   });
   await test("Ferien: Montag danach prüft der letzte Weckruf vorher, bei jeder Vorwarnzeit", async () => {
     const { pushCheckDates } = await import("../sw.js");
@@ -430,7 +454,7 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
         let last = null;
         for (let d = "2026-10-12"; d < monday; d = addDays(d, 1)) if (pushDays.includes(weekdayNo(d))) last = d;
         const dates = pushCheckDates(last, ahead, pushDays);
-        const skip = Fe.skipDates(doc, false, dates);
+        const skip = Fe.skipDates(doc, { "2026-10-19": false, "2026-10-26": false }, dates);
         eq(dates.filter((d) => !skip.has(d)).includes(monday), true, `Vorwarnzeit ${ahead}, Weckruf ${pushDays.join("")}, am ${last}`);
       }
     }
@@ -438,11 +462,20 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   await test("Vorwarnzeit: mindestens 3 Tage, alte kürzere Werte werden 3", () => {
     eq([clampDaysAhead(1), clampDaysAhead(2), clampDaysAhead(3), clampDaysAhead(20), clampDaysAhead(undefined)], [3, 3, 3, 14, 7]);
   });
-  await test("Ferien: Wahl je Kind gespeichert", async () => {
-    const { kvDel } = await import("../idb.js");
-    await Fe.saveMealPref("test-ferien", false);
-    eq([await Fe.loadMealPref("test-ferien"), await Fe.loadMealPref("test-ferien-2")], [false, undefined]);
+  await test("Ferien: Wahl je Kind und Woche gespeichert, alte Wochen fallen weg", async () => {
+    const { kvDel, kvSet } = await import("../idb.js");
+    await kvSet("ferienEssen:test-ferien", false);
+    eq(await Fe.loadMealPref("test-ferien"), {}, "alter Ja/Nein-Wert gilt als nicht gefragt");
+    await Fe.saveMealPref("test-ferien", { "2026-07-13": false, "2026-10-19": false }, "2026-07-14");
+    await Fe.saveMealPref("test-ferien", { "2026-10-26": true }, t);
+    eq([await Fe.loadMealPref("test-ferien"), await Fe.loadMealPref("test-ferien-2")], [{ "2026-10-19": false, "2026-10-26": true }, {}]);
     await kvDel("ferienEssen:test-ferien");
+  });
+  await test("Ferien: „Später“ gilt nur heute", async () => {
+    const { kvDel } = await import("../idb.js");
+    await Fe.askLater("test-ferien", t);
+    eq([await Fe.askedLater("test-ferien", t), await Fe.askedLater("test-ferien", "2026-10-10")], [true, false]);
+    await kvDel("ferienSpaeter:test-ferien");
   });
 }
 

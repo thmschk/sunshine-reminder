@@ -14,7 +14,7 @@ const ACTIVE = "activeAccount";
 /** Schlüssel eines Zwischenspeichers je Konto, z. B. dayCache:12345. */
 export const accountKey = (base, customerNo) => `${base}:${customerNo}`;
 /** Diese Schlüssel gehören je einem Konto; „Kind entfernen“ löscht sie. */
-const PER_ACCOUNT = ["ibsSession", "dayCache", "lastDays", "ferienEssen"];
+const PER_ACCOUNT = ["ibsSession", "dayCache", "lastDays", "ferienEssen", "ferienSpaeter"];
 
 const valid = (a) => !!(a?.customerNo && a?.password);
 

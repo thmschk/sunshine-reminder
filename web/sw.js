@@ -12,7 +12,7 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v49";
+const VERSION = "v50";
 const PUSH_MAX_DAYS = 5;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "ferien.json"];
 
@@ -121,8 +121,8 @@ function failTitle(e, client) {
 
 /**
  * Ein Konto prüfen. Termine gelten je Kind (eigene und die für alle), deshalb
- * fragt jedes Konto seine eigenen Tage ohne Schulessen mit ab. Ferientage eines
- * Kindes ohne Ferienessen fragt es gar nicht erst ab.
+ * fragt jedes Konto seine eigenen Tage ohne Schulessen mit ab. Ferientage in
+ * Wochen ohne Ferienessen des Kindes fragt es gar nicht erst ab.
  */
 async function checkAccount(account, checkDates, events, today, ferien) {
   const mine = eventsFor(events, account.customerNo);
@@ -135,7 +135,7 @@ async function checkAccount(account, checkDates, events, today, ferien) {
   client.dayStore = dayStore(client);
   const kid = { customerNo: account.customerNo, due, firstName: "" };
   try {
-    // Ganz in den Ferien ohne Ferienessen: nichts zu prüfen, auch keine Anmeldung.
+    // Nur Ferientage ohne Ferienessen: nichts zu prüfen, auch keine Anmeldung.
     kid.days = dates.length ? await withSession(client, account, () => collect(client, dates, { history: true })) : [];
     kid.checked = kid.days.filter((d) => checkDates.includes(d.date) && !noMeal.has(d.date) && !skip.has(d.date));
   } catch (e) {

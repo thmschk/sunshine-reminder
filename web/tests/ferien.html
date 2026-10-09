@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Ferienfrage in der Oberfläche</title>
+<!-- Echte Seite mit einem Konto gegen ein vorgetäuschtes IBS5 und die echte ferien.json: Dialog je Ferienwoche,
+     Speichern, „Später“, Zeile unter ⚙ → Ferien. Rechnet mit dem heutigen Datum und der Vorwarnzeit 14;
+     beginnen in den nächsten 16 Tagen keine Ferien, prüft er nur, dass kein Dialog kommt. -->
+<link rel="stylesheet" href="../style.css">
+<body><pre id="out">läuft</pre>
+<header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
+<main id="app"></main><footer id="footer" hidden></footer>
+<script type="module">
+const lines = [];
+const P = (m) => { lines.push(m); };
+window.addEventListener("error", (e) => P("FAIL ERR " + e.message + " " + e.filename + ":" + e.lineno));
+window.addEventListener("unhandledrejection", (e) => P("FAIL REJ " + (e.reason?.stack || e.reason)));
+const realFetch = window.fetch.bind(window);
+window.setTimeout = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => fn(); c.port2.postMessage(0); return 0; };
+const { kvClear, kvGet } = await import("../idb.js");
+const { saveAccounts } = await import("../accounts.js");
+const { DEFAULT_CHECK, OrderState, clampDaysAhead, targetDates, todayBerlin } = await import("../ibs.js");
+const Fe = await import("../holidays.js");
+await kvClear();
+await saveAccounts([{ customerNo: "1000", password: "a", name: "" }]);
+// Gespeicherter Stand von heute: die Startseite zeichnet erst ihn (mit Ladebalken), dann frisch.
+const { kvSet } = await import("../idb.js");
+const daysAhead = clampDaysAhead(14);
+await kvSet("daysAhead", daysAhead);
+await kvSet("lastDays:1000", { at: Date.now() - 60000, from: todayBerlin(), daysAhead, customerNo: "1000",
+  days: targetDates(todayBerlin(), { ...DEFAULT_CHECK, daysAhead }).map((date) => ({ date, state: OrderState.ORDERED, entries: [] })) });
+
+window.fetch = async (url, init = {}) => {
+  url = String(url);
+  if (url.endsWith("ferien.json")) return realFetch(url, init);
+  if (url.includes("/Login/")) return new Response(JSON.stringify({ token: "tok-1000", name1: "Muster, Mia" }));
+  const d = (/date=([\d-]+)/.exec(url) || [])[1] || "2026-10-06";
+  return new Response(`<li id="dayplan"><button class="menuplan-checkbox" data-order-status="2" data-quantity-ordered="1" data-quantity-in-shopping-cart="" data-date="x" data-readonly="false" data-name="Nudeln" id="menu_quantity_mobile-${d}_16_827" onclick="DayPlan.changeItemQuantity('', 1, 'x', '1000', '827', '${d}', 'u', true, '16', 'n');"></button></li>`);
+};
+const today = todayBerlin();
+const doc = await Fe.loadHolidays();
+const h = Fe.nextHoliday(doc, today, Fe.askWithin(daysAhead));
+const weeks = h ? Fe.openWeeks(doc, h, today) : [];
+
+await import("../app.js");
+const until = (cond) => new Promise((r) => { let n = 0; (function tick() { if (cond() || ++n > 200000) r(); else window.setTimeout(tick); })(); });
+const check = (ok, what) => P(`${ok ? "ok  " : "FAIL"} ${what}`);
+const dlg = () => document.querySelector("dialog.ferien-dialog[open]");
+const loaded = () => document.querySelector(".days") && !document.getElementById("refresh");
+const button = (text) => [...dlg().querySelectorAll("button")].find((b) => b.textContent === text);
+
+await until(() => loaded() && (!h || dlg()));
+if (!h) {
+  check(!dlg() && !document.getElementById("b-ferien"), "keine Ferien in Sicht: kein Dialog, keine Zeile");
+} else {
+  check(!!dlg(), `Dialog zu ${h.name} ${Fe.rangeText(h)}`);
+  const sws = [...dlg().querySelectorAll(".switch")];
+  check(sws.length === weeks.length && sws.every((s) => s.classList.contains("on")), `${weeks.length} Wochen, alle vorbelegt mit ja`);
+  await until(() => loaded());
+  check(document.querySelectorAll("dialog.ferien-dialog").length === 1, "nur ein Dialog, obwohl die Startseite zweimal zeichnet");
+  check(!document.getElementById("b-ferien"), "hinter dem Dialog keine zweite Frage");
+
+  // Später: Dialog weg, Zeile bleibt, heute kein Dialog mehr von selbst.
+  button("Später").click();
+  await until(() => !dlg() && document.getElementById("b-ferien"));
+  check(!dlg() && !!document.getElementById("b-ferien"), "nach „Später“: nur die Zeile");
+  check(await Fe.askedLater("1000", today), "„Später“ für heute gemerkt");
+
+  // Über die Zeile wieder öffnen, letzte Woche aus, speichern.
+  document.getElementById("b-ferien").click();
+  await until(() => dlg());
+  dlg().querySelectorAll(".switch")[weeks.length - 1].click();
+  button("Speichern").click();
+  await until(() => !dlg() && !document.getElementById("b-ferien"));
+  const pref = await kvGet("ferienEssen:1000");
+  const want = Object.fromEntries(weeks.map((w, i) => [w.monday, i < weeks.length - 1]));
+  check(JSON.stringify(pref) === JSON.stringify(want), `gespeichert je Woche: ${JSON.stringify(pref)}`);
+  check(!document.getElementById("b-ferien"), "beantwortet: keine Zeile mehr");
+  check(!document.getElementById("refresh") && /^Geprüft/.test(document.getElementById("footer").textContent.trim()),
+    `danach der frische Stand, nicht der gespeicherte: ${document.getElementById("footer").textContent.trim().slice(0, 40)}`);
+
+  // Einstellungen zeigen den Stand und öffnen denselben Dialog.
+  document.getElementById("btn-settings").click();
+  await until(() => document.getElementById("ferien-0"));
+  const v = document.querySelector("#ferien-0 .srow-v")?.textContent;
+  const exp = weeks.length === 1 ? "kein Essen" : `Essen ${weeks.length - 1} von ${weeks.length} Wochen`;
+  check(v === exp, `Einstellungen: ${v}`);
+  document.getElementById("ferien-0").click();
+  await until(() => dlg());
+  const on = [...dlg().querySelectorAll(".switch")].map((s) => s.classList.contains("on"));
+  check(JSON.stringify(on) === JSON.stringify(weeks.map((w, i) => i < weeks.length - 1)), "Dialog zeigt die gespeicherte Wahl");
+  button("Abbrechen").click();
+  await until(() => !dlg());
+  check(JSON.stringify(await kvGet("ferienEssen:1000")) === JSON.stringify(want), "„Abbrechen“ ändert nichts");
+}
+
+const out = lines.join("\n");
+document.getElementById("out").textContent = out + (out.includes("FAIL") ? "\n\nFEHLER" : "\n\nALLE OK");
+</script>

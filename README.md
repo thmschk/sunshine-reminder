@@ -33,10 +33,10 @@ offen ist.
   vorher, in derselben Meldung wie das Essen. Mit „kein Schulessen an dem Tag“
   gilt der Tag nicht als offen, und ist dort doch bestellt, erinnert sie ans
   Abbestellen. Die Termine liegen nur auf dem Gerät, nicht auf dem Server.
-* **Berliner Schulferien** stehen an den Tagen dran. Vor den nächsten Ferien
-  fragt die Startseite je Kind, ob dort Essen bestellt wird (etwa im Hort); bei
-  „nein“ ist ein offener Ferientag kein Alarm, ändern unter ⚙ → Ferien. Ohne
-  Antwort wird erinnert wie sonst. Die Bestellansicht hört an einer leeren
+* **Berliner Schulferien** stehen an den Tagen dran. Kurz vor allen Ferien
+  (Vorwarnzeit plus zwei Tage) fragt ein Dialog je Kind und Ferienwoche, ob dort Essen bestellt wird
+  (etwa im Hort); in Wochen mit „nein“ ist ein offener Ferientag kein Alarm,
+  ändern unter ⚙ → Ferien. Ohne Antwort wird erinnert wie sonst. Die Bestellansicht hört an einer leeren
   Ferienwoche nicht auf. Die Termine liefert die Seite selbst mit
   (`web/ferien.json`, aus der OpenHolidaysAPI); fremde Dienste fragt sie dafür nicht.
 * Für die Erinnerung weckt ein kleiner Server das Gerät werktags zur gewählten
