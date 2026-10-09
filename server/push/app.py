@@ -50,6 +50,7 @@ MAX_BODY = 4096
 MAX_SUBSCRIPTIONS = 5000
 PUSH_TTL = 3 * 3600
 PUSH_TIMEOUT = 10
+SEND_TRIES = 5
 MAX_ENDPOINT_LEN = 1024
 # Jedes Abo wird um eine feste Verschiebung später geweckt, gleichmäßig über eine
 # halbe Stunde verteilt: Handys hinter derselben Mobilfunk-IP (CGNAT) sollen IBS5
@@ -133,8 +134,10 @@ def sdui_login_body(raw: bytes) -> bytes:
         raise BadRequest("identifier, password und slink erwartet")
     if not (1 <= len(obj["identifier"]) <= 200 and 1 <= len(obj["password"]) <= 200):
         raise BadRequest("identifier oder password ungültig")
+    # Sdui verlangt das Schulkürzel klein geschrieben; eingetippt wird es oft groß.
+    obj["slink"] = obj["slink"].strip().lower()
     if not SLINK_RE.match(obj["slink"]):
-        raise BadRequest("slink ungültig")
+        raise BadRequest("Schulkürzel ungültig: nur Buchstaben, Ziffern und Bindestrich")
     return json.dumps({k: obj[k] for k in ("identifier", "password", "slink")}).encode()
 
 
@@ -316,8 +319,9 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
     except WebPushException as exc:
         status = exc.response.status_code if exc.response is not None else None
         if status in (404, 410):
+            # Nur dieses Abo samt Endpoint: wurde es inzwischen erneuert, bleibt es.
             with db_lock:
-                CONN.execute("DELETE FROM subs WHERE id = ?", (row["id"],))
+                CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ?", (row["id"], row["endpoint"]))
                 CONN.commit()
             log.info("Abo abgelaufen und gelöscht")
         else:
@@ -329,7 +333,7 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
     except ValueError:
         # Schlüssel oder Adresse nicht verwendbar (z. B. vor der Kurvenprüfung angelegt): wird nie zustellbar.
         with db_lock:
-            CONN.execute("DELETE FROM subs WHERE id = ?", (row["id"],))
+            CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ?", (row["id"], row["endpoint"]))
             CONN.commit()
         log.warning("Unbrauchbares Abo gelöscht")
         return False
@@ -426,7 +430,9 @@ def is_due(row, now: dt.datetime) -> bool:
     due = now.replace(hour=int(row["time"][:2]), minute=int(row["time"][3:]), second=0, microsecond=0)
     # Verschiebung nie über Mitternacht hinaus, sonst fiele der Tag aus.
     due += dt.timedelta(minutes=min(row["offset_min"] or 0, 23 * 60 + 59 - due.hour * 60 - due.minute))
-    late = (now - due).total_seconds()
+    # Über Zeitstempel, nicht über die Uhrzeit: am Tag der Sommerzeit-Umstellung gibt es
+    # 02:xx nicht, die Wanduhr-Differenz zu 03:00 wäre schon eine volle Stunde.
+    late = now.timestamp() - due.timestamp()
     return (
         str(now.isoweekday()) in row["weekdays"]
         and row["last_sent"] != now.date().isoformat()
@@ -434,7 +440,26 @@ def is_due(row, now: dt.datetime) -> bool:
     )
 
 
+def selfcheck_due(now: dt.datetime, last: dt.date | None) -> bool:
+    """Heute noch nicht geprüft und SELFCHECK_AT erreicht, auch wenn der Durchlauf die Minute verpasst hat."""
+    return last != now.date() and now.strftime("%H:%M") >= SELFCHECK_AT
+
+
+def mark_sent(row, today: str) -> None:
+    """last_sent nur setzen, wenn Uhrzeit und Endpoint seit dem Schnappschuss gleich geblieben sind (#4 S3)."""
+    with db_lock:
+        CONN.execute(
+            "UPDATE subs SET last_sent = ? WHERE id = ? AND time = ? AND endpoint = ?",
+            (today, row["id"], row["time"], row["endpoint"]),
+        )
+        CONN.commit()
+
+
 def scheduler(vapid: Vapid) -> None:
+    now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
+    # Nach SELFCHECK_AT gestartet: die Prüfung beim Start (main) zählt für heute.
+    selfcheck_last = now.date() if now.strftime("%H:%M") >= SELFCHECK_AT else None
+    failures: dict[tuple[str, str], int] = {}
     while True:
         # Kurz nach jeder vollen Minute prüfen.
         time.sleep(61 - dt.datetime.now().second)
@@ -445,15 +470,26 @@ def scheduler(vapid: Vapid) -> None:
             for row in rows:
                 now = dt.datetime.now(ZoneInfo(row["tz"]))
                 today = now.date().isoformat()
-                if is_due(row, now):
-                    with db_lock:
-                        CONN.execute("UPDATE subs SET last_sent = ? WHERE id = ?", (today, row["id"]))
-                        CONN.commit()
-                    sent += send(row, vapid)
+                if not is_due(row, now):
+                    continue
+                # Erst nach erfolgreicher Zustellung als erledigt markieren: scheitert der
+                # Push-Dienst kurz, versucht der nächste Durchlauf es im Nachholfenster erneut,
+                # höchstens SEND_TRIES-mal am Tag (ein dauerhaft abgelehntes Abo nicht minütlich).
+                if send(row, vapid):
+                    mark_sent(row, today)
+                    sent += 1
+                else:
+                    key = (row["id"], today)
+                    failures[key] = failures.get(key, 0) + 1
+                    if failures[key] >= SEND_TRIES:
+                        mark_sent(row, today)
+            for key in [k for k in failures if k[1] < (dt.date.today() - dt.timedelta(days=1)).isoformat()]:
+                del failures[key]
             if sent:
                 log.info("%d Weckrufe verschickt", sent)
             now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
-            if now.strftime("%H:%M") == SELFCHECK_AT:
+            if selfcheck_due(now, selfcheck_last):
+                selfcheck_last = now.date()
                 run_selfcheck(vapid)
         except Exception:  # Der Wecker darf nie stehen bleiben.
             log.exception("Fehler im Zeitplan")

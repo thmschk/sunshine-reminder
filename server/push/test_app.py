@@ -202,6 +202,9 @@ class SduiLogin(unittest.TestCase):
         out = json.loads(sdui_login_body(self.body()))
         self.assertEqual(out, {"identifier": "a@b.de", "password": "pw", "slink": "schule-1"})
 
+    def test_kuerzel_wird_klein_geschrieben(self):
+        self.assertEqual(json.loads(sdui_login_body(self.body(slink=" Schule-1 ")))["slink"], "schule-1")
+
     def test_abgelehnt(self):
         extra = json.dumps({"identifier": "a", "password": "b", "slink": "x", "z": "1"}).encode()
         cases = [extra, b"kein json", b"[]", self.body(slink="../x"), self.body(slink="Groß"), self.body(slink=""),
@@ -266,3 +269,68 @@ class Ferien(unittest.TestCase):
         def boom():
             raise OSError("weg")
         self.assertIn("OSError", ferien_problem(boom, self.TODAY))
+
+
+class Sommerzeit(unittest.TestCase):
+    # 2026-03-29 (Sonntag): 02:00 MEZ springt auf 03:00 MESZ.
+    def test_weckruf_in_der_fehlenden_stunde_kommt_um_drei(self):
+        r = row(time="02:00", weekdays="7")
+        self.assertTrue(is_due(r, dt.datetime(2026, 3, 29, 3, 0, 30, tzinfo=TZ)))
+        self.assertFalse(is_due(r, dt.datetime(2026, 3, 29, 4, 0, 30, tzinfo=TZ)))
+
+    def test_normaler_tag_unveraendert(self):
+        r = row(time="02:00", weekdays="1234567")
+        self.assertTrue(is_due(r, dt.datetime(2026, 3, 28, 2, 59, 30, tzinfo=TZ)))
+        self.assertFalse(is_due(r, dt.datetime(2026, 3, 28, 3, 0, 30, tzinfo=TZ)))
+
+
+class Selbstpruefung(unittest.TestCase):
+    def test_auch_wenn_die_minute_verpasst_wurde(self):
+        from app import selfcheck_due
+        today = dt.date(2026, 10, 5)
+        self.assertFalse(selfcheck_due(at(6, 29), None))
+        self.assertTrue(selfcheck_due(at(6, 30), None))
+        self.assertTrue(selfcheck_due(at(6, 33), today - dt.timedelta(days=1)))
+        self.assertFalse(selfcheck_due(at(6, 33), today))
+
+
+class VersandUndAenderung(unittest.TestCase):
+    """Schnappschuss der Zeilen vs. Änderungen während des Durchlaufs (#4 S3)."""
+
+    def setUp(self):
+        import sqlite3
+        import app
+        self.app = app
+        self.old = getattr(app, "CONN", None)
+        app.CONN = sqlite3.connect(":memory:", check_same_thread=False)
+        app.CONN.row_factory = sqlite3.Row
+        app.CONN.execute("CREATE TABLE subs (id TEXT, endpoint TEXT, keys TEXT, time TEXT, last_sent TEXT)")
+        app.CONN.execute("INSERT INTO subs VALUES ('a', 'https://fcm.googleapis.com/alt', '{}', '12:00', NULL)")
+        self.snap = app.CONN.execute("SELECT * FROM subs").fetchone()
+
+    def tearDown(self):
+        self.app.CONN = self.old
+
+    def get(self):
+        return self.app.CONN.execute("SELECT * FROM subs WHERE id = 'a'").fetchone()
+
+    def test_neue_uhrzeit_bleibt_heute_offen(self):
+        self.app.CONN.execute("UPDATE subs SET time = '13:00', last_sent = NULL")
+        self.app.mark_sent(self.snap, "2026-10-05")
+        self.assertIsNone(self.get()["last_sent"])
+
+    def test_unveraendert_wird_markiert(self):
+        self.app.mark_sent(self.snap, "2026-10-05")
+        self.assertEqual(self.get()["last_sent"], "2026-10-05")
+
+    def test_410_loescht_kein_erneuertes_abo(self):
+        from unittest import mock
+        from pywebpush import WebPushException
+        self.app.CONN.execute("UPDATE subs SET endpoint = 'https://fcm.googleapis.com/neu'")
+        gone = WebPushException("weg", response=mock.Mock(status_code=410))
+        with mock.patch.object(self.app, "webpush", side_effect=gone):
+            self.assertFalse(self.app.send(self.snap, None))
+        self.assertIsNotNone(self.get())
+        with mock.patch.object(self.app, "webpush", side_effect=gone):
+            self.app.send(self.get(), None)
+        self.assertIsNone(self.get())

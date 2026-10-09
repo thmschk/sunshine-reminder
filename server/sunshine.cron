@@ -1,0 +1,5 @@
+# Von deploy.sh nach /etc/cron.d/sunshine kopiert.
+# Basis-Images aktualisieren: am ersten Sonntag im Monat um 04:15 (#2).
+15 4 1-7 * * root [ "$(date +\%u)" = 7 ] && /srv/sunshine/update-images.sh
+# Konsistente Kopie der Push-Daten für das Hetzner-Backup: täglich 03:40 (#1).
+40 3 * * * root /srv/sunshine/backup-data.sh

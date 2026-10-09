@@ -58,10 +58,13 @@ server/deploy.sh            # Stand von main auf GitHub
 server/deploy.sh feature/x  # anderer gepushter Branch oder ein voller Commit-Hash
 ```
 
-Lädt den Commit auf dem Server von GitHub, kopiert daraus Web-Dateien und Push-Dienst, baut den Push-Container neu, kopiert die Caddy-Site und lädt Caddy
+Lädt den Commit auf dem Server von GitHub und prüft zuerst die Caddy-Site mit `caddy validate`
+(besteht sie nicht, bleibt alles beim alten Stand). Dann baut es den Push-Container; erst wenn das klappt,
+kopiert es Web-Dateien, Caddy-Site, `update-images.sh`, `backup-data.sh` und `/etc/cron.d/sunshine`, startet den Container
+neu und lädt Caddy
 neu, bis die geladene Konfiguration (Admin-API `localhost:2019/config/`) der übersetzten Datei
-(`caddy adapt`) entspricht — höchstens dreimal, der erste Reload griff wiederholt nicht. Danach muss die
-Seite antworten. Beide Docker-Stacks haben `restart: unless-stopped`.
+(`caddy adapt`) entspricht — höchstens dreimal, der erste Reload griff wiederholt nicht. Danach muss
+`/version.txt` den deployten Commit zeigen (auf dem Server zusätzlich in `/srv/sunshine/DEPLOYED`). Beide Docker-Stacks haben `restart: unless-stopped`.
 
 Auf dem Handy erscheint eine neue Fassung, sobald die App einmal ganz geschlossen und neu geöffnet wird.
 
@@ -69,6 +72,9 @@ Auf dem Handy erscheint eine neue Fassung, sobald die App einmal ganz geschlosse
 
 ```sh
 curl -s https://sunshine.thomschke.info/api/health          # Selbstprüfung
+curl -s https://sunshine.thomschke.info/version.txt         # laufender Commit
+ssh privat 'journalctl -t sunshine-update -n 20'           # letzte Image-Aktualisierung
+ssh privat 'ls -l /srv/sunshine/backup'                    # nächtliche Datenkopien
 ssh privat 'cd /srv/sunshine && docker compose logs --tail 50 push'
 ssh privat "sqlite3 -readonly -header -column /srv/sunshine/data/push.sqlite \
   'SELECT time, offset_min, weekdays, created, last_sent, is_admin FROM subs'"
@@ -82,6 +88,30 @@ Abos mit `is_admin = 1` bekommen die Alarme der Selbstprüfung. Ein Gerät marki
 `…/#betreiber` → ⚙ → Erinnerung mit dem Schlüssel aus `ADMIN_KEY`. Austauschen: neuen Wert in `.env`,
 dann `docker compose up -d`.
 
+## Container-Images
+
+`/etc/cron.d/sunshine` startet am ersten Sonntag im Monat um 04:15 `/srv/sunshine/update-images.sh`:
+`caddy:2` und `python:3.13-slim` neu holen, Container neu starten, danach müssen Seite und
+`/api/health` antworten. Caddy ist dabei für alle Sites einige Sekunden weg. Von Hand:
+`ssh privat /srv/sunshine/update-images.sh`.
+
+## Datensicherung
+
+Jede Nacht um 03:40 legt `/srv/sunshine/backup-data.sh` (aus `/etc/cron.d/sunshine`) eine konsistente
+Kopie von `push.sqlite` (per `sqlite3 .backup`) und `vapid_private.pem` als
+`/srv/sunshine/backup/sunshine-data-<datum>.tar.gz` ab und behält 14 Stände. Vom Server weg bringt sie
+das Hetzner-Backup des Servers (eingeschaltet, tägliches Abbild). Fehler: `journalctl -t sunshine-backup`.
+
+Wiederherstellen (bei verlorenem Server zuerst das Hetzner-Backup einspielen oder die Datei daraus holen):
+
+```sh
+ssh privat 'cd /srv/sunshine && docker compose stop push \
+  && tar -xzf backup/sunshine-data-<datum>.tar.gz -C data \
+  && chown 1000:1000 data/* && chmod 600 data/vapid_private.pem && docker compose start push'
+```
+
+Danach muss `/api/vapid` denselben Schlüssel zeigen wie vorher; Abos und Uhrzeiten bleiben dann gültig.
+
 ## Ferientermine
 
 `web/ferien.json` (Berliner Schulferien) erzeugt `python3 tools/ferien.py` aus der OpenHolidaysAPI, bis
@@ -92,11 +122,6 @@ das; dann das Skript laufen lassen, Diff ansehen, committen und `server/deploy.s
 
 | | |
 |---|---|
-| Server | `ssh privat 'cd /srv/sunshine && docker compose run --rm -T -v /srv/sunshine/push:/app push python -m unittest test_app'` |
-| Web | `python3 -m http.server` im Repo, dann `web/tests/test.html`, `web/tests/guard.html`, `web/tests/xss.html`, `web/tests/kinder.html`, `web/tests/ferien.html`, `web/tests/anmelden.html?mode=granted|denied|off` und `web/tests/crypto.html` im Browser |
-
-## Offen
-
-- **Datensicherung** von `/srv/sunshine/data`. Ohne VAPID-Schlüssel sind alle Abos ungültig.
-- **Container-Images aktualisieren** (`caddy:2`, `python:3.13-slim`), sie bleiben sonst auf dem Stand vom Einrichten.
-- **Deploy nur von gepushtem Stand**, damit der Server immer einem Commit entspricht.
+| Server | `ssh privat 'cd /srv/sunshine && docker compose run --rm -T -v /srv/sunshine/push:/app push python -m unittest test_app'` oder lokal in einem venv mit `server/push/requirements.txt`: `cd server/push && python -m unittest test_app` |
+| Python-Variante | `python3 -m unittest discover -s tests` |
+| Web | `python3 -m http.server` im Repo, dann `web/tests/test.html`, `web/tests/guard.html`, `web/tests/xss.html`, `web/tests/kinder.html`, `web/tests/ferien.html`, `web/tests/anmelden.html?mode=granted|denied|off`, `web/tests/ui.html` und `web/tests/crypto.html` im Browser |

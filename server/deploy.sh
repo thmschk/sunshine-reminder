@@ -24,14 +24,36 @@ src=$(mktemp -d)
 trap 'rm -rf "$src"' EXIT
 curl -sfL "$REPO/archive/$SHA.tar.gz" | tar -xz --no-same-owner -C "$src" --strip-components=1
 [[ -f $src/web/index.html && -f $src/server/compose.yaml ]] || { echo "FEHLER: Tarball von $SHA unvollständig" >&2; exit 1; }
-rsync -a --delete --exclude tests/ "$src/web/" /srv/sunshine/web/
+
+# Erst prüfen, dann übernehmen: eine kaputte Site-Datei in sites/ legte beim nächsten
+# Caddy-Neustart alle Sites des Servers lahm. Die alte Fassung liegt dabei außerhalb
+# von sites/, weil Caddy dort jede Datei importiert.
+site=/srv/caddy/sites/sunshine.caddy
+prev=/srv/caddy/sunshine.caddy.prev
+[[ -f $site ]] && cp "$site" "$prev"
+cp "$src/server/sunshine.caddy" "$site"
+if ! (cd /srv/caddy && docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1); then
+  if [[ -f $prev ]]; then cp "$prev" "$site"; else rm -f "$site"; fi
+  echo "FEHLER: sunshine.caddy von $SHA besteht caddy validate nicht, nichts geändert" >&2
+  exit 1
+fi
+[[ -f $prev ]] && cp "$prev" "$site"
+
+# Dann den Push-Dienst bauen; scheitert der Build, bleiben Web-Dateien und Caddy beim alten Stand.
 rsync -a --delete "$src/server/push/" /srv/sunshine/push/
 cp "$src/server/compose.yaml" /srv/sunshine/compose.yaml
-cp "$src/server/sunshine.caddy" /srv/caddy/sites/sunshine.caddy
 # data/ (VAPID-Schlüssel, Abos) bleibt auf dem Server und gehört dem Container-User.
 mkdir -p /srv/sunshine/data && chown 1000:1000 /srv/sunshine/data && chmod 700 /srv/sunshine/data
 cd /srv/sunshine
-docker compose up -d --build --quiet-pull 2>&1 | grep -vE "^ *(#|=>)" | tail -3
+docker compose build --quiet
+rsync -a --delete --exclude tests/ "$src/web/" /srv/sunshine/web/
+# Welcher Commit läuft, ist so auch unter /version.txt zu sehen (#3).
+echo "$SHA" > /srv/sunshine/web/version.txt
+cp "$src/server/sunshine.caddy" "$site"
+docker compose up -d --quiet-pull 2>&1 | grep -vE "^ *(#|=>)" | tail -3
+install -m 755 "$src/server/update-images.sh" /srv/sunshine/update-images.sh
+install -m 755 "$src/server/backup-data.sh" /srv/sunshine/backup-data.sh
+install -m 644 "$src/server/sunshine.cron" /etc/cron.d/sunshine
 echo "$SHA" > /srv/sunshine/DEPLOYED
 EOF
 
@@ -60,5 +82,6 @@ done
 echo "FEHLER: geladene Caddy-Konfiguration weicht von /etc/caddy/Caddyfile ab" >&2
 exit 1
 EOF
-curl -sf -o /dev/null https://sunshine.thomschke.info/ || { echo "FEHLER: Seite antwortet nicht" >&2; exit 1; }
+live=$(curl -sf https://sunshine.thomschke.info/version.txt) || { echo "FEHLER: Seite antwortet nicht" >&2; exit 1; }
+[[ $live == "$SHA" ]] || { echo "FEHLER: /version.txt zeigt ${live:0:7} statt ${SHA:0:7}" >&2; exit 1; }
 echo "deployt: ${SHA:0:7} ($REF) auf https://sunshine.thomschke.info/"
