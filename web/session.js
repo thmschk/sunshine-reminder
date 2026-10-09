@@ -48,7 +48,7 @@ export async function withSession(client, creds, fn, { persist = true } = {}) {
   }
   // Neuer Token nur für ein Konto, das noch gespeichert ist: ein Weckruf kann ein
   // inzwischen entferntes Kind (oder „Alles löschen“) überdauern.
-  const keep = async () => persist && (await loadAccounts()).some((a) => a.customerNo === creds.customerNo);
+  const keep = async () => persist && (await loadAccounts().catch(() => [])).some((a) => a.customerNo === creds.customerNo);
   if (!client.token) await login(client, creds, await keep());
   try {
     return await fn();

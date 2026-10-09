@@ -194,11 +194,11 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
 {
   const t = todayBerlin();
   const [d1, d2, d3] = [addDays(t, 3), addDays(t, 4), addDays(t, 5)];
-  await test("Zwischenspeicher: nach Bestellschluss für immer, offen 10 Minuten, ab nächster Woche 6 Stunden", async () => {
+  await test("Zwischenspeicher: offen 10 Minuten, ab nächster Woche 6 Stunden", async () => {
     const [near, far, farther] = [t, addDays(t, 14), addDays(t, 21)];
     const asked = [];
     const store = memStore([
-      row(farther, OrderState.DEADLINE_PASSED, 600),
+      row(farther, OrderState.DEADLINE_PASSED, 60),
       row(near, OrderState.NOT_ORDERED, 15), // diese Woche, abgelaufen
       row(far, OrderState.NOT_ORDERED, 180), // ab nächster Woche, noch gültig
       row(addDays(t, 15), OrderState.ORDERED, 7 * 60), // ab nächster Woche, abgelaufen
@@ -208,6 +208,20 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
     eq(asked.sort(), [near, addDays(t, 15)].sort(), "nur die abgelaufenen Tage");
     eq(days.map((d) => d.state), [OrderState.NO_OFFER, OrderState.NOT_ORDERED, OrderState.NO_OFFER, OrderState.DEADLINE_PASSED]);
     eq(store.rows.find((r) => r.date === near).day.state, OrderState.NO_OFFER, "gespeichert");
+  });
+  await test("Zwischenspeicher: „Bestellschluss vorbei“ gilt nicht für immer (#4 K10)", async () => {
+    const asked = [];
+    const store = memStore([
+      row(d1, OrderState.DEADLINE_PASSED, 15), // diese oder nächste Woche, länger als 10 Minuten her
+      row(addDays(t, 14), OrderState.DEADLINE_PASSED, 7 * 60), // ab nächster Woche, älter als 6 Stunden
+      row(addDays(t, 21), OrderState.DEADLINE_PASSED, 5), // frisch
+    ]);
+    const fake = { customerNo: "1000", dayView: true, dayStore: store, async dayplan(d) { asked.push(d); return emptyDay; } };
+    const near = addDays(t, 8 - weekdayNo(t)) > d1; // d1 liegt noch in dieser Woche
+    await collect(fake, [d1, addDays(t, 14), addDays(t, 21)]);
+    eq(asked.includes(addDays(t, 14)), true, "abgelaufen ab nächster Woche neu geladen");
+    eq(asked.includes(addDays(t, 21)), false, "frischer Tag aus dem Speicher");
+    if (near) eq(asked.includes(d1), true, "diese Woche nach 10 Minuten neu geladen");
   });
   await test("Zwischenspeicher: offenes Gericht ohne Kundennummer wird neu geladen", async () => {
     const asked = [];
@@ -335,6 +349,10 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     await kvDel("dayCache:1111");
     await kvDel("dayCache");
   });
+  await test("Tages-Speicher: nichts ablegen für ein entferntes Konto (#4 L)", async () => {
+    await Acc.dayStore({ customerNo: "9999" }).save({ customerNo: "9999", rows: ["x"] });
+    eq(await kvGet("dayCache:9999"), undefined, "nicht abgelegt");
+  });
   // Echte Daten der Testseite wiederherstellen.
   await kvDel("accounts");
   await test("Konten: Namen merken holt kein entferntes Kind zurück und lässt das neue Passwort", async () => {
@@ -354,6 +372,49 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     eq([await secretGet("t.k1"), await secretGet("t.k2")], [{ a: 1 }, { b: 2 }]);
     await kvDel("t.k1");
     await kvDel("t.k2");
+  });
+  await test("IndexedDB: verlorene Verbindung wird neu geöffnet (#4 K9)", async () => {
+    const { closeConnection, kvRead, kvUpdate } = await import("../idb.js");
+    await kvSet("t.k9", 1);
+    await closeConnection();
+    eq(await kvRead("t.k9"), 1, "strenges Lesen");
+    await closeConnection();
+    await kvSet("t.k9", 2);
+    eq(await kvGet("t.k9"), 2, "Schreiben");
+    await closeConnection();
+    eq(await kvUpdate("t.k9", (v) => ({ value: v + 1, result: v })), 2, "kvUpdate");
+    await closeConnection();
+    await Acc.upsertAccount({ customerNo: "4444", password: "p" });
+    await closeConnection();
+    eq((await Acc.loadAccounts()).some((a) => a.customerNo === "4444"), true, "Konten nach Verbindungsverlust");
+    await Acc.removeAccount("4444");
+    await kvDel("t.k9");
+  });
+  await test("IndexedDB: Lesefehler der Konten wird geworfen statt „keine Konten“ (#4 K9)", async () => {
+    const realTx = IDBDatabase.prototype.transaction;
+    const { closeConnection } = await import("../idb.js");
+    await closeConnection();
+    // Jede Transaktion scheitert wie bei iOS, auch nach dem Neuöffnen.
+    IDBDatabase.prototype.transaction = function () { throw new DOMException("Connection to Indexed Database server lost", "UnknownError"); };
+    let err = null;
+    try { await Acc.loadAccounts(); } catch (e) { err = e; } finally { IDBDatabase.prototype.transaction = realTx; }
+    eq(err?.name, "UnknownError", `Fehler: ${err}`);
+  });
+  await test("IndexedDB: verlorene Verbindung schon beim Neuöffnen ist kein „keine IndexedDB“ (#4 K9)", async () => {
+    const { closeConnection } = await import("../idb.js");
+    const [realTx, realOpen] = [IDBDatabase.prototype.transaction, IDBFactory.prototype.open];
+    await closeConnection();
+    let tx = 0;
+    IDBDatabase.prototype.transaction = function (...a) { if (!tx++) throw new DOMException("lost", "UnknownError"); return realTx.apply(this, a); };
+    IDBFactory.prototype.open = function () {
+      const req = {};
+      setTimeout(() => { req.error = new DOMException("Connection to Indexed Database server lost", "UnknownError"); req.onerror?.(); }, 0);
+      return req;
+    };
+    let err = null;
+    try { await Acc.loadAccounts(); } catch (e) { err = e; } finally { Object.assign(IDBDatabase.prototype, { transaction: realTx }); IDBFactory.prototype.open = realOpen; }
+    eq(err?.name, "UnknownError", `Fehler: ${err}`);
+    eq((await Acc.loadAccounts()).length >= 0, true, "danach wieder lesbar");
   });
   if (backup.accounts) await secretSet("accounts", backup.accounts);
   if (backup.creds) await secretSet("creds", backup.creds);
@@ -567,17 +628,18 @@ await test("Sdui: Kürzel, Stunden, Schule, nächster Schultag", () => {
 // Bestellen gegen einen Schein-Client.
 class FakeClient {
   constructor({ extraInCart = 0, failSubmit = false } = {}) {
-    Object.assign(this, { extraInCart, failSubmit, cart: [], calls: [], submitted: false });
+    Object.assign(this, { extraInCart, failSubmit, items: [], calls: [], submitted: false });
   }
-  total() { return this.cart.length + this.extraInCart; }
-  async clearCart(c, date, g) { this.calls.push(`clear ${date}`); this.cart = this.cart.filter((x) => x.date !== date); return new CartResponse(true, null, this.total()); }
+  total() { return this.items.length + this.extraInCart; }
+  async cart() { this.calls.push("cart"); return new CartResponse(true, null, this.total()); }
+  async clearCart(c, date, g) { this.calls.push(`clear ${date}`); this.items = this.items.filter((x) => x.date !== date); return new CartResponse(true, null, this.total()); }
   async addToCart(e) {
     this.calls.push(`add ${e.date} ${e.menuLineId}`);
-    this.cart.push(e);
-    if (this.switchFrom?.[e.date]) this.cart.push({ date: e.date, cancel: true });
+    this.items.push(e);
+    if (this.switchFrom?.[e.date]) this.items.push({ date: e.date, cancel: true });
     return new CartResponse(true, null, this.total());
   }
-  async cancelInCart(e) { this.calls.push(`cancel ${e.date}`); this.cart.push(e); return new CartResponse(true, null, this.total()); }
+  async cancelInCart(e) { this.calls.push(`cancel ${e.date}`); this.items.push(e); return new CartResponse(true, null, this.total()); }
   async submitCart() { this.calls.push("submit"); this.submitted = !this.failSubmit; return new CartResponse(!this.failSubmit, this.failSubmit ? "nein" : null, 0); }
 }
 const p42 = parseWeekplan(kw42);
@@ -593,11 +655,60 @@ await test("Bestellen: Fremdes im Warenkorb → nichts abgeschickt", async () =>
   const c = new FakeClient({ extraInCart: 1 });
   const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
   eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+  eq(/Nichts abgeschickt/.test(r.reason), true, `Grund: ${r.reason}`);
+});
+await test("Bestellen: Liegengebliebenes am selben Tag (z. B. Abbestellung) wird ersetzt und bestellt", async () => {
+  const c = new FakeClient();
+  c.items.push({ date: "2026-10-12", cancel: true }); // nicht in previouslyInCart
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "done", r.reason); eq(c.submitted, true);
+});
+await test("Bestellen: Leeren ohne Zahl → Warenkorb wird nachgefragt", async () => {
+  const c = new FakeClient();
+  const realClear = c.clearCart.bind(c);
+  c.clearCart = async (...a) => { await realClear(...a); return new CartResponse(true, null, null); };
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "done", r.reason); eq(c.calls.includes("cart"), true, "cart");
+});
+// Zahl am Ende stimmt, aber der eigene Eintrag kam nicht an und ein fremder kam dazu (#4 K11).
+await test("Bestellen: Eintrag nicht angekommen, Fremdes dazugekommen → nichts abgeschickt", async () => {
+  const c = new FakeClient();
+  const changes = [
+    { date: "2026-10-12", current: null, target: line("2026-10-12", "827") },
+    { date: "2026-10-14", current: null, target: line("2026-10-14", "827") },
+  ];
+  const realAdd = FakeClient.prototype.addToCart;
+  let n = 0;
+  c.addToCart = async (e) => {
+    // erster Tag: nichts landet im Warenkorb; zweiter Tag: eigener plus ein fremder Eintrag
+    if (n++ === 0) { c.calls.push(`add ${e.date}`); return new CartResponse(true, null, c.total()); }
+    c.extraInCart++;
+    return realAdd.call(c, e);
+  };
+  const r = await placeOrders(c, changes, { reload: async () => [] });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+});
+await test("Bestellen: Bekanntes vom selben Tag im Warenkorb wird ersetzt und bestellt", async () => {
+  const c = new FakeClient();
+  const old = line("2026-10-13", "828"); // liegt laut Fixture im Warenkorb
+  c.items.push(old);
+  const r = await placeOrders(c, [{ date: "2026-10-13", current: null, target: line("2026-10-13", "829") }],
+    { previouslyInCart: [old], reload: orderedAfter("2026-10-13", "829") });
+  eq(r.kind, "done", r.reason); eq(c.submitted, true);
+});
+await test("Bestellen: Bekanntes an einem anderen Tag im Warenkorb → nichts abgeschickt", async () => {
+  const c = new FakeClient();
+  const old = line("2026-10-13", "828");
+  c.items.push(old);
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }],
+    { previouslyInCart: [old], reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+  eq(c.items.map((e) => e.date), ["2026-10-13"], "zurückgerollt, Bekanntes bleibt");
 });
 await test("Bestellen: Probelauf schickt nichts ab", async () => {
   const c = new FakeClient();
   const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { dryRun: true, reload: orderedAfter("2026-10-12", "827") });
-  eq(r.kind, "dryrun"); eq(c.calls.includes("submit"), false, "submit"); eq(c.cart.length, 0, "Warenkorb geleert");
+  eq(r.kind, "dryrun"); eq(c.calls.includes("submit"), false, "submit"); eq(c.items.length, 0, "Warenkorb geleert");
 });
 await test("Umbestellen erwartet zwei Einträge", async () => {
   const c = new FakeClient();
@@ -708,6 +819,44 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
   try { await collect(fake, ["2026-11-02", "2026-11-03", "2026-11-04"], { fresh: true, signal: ctl.signal }); } catch (e) { err = e; }
   eq([asked.length, err?.name], [1, "AbortError"]);
 });
+
+{
+  const { cacheKey, renewPush } = await import("../sw.js");
+  await test("Service Worker: Aufrufe der App teilen sich die Hülle, auch mit ?order= (#4 K7)", () => {
+    const scope = "https://satt.example/app/";
+    const nav = (path) => ({ mode: "navigate", url: `https://satt.example${path}` });
+    eq([cacheKey(nav("/app/?order=2026-10-12&k=1000"), scope), cacheKey(nav("/app/"), scope), cacheKey(nav("/app/index.html?x=1"), scope)], ["./", "./", "./"]);
+    const other = nav("/app/tests/test.html");
+    eq(cacheKey(other, scope) === other, true, "andere Seite bleibt eigene Anfrage");
+    const icon = { mode: "no-cors", url: "https://satt.example/app/icon.svg?v=2" };
+    eq(cacheKey(icon, scope) === icon, true, "Dateien unverändert");
+  });
+  const push = { id: "a".repeat(24), secret: "s", time: "07:30", created: 1 };
+  const fakeFetch = (...replies) => {
+    const calls = [];
+    const f = async (url, init) => { calls.push([init.method, url, JSON.parse(init.body)]); const [status, body] = replies.shift(); return new Response(body ? JSON.stringify(body) : null, { status }); };
+    return { calls, f };
+  };
+  await test("Abo erneuern: Server bestätigt (#4 K8)", async () => {
+    const { calls, f } = fakeFetch([200, {}]);
+    eq(await renewPush(push, { endpoint: "e" }, { fetch: f, weekdays: [1] }), push);
+    eq(calls.map((c) => c[0]), ["PUT"]);
+  });
+  await test("Abo erneuern: Abo weg (404) → neu angelegt (#4 K8)", async () => {
+    const { calls, f } = fakeFetch([404], [201, { id: "neu", secret: "g" }]);
+    const r = await renewPush(push, { endpoint: "e" }, { fetch: f, weekdays: [1, 3] });
+    eq([r.id, r.secret, r.time], ["neu", "g", "07:30"]);
+    eq(calls[1], ["POST", "/api/subscriptions", { subscription: { endpoint: "e" }, time: "07:30", weekdays: [1, 3], tz: "Europe/Berlin" }]);
+  });
+  await test("Abo erneuern: Serverfehler wird geworfen statt verschluckt (#4 K8)", async () => {
+    for (const replies of [[[500]], [[404], [429, { error: "zu viele" }]]]) {
+      const { f } = fakeFetch(...replies);
+      let err = null;
+      try { await renewPush(push, { endpoint: "e" }, { fetch: f, weekdays: [1] }); } catch (e) { err = e; }
+      eq(/HTTP (500|429)/.test(err?.message || ""), true, `Fehler: ${err?.message}`);
+    }
+  });
+}
 
 const failed = results.filter((r) => r.startsWith("FAIL")).length;
 document.getElementById("out").textContent = `${results.join("\n")}\n\n${failed ? `${failed} FEHLGESCHLAGEN` : "ALLE OK"}`;

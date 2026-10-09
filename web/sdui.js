@@ -11,17 +11,23 @@ import { kvGet, kvSet, secretGet } from "./idb.js";
 export class SduiError extends Error {}
 export class SduiAuthError extends SduiError {}
 
+/** Frist je Anfrage samt Antwort; ohne sie bliebe die Übersicht stehen, bis Sdui antwortet (#4). */
+const REQUEST_TIMEOUT_MS = 15000;
+const timeoutText = `Sdui antwortet nicht (${REQUEST_TIMEOUT_MS / 1000} s)`;
+
 async function call(path, { method = "GET", token, body } = {}) {
   const headers = { Accept: "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body) headers["Content-Type"] = "application/json";
+  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   let r;
   try {
-    r = await fetch(`/api/sdui/${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    r = await fetch(`/api/sdui/${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal });
   } catch (e) {
-    throw new SduiError(`Sdui nicht erreichbar: ${e.message}`);
+    throw new SduiError(e?.name === "TimeoutError" ? timeoutText : `Sdui nicht erreichbar: ${e.message}`);
   }
   const obj = await r.json().catch(() => null);
+  if (signal.aborted) throw new SduiError(timeoutText);
   const errors = obj?.meta?.errors?.filter((x) => typeof x === "string").join("; ");
   if (r.status === 401 || r.status === 403) throw new SduiAuthError(`Sdui: ${errors || `HTTP ${r.status}`}`);
   if (r.status === 429) throw new SduiError("Zu viele Sdui-Anfragen, bitte in ein paar Minuten nochmal.");
@@ -149,6 +155,8 @@ export function planByDay(lessons) {
 
 /** Wie oft der Plan höchstens neu geladen wird; er ändert sich selten. */
 const PLAN_MAX_AGE_MS = 6 * 3600 * 1000;
+/** Nach einem Fehlschlag so lange nicht neu fragen: die Übersicht zeichnet mehrmals und soll nicht jedes Mal warten. */
+const PLAN_RETRY_MS = 5 * 60 * 1000;
 const PLAN_DAYS = 14; // zwei Wochen, wegen A/B-Wochen für die Fächerauswahl
 
 /** Zugang und Auswahl; null, wenn Sdui nicht eingerichtet ist. */
@@ -168,8 +176,8 @@ export async function cachedPlan({ force = false } = {}) {
   if (!cfg) return null;
   const today = todayBerlin();
   const cache = await kvGet("sduiPlan");
-  const fresh = cache && cache.from === today && Date.now() - cache.at < PLAN_MAX_AGE_MS;
-  if (fresh && !force) return { lessons: cache.lessons, error: null };
+  const fresh = cache && cache.from === today && Date.now() - cache.at < (cache.error ? PLAN_RETRY_MS : PLAN_MAX_AGE_MS);
+  if (fresh && !force) return { lessons: cache.lessons, error: cache.error || null };
   if (cfg.expires && cfg.expires < Date.now()) {
     return { lessons: cache?.lessons || [], error: "Sdui-Zugang abgelaufen, bitte in den Einstellungen neu verbinden." };
   }
@@ -180,6 +188,8 @@ export async function cachedPlan({ force = false } = {}) {
     await kvSet("sduiKnown", [...known].sort((a, b) => a.localeCompare(b, "de")));
     return { lessons, error: null };
   } catch (e) {
-    return { lessons: cache?.lessons || [], error: e.message };
+    const lessons = cache?.lessons || [];
+    await kvSet("sduiPlan", { at: Date.now(), from: today, lessons, error: e.message }).catch(() => {});
+    return { lessons, error: e.message };
   }
 }

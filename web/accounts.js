@@ -18,11 +18,15 @@ const PER_ACCOUNT = ["ibsSession", "dayCache", "lastDays", "ferienEssen", "ferie
 
 const valid = (a) => !!(a?.customerNo && a?.password);
 
-/** Gespeicherte Konten; der einzelne Eintrag aus der Zeit vor mehreren Kindern wird dabei übernommen. */
+/**
+ * Gespeicherte Konten; der einzelne Eintrag aus der Zeit vor mehreren Kindern wird
+ * dabei übernommen. Ein Fehler des Speichers wird geworfen: leer hieße „nicht
+ * angemeldet“, und ein Speichern danach überschriebe die übrigen Konten.
+ */
 export async function loadAccounts() {
-  const list = await secretGet(KEY).catch(() => undefined);
+  const list = await secretGet(KEY);
   if (Array.isArray(list)) return list.filter(valid);
-  const old = await secretGet(LEGACY).catch(() => undefined);
+  const old = await secretGet(LEGACY);
   if (!valid(old)) return [];
   const migrated = [{ customerNo: old.customerNo, password: old.password, name: "" }];
   await secretSet(KEY, migrated);
@@ -78,8 +82,13 @@ export const accountLabel = (a) => new Profile(a?.name || "", "").firstName || `
  * Tages-Zwischenspeicher (siehe dayCache in ibs.js) je Kundennummer. Gelesen
  * wird beim Kontowechsel, wenn withSession client.customerNo schon gesetzt hat;
  * der Eintrag aus der Zeit mit einem Konto gilt, solange die Kundennummer passt.
+ * Abgelegt wird nur für ein noch gespeichertes Konto: ein Weckruf kann das
+ * Abmelden oder „Kind entfernen“ überdauern.
  */
 export const dayStore = (client) => ({
   load: async () => (await kvGet(accountKey("dayCache", client.customerNo))) ?? kvGet("dayCache"),
-  save: (rows) => kvSet(accountKey("dayCache", rows.customerNo), rows),
+  save: async (rows) => {
+    if (!(await loadAccounts()).some((a) => a.customerNo === rows.customerNo)) return;
+    await kvSet(accountKey("dayCache", rows.customerNo), rows);
+  },
 });

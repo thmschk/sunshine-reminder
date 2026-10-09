@@ -593,10 +593,12 @@ export async function collect(client, dates, { fresh = false, onProgress, histor
 // Die Tagesansicht kostet eine Anfrage je Tag: strikt nacheinander (Abstand siehe
 // pacing), abbrechbar und zwischengespeichert.
 
-// Wie lange ein geladener Tag gilt: nach Bestellschluss ändert er sich nicht mehr,
-// ohne Angebot bekommt er vielleicht bald einen Speiseplan, alles andere ändert
-// sich durch Bestellen (eigene Bestellungen laden den Tag danach ohnehin neu).
-const DAY_TTL_MS = { [OrderState.DEADLINE_PASSED]: Infinity, [OrderState.NO_OFFER]: 60 * 60 * 1000 };
+// Wie lange ein geladener Tag gilt: ohne Angebot bekommt er vielleicht bald einen
+// Speiseplan, alles andere ändert sich durch Bestellen (eigene Bestellungen laden
+// den Tag danach ohnehin neu). „Bestellschluss vorbei“ gilt nur so lange wie ein
+// offener Tag: IBS5 sperrt Tage auch vorübergehend, und eine Uhrzeit für den
+// Bestellschluss liefert es nicht, die eine endgültige Sperre belegen würde.
+const DAY_TTL_MS = { [OrderState.NO_OFFER]: 60 * 60 * 1000 };
 const DAY_CACHE_MS = 10 * 60 * 1000;
 // Ab nächster Woche länger: dort ist kein Bestellschluss nah, und ob anderswo
 // bestellt wurde, gleicht die Übersicht über die Bestellhistorie ab.
@@ -752,9 +754,13 @@ export function changeKind(c) {
 
 /**
  * Warenkorb füllen, prüfen, abschicken. Cart/Order schickt den ganzen Warenkorb
- * ab; weicht die Zahl der Einträge ab, liegt dort etwas Fremdes, dann wird nicht
- * abgeschickt. Umbestellen = nur neue Linie Typ I, die Abbestellung der alten
- * legt der Server selbst dazu (zwei Einträge).
+ * ab, und IBS5 nennt vom Warenkorb nur die Zahl der Einträge. Geprüft wird
+ * deshalb: jedes Hinzufügen legt nach dem Leeren des Tages genau die eigenen
+ * Einträge dazu, und am Ende liegt nur die Auswahl darin. Weicht eine Zahl ab,
+ * liegt dort etwas Fremdes (oder ein Schritt kam nicht an), dann wird nicht
+ * abgeschickt. Umbestellen =
+ * nur neue Linie Typ I, die Abbestellung der alten legt der Server selbst dazu
+ * (zwei Einträge).
  *
  * @returns {Promise<{kind:"done"|"dryrun"|"aborted"|"unconfirmed", reason?:string, missing?:string[], changes?:object[]}>}
  */
@@ -774,28 +780,38 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
       await client.addToCart(old).catch(() => {});
     }
   };
+  const foreign = (n, want) => ({
+    kind: "aborted",
+    reason: `Im Warenkorb liegen ${n ?? "?"} statt ${want} Einträge — vermutlich noch etwas anderes. Nichts abgeschickt.`,
+  });
 
   try {
     let total = null;
     for (const c of changes) {
       const anchor = c.target ?? c.current;
       touched.push(anchor);
-      // Erst leeren: ersetzt Liegengebliebenes des Tages, die Zählprüfung misst dann nur die Auswahl.
-      await client.clearCart(anchor.customerId, anchor.date, anchor.menuGroupId);
+      // Erst leeren: ersetzt Liegengebliebenes des Tages, danach zählt nur die Auswahl.
+      const cleared = await client.clearCart(anchor.customerId, anchor.date, anchor.menuGroupId);
+      const base = cleared.totalItemsInCart ?? (await client.cart()).totalItemsInCart;
       const added = changeKind(c) === "CANCEL" ? await client.cancelInCart(c.current) : await client.addToCart(c.target);
       if (!added.ok) {
         await rollback();
         return { kind: "aborted", reason: `${De.short(c.date)}: ${added.message || "vom Bestellsystem abgelehnt"}` };
       }
       total = added.totalItemsInCart;
+      // Genau die eigenen Einträge kamen dazu: sonst stimmte die Endzahl womöglich
+      // nur, weil ein eigener fehlt und dafür etwas Fremdes darin liegt (#4 K11).
+      const want = base == null ? null : base + (changeKind(c) === "SWITCH" ? 2 : 1);
+      if (want == null || total !== want) {
+        await rollback();
+        return foreign(total, want ?? "?");
+      }
     }
+    // Am Ende nur die Auswahl: Bekanntes an anderen Tagen ginge sonst mit ab.
     const expected = changes.reduce((n, c) => n + (changeKind(c) === "SWITCH" ? 2 : 1), 0);
     if (total !== expected) {
       await rollback();
-      return {
-        kind: "aborted",
-        reason: `Im Warenkorb liegen ${total ?? "?"} statt ${expected} Einträge — vermutlich noch etwas anderes. Nichts abgeschickt.`,
-      };
+      return foreign(total, expected);
     }
     if (dryRun) {
       await rollback();

@@ -12,7 +12,7 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v54";
+const VERSION = "v55";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -30,20 +30,33 @@ self.addEventListener("activate", (ev) => {
   );
 });
 
+/**
+ * Unter welchem Schlüssel eine Anfrage im Cache liegt. Aufrufe der App-Seite
+ * (auch ./?order=… aus einer Meldung) teilen sich die Hülle „./“: so öffnet der
+ * Link auch offline, und nicht jede Adresse legt einen eigenen Eintrag an.
+ */
+export function cacheKey(request, scope) {
+  if (request.mode !== "navigate") return request;
+  const { pathname } = new URL(request.url);
+  const base = new URL(scope).pathname;
+  return pathname === base || pathname === `${base}index.html` ? "./" : request;
+}
+
 // Netz zuerst, damit ein Deploy sofort ankommt; Cache nur, wenn offline.
 self.addEventListener("fetch", (ev) => {
   const url = new URL(ev.request.url);
   if (url.origin !== self.location.origin || ev.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
+  const key = cacheKey(ev.request, self.registration.scope);
   ev.respondWith(
     fetch(ev.request)
       .then((resp) => {
         if (resp.ok) {
           const copy = resp.clone();
-          caches.open(VERSION).then((c) => c.put(ev.request, copy));
+          caches.open(VERSION).then((c) => c.put(key, copy));
         }
         return resp;
       })
-      .catch(() => caches.match(ev.request)),
+      .catch(() => caches.match(key)),
   );
 });
 
@@ -170,7 +183,10 @@ export function pushCheckDates(today, daysAhead, pushDays) {
 // Mehrere Kinder nacheinander, nie parallel (IP-Sperre von IBS5), und eine gemeinsame
 // Meldung: eine zweite kurz danach dämpft Android.
 async function checkAndNotify(isTest) {
-  const accounts = await loadAccounts();
+  // Ein Lesefehler ist nicht „nicht angemeldet“: er landet in der Fehlermeldung des Weckrufs.
+  const accounts = await loadAccounts().catch((e) => {
+    throw new Error(`Gerätespeicher nicht lesbar (${e?.message || e}).`);
+  });
   if (!accounts.length) {
     return notify("Nicht angemeldet", "Bitte die Seite öffnen und anmelden.", { url: "./" });
   }
@@ -340,21 +356,60 @@ self.addEventListener("notificationclick", (ev) => {
   })());
 });
 
-// Der Browser hat das Abo erneuert: dem Server die neue Adresse melden.
+/**
+ * Neue Abo-Adresse dem Server melden. Kennt der Server das Abo nicht mehr (404),
+ * wird es mit den gespeicherten Einstellungen neu angelegt und Kennung samt
+ * Geheimnis ersetzt. Wirft, wenn das nicht gelingt.
+ */
+export async function renewPush(push, subscription, { fetch: f = fetch, weekdays } = {}) {
+  const put = await f(`/api/subscriptions/${push.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${push.secret}` },
+    body: JSON.stringify({ subscription }),
+  });
+  if (put.ok) return push;
+  if (put.status !== 404) throw new Error(`Server: HTTP ${put.status}`);
+  const post = await f("/api/subscriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subscription, time: push.time, weekdays, tz: "Europe/Berlin" }),
+  });
+  if (!post.ok) throw new Error(`Server: HTTP ${post.status}`);
+  const { id, secret } = await post.json();
+  if (!id || !secret) throw new Error("Server: Antwort ohne Kennung");
+  return { ...push, id, secret };
+}
+
+// Der Browser hat das Abo erneuert: dem Server die neue Adresse melden. Scheitert
+// das, kämen keine Weckrufe mehr, ohne dass es jemand merkt: deshalb eine Meldung.
 self.addEventListener("pushsubscriptionchange", (ev) => {
   ev.waitUntil((async () => {
     const push = await kvGet("push");
     if (!push) return;
-    const key = (await (await fetch("/api/vapid")).json()).publicKey;
-    const sub = ev.newSubscription ?? await self.registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: b64ToBytes(key),
-    });
-    await fetch(`/api/subscriptions/${push.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${push.secret}` },
-      body: JSON.stringify({ subscription: sub.toJSON() }),
-    });
+    try {
+      let sub = ev.newSubscription;
+      if (!sub) {
+        const res = await fetch("/api/vapid");
+        if (!res.ok) throw new Error(`Server: HTTP ${res.status}`);
+        sub = await self.registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: b64ToBytes((await res.json()).publicKey),
+        });
+      }
+      const weekdays = (await kvGet("pushWeekdays")) || DEFAULT_CHECK.weekdays;
+      const renewed = await renewPush(push, sub.toJSON(), { weekdays });
+      // Inzwischen ausgeschaltet: das neue Abo nicht wieder als eingeschaltet ablegen.
+      if (renewed !== push && (await kvGet("push"))) await kvSet("push", renewed);
+    } catch (e) {
+      await self.registration.showNotification("Erinnerung bitte neu einschalten", {
+        body: `Das Abo für die Erinnerung ließ sich nicht erneuern (${e?.message || e}). `
+          + "Bitte die App öffnen und unter ⚙ die Erinnerung aus- und wieder einschalten.",
+        icon: "icon-192.png?v=2",
+        badge: "badge-96.png?v=2",
+        tag: "hs-push",
+        data: { url: "./" },
+      }).catch(() => {});
+    }
   })());
 });
 

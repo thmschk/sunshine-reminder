@@ -1,0 +1,245 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Oberfläche: Fristen, Fehler, Doppelklicks</title>
+<!-- Befunde aus #4 an der echten Seite gegen vorgetäuschtes IBS5, Sdui und Server. Ohne ?mode= laufen alle
+     Fälle nacheinander je in einem Rahmen (eine Seite teilt IndexedDB, deshalb nicht gleichzeitig). -->
+<link rel="stylesheet" href="../style.css">
+<body><pre id="out">läuft</pre>
+<header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
+<main id="app"></main><footer id="footer" hidden></footer>
+<script type="module">
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback"];
+const mode = new URLSearchParams(location.search).get("mode");
+const $out = document.getElementById("out");
+const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
+
+if (!mode) {
+  document.querySelector("header").hidden = true;
+  const lines = [];
+  for (const m of MODES) {
+    const f = document.createElement("iframe");
+    f.src = `ui.html?mode=${m}`;
+    document.body.append(f);
+    const text = await new Promise((resolve) => {
+      const t0 = Date.now();
+      (function poll() {
+        const t = f.contentDocument?.getElementById("out")?.textContent || "";
+        if (/ALLE OK|FEHLGESCHLAGEN/.test(t)) resolve(t);
+        else if (Date.now() - t0 > 30000) resolve(`FAIL ${m}: kein Ergebnis`);
+        else setTimeout(poll, 50);
+      })();
+    });
+    lines.push(`# ${m}`, ...text.split("\n").filter((l) => /^(ok|FAIL)/.test(l)));
+    f.remove();
+  }
+  $out.textContent = summary(lines);
+} else {
+  const lines = [];
+  const P = (m) => lines.push(m);
+  window.addEventListener("error", (e) => P("FAIL ERR " + e.message + " " + e.filename + ":" + e.lineno));
+  window.addEventListener("unhandledrejection", (e) => P("FAIL REJ " + (e.reason?.stack || e.reason)));
+  window.setTimeout = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => fn(); c.port2.postMessage(0); return 0; };
+  window.confirm = () => true;
+  const { kvClear, kvGet, kvSet, secretSet } = await import("../idb.js");
+  const { saveAccounts } = await import("../accounts.js");
+  await kvClear();
+  const until = (cond) => new Promise((r) => { let n = 0; (function tick() { if (cond() || ++n > 200000) r(); else window.setTimeout(tick); })(); });
+  const ticks = (n) => new Promise((r) => { (function tick() { if (--n <= 0) r(); else window.setTimeout(tick); })(); });
+  const check = (ok, what) => P(`${ok ? "ok  " : "FAIL"} ${what}`);
+  const $ = (sel) => document.querySelector(sel);
+  const errorText = () => [...document.querySelectorAll(".error")].map((x) => x.textContent).join(" | ");
+  /** Antwort, die erst kommt, wenn der Test sie freigibt. */
+  const held = () => { let release; const p = new Promise((r) => { release = r; }); return { p, release }; };
+
+  let asked = 0;
+  Notification.requestPermission = async () => { asked++; return "granted"; };
+  const fakeSub = { toJSON: () => ({ endpoint: "https://push.example/x", keys: { p256dh: "p", auth: "a" } }) };
+  PushManager.prototype.getSubscription = async () => null;
+  PushManager.prototype.subscribe = async () => fakeSub;
+  const register = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+  navigator.serviceWorker.register = (u, o) => register("../" + u, o);
+
+  const dayHtml = (url, status = 2) => {
+    const d = (/date=([\d-]+)/.exec(url) || [])[1] || "2026-10-06";
+    return `<li id="dayplan"><button class="menuplan-checkbox" data-order-status="${status}" data-quantity-ordered="${status === 2 ? 1 : ""}" data-quantity-in-shopping-cart="" data-date="x" data-readonly="false" data-name="Nudeln" id="menu_quantity_mobile-${d}_16_827" onclick="DayPlan.changeItemQuantity('', 1, 'x', '1000', '827', '${d}', 'u', true, '16', 'n');"></button></li>`;
+  };
+  // Je Fall: Sdui- und Server-Anfragen (sdui, api), sonst IBS5 (ibs); null = Standardantwort.
+  const hooks = { sdui: null, api: null, ibs: null, status: 2 };
+  const posted = [];
+  window.fetch = async (url, init = {}) => {
+    url = String(url);
+    if (url.includes("/api/sdui/")) return hooks.sdui ? hooks.sdui(url, init) : new Response("{}", { status: 500 });
+    if (url.includes("/api/")) {
+      if (hooks.api) { const r = await hooks.api(url, init); if (r) return r; }
+      if (url.endsWith("/api/vapid")) return new Response(JSON.stringify({ publicKey: "AAAA" }));
+      if (url.endsWith("/api/subscriptions")) { posted.push(JSON.parse(init.body)); return new Response(JSON.stringify({ id: "s1", secret: "z" })); }
+      return new Response("{}");
+    }
+    if (url.endsWith("ferien.json")) return new Response("", { status: 404 });
+    if (url.includes("/Login/")) return new Response(JSON.stringify({ token: "t", name1: "Muster, Mia" }));
+    if (hooks.ibs) { const r = await hooks.ibs(url, init); if (r) return r; }
+    return new Response(dayHtml(url, hooks.status));
+  };
+  const account = () => saveAccounts([{ customerNo: "1000", password: "a", name: "" }]);
+  const homeLoaded = () => $(".hero") && !document.getElementById("refresh");
+  const submitLogin = () => {
+    document.getElementById("cn").value = "1000";
+    document.getElementById("pw").value = "x";
+    $("#f-login button[type=submit]").click();
+  };
+
+  if (mode === "sdui") {
+    // Sdui antwortet nie: nach der Frist kommt die Übersicht mit Hinweis statt „Lädt …“.
+    await account();
+    await secretSet("sdui", { token: "st", expires: Date.now() + 1e10, slink: "s", childId: 5, childName: "Mia" });
+    const frist = [];
+    const orig = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = (ms) => { frist.push(ms); return orig(30); };
+    let sduiCalls = 0;
+    hooks.sdui = (url, init) => {
+      sduiCalls++;
+      return new Promise((_, reject) => {
+        if (!init.signal) return; // ohne Frist hängt sie wirklich
+        init.signal.addEventListener("abort", () => reject(init.signal.reason));
+      });
+    };
+    await import("../app.js");
+    await until(() => homeLoaded() && /Sdui/.test(errorText()));
+    check(sduiCalls > 0, `Sdui gefragt (${sduiCalls}×)`);
+    check(homeLoaded(), "Übersicht geladen, obwohl Sdui nicht antwortet");
+    check(/Sdui antwortet nicht/.test(errorText()), `Hinweis: ${errorText()}`);
+    check(frist.length && frist.every((ms) => ms > 0 && ms <= 20000), `Fristen gesetzt: ${[...new Set(frist)]}`);
+    const before = sduiCalls;
+    document.getElementById("btn-reload").click();
+    await until(() => document.getElementById("refresh"));
+    await until(() => homeLoaded() && /Sdui/.test(errorText()));
+    check(sduiCalls === before && /Sdui antwortet nicht/.test(errorText()), `⟳ wartet nicht erneut auf Sdui, Hinweis bleibt (${sduiCalls - before} neue Anfragen)`);
+  } else if (mode === "retry") {
+    // Anmeldung hängt an einer Pause; „Trotzdem jetzt versuchen“ behält den Haken „Erinnern“.
+    await kvSet("ibsPause", { until: Date.now() + 3600e3, reason: "Test", at: Date.now(), net: null });
+    await import("../app.js");
+    await until(() => document.getElementById("f-login"));
+    check(document.getElementById("want-push")?.checked, "Haken „Erinnern“ gesetzt");
+    submitLogin();
+    await until(() => document.getElementById("b-resume"));
+    check(!!document.getElementById("b-resume"), `Pause erkannt: ${errorText().slice(0, 60)}`);
+    check(asked === 1, `Erlaubnis beim Abschicken erfragt (${asked})`);
+    document.getElementById("b-resume").click();
+    await until(() => document.querySelector(".days") && homeLoaded());
+    const push = await kvGet("push");
+    check(asked >= 2, `Erlaubnis beim Wiederholen erneut im Klick erfragt (${asked})`);
+    check(push?.id === "s1" && posted.length === 1, "Erinnerung nach dem Wiederholen eingeschaltet");
+    check(homeLoaded(), "Übersicht geladen");
+  } else if (mode === "save") {
+    // Gerät kann nichts verschlüsseln/speichern: Übersicht mit Hinweis statt wieder das Formular.
+    SubtleCrypto.prototype.encrypt = async () => { throw new DOMException("Speicher voll", "QuotaExceededError"); };
+    await import("../app.js");
+    await until(() => document.getElementById("f-login"));
+    submitLogin();
+    await until(() => homeLoaded() || (document.getElementById("f-login") && /nicht gespeichert/.test(errorText())));
+    await until(homeLoaded);
+    check(!document.getElementById("f-login"), "kein Anmeldeformular nach erfolgreichem Login");
+    check(homeLoaded(), "Übersicht geladen");
+    check(/nicht gespeichert/.test(errorText()), `Hinweis: ${errorText()}`);
+    check(!posted.length && !(await kvGet("push")), "Erinnerung nicht eingeschaltet");
+  } else if (mode === "remove") {
+    // Entfernen eines Kindes scheitert: Meldung in den Einstellungen, beide bleiben.
+    await saveAccounts([{ customerNo: "1000", password: "a", name: "Muster, Mia" }, { customerNo: "2000", password: "b", name: "Muster, Ben" }]);
+    await import("../app.js");
+    await until(homeLoaded);
+    document.getElementById("btn-settings").click();
+    await until(() => $('[data-remove="2000"]'));
+    SubtleCrypto.prototype.encrypt = async () => { throw new DOMException("Speicher voll", "QuotaExceededError"); };
+    $('[data-remove="2000"]').click();
+    await until(() => /Entfernen fehlgeschlagen/.test(errorText()));
+    check(/Entfernen fehlgeschlagen/.test(errorText()), `Meldung: ${errorText()}`);
+    check(document.querySelectorAll("[data-remove]").length === 2, "beide Kinder weiter da");
+  } else if (mode === "weekdays") {
+    // Während der Server die Tage speichert, nimmt die Leiste keinen Tipp an; bei Fehler gilt der alte Stand.
+    await account();
+    await kvSet("push", { id: "s1", secret: "z", time: "17:00", created: Date.now() });
+    const puts = [];
+    let gate = null;
+    hooks.api = async (url, init) => {
+      if (init.method !== "PUT") return null;
+      puts.push(JSON.parse(init.body));
+      gate = held();
+      return gate.p;
+    };
+    await import("../app.js");
+    await until(homeLoaded);
+    document.getElementById("btn-settings").click();
+    await until(() => $('.wd-btn[data-wd="1"]'));
+    const on = () => [...document.querySelectorAll(".wd-btn.on")].map((b) => Number(b.dataset.wd)).join();
+    $('.wd-btn[data-wd="1"]').click();
+    await until(() => gate);
+    check([...document.querySelectorAll(".wd-btn")].every((b) => b.disabled), "Tage während des Speicherns gesperrt");
+    $('.wd-btn[data-wd="2"]').click();
+    await ticks(20);
+    check(puts.length === 1, `nur eine Anfrage unterwegs (${puts.length})`);
+    gate.release(new Response("", { status: 500 }));
+    await until(() => /HTTP 500/.test(errorText()));
+    check(/HTTP 500/.test(errorText()), `Fehler gemeldet: ${errorText()}`);
+    check(on() === "1,2,3,4,5", `Anzeige wieder auf Serverstand (${on()})`);
+    check(![...document.querySelectorAll(".wd-btn")].some((b) => b.disabled), "Tage wieder wählbar");
+    gate = null;
+    $('.wd-btn[data-wd="1"]').click();
+    await until(() => gate);
+    gate.release(new Response("{}"));
+    await until(() => on() === "2,3,4,5");
+    check(on() === "2,3,4,5" && JSON.stringify(puts.at(-1).weekdays) === "[2,3,4,5]", `Anzeige und Server gleich (${on()})`);
+    check(JSON.stringify(await kvGet("pushWeekdays")) === "[2,3,4,5]", "Tage gespeichert");
+  } else if (mode === "sduiback") {
+    // „Zurück“, während Sdui die Anmeldung prüft: kein Fehler, wenn die Antwort danach kommt.
+    await account();
+    const gate = held();
+    hooks.sdui = () => gate.p;
+    await import("../app.js");
+    await until(homeLoaded);
+    document.getElementById("btn-settings").click();
+    await until(() => document.getElementById("b-sdui-setup"));
+    document.getElementById("b-sdui-setup").click();
+    document.getElementById("s-school").value = "meine-schule";
+    document.getElementById("s-id").value = "x";
+    document.getElementById("s-pw").value = "y";
+    $("#f-sdui button[type=submit]").click();
+    await ticks(5);
+    document.getElementById("b-back").click();
+    await until(homeLoaded);
+    gate.release(new Response(JSON.stringify({ meta: { errors: ["falsch"] } }), { status: 401 }));
+    await ticks(200);
+    check(homeLoaded() && !document.getElementById("sdui-box"), "Übersicht bleibt stehen");
+  } else if (mode === "orderback") {
+    // Beim Abschicken ist „Zurück“ gesperrt, bis die Ergebnismeldung steht.
+    await account();
+    hooks.status = 0;
+    let gate = null;
+    hooks.ibs = (url, init) => {
+      if (!init.method || init.method === "GET" || gate) return null;
+      gate = held();
+      return gate.p;
+    };
+    await import("../app.js");
+    await until(() => $("#b-order-now") && !document.getElementById("refresh"));
+    $("#b-order-now").click();
+    await until(() => $('#f-order input[type=radio][value="827"]') && !$("#o-more"));
+    const radio = $('#f-order input[type=radio][value="827"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    $("#b-submit").click();
+    await until(() => $('dialog [data-v="1"]'));
+    $('dialog [data-v="1"]').click();
+    await until(() => gate);
+    check(!!gate, "Bestellung unterwegs");
+    check(document.getElementById("b-back")?.disabled, "„Zurück“ während des Abschickens gesperrt");
+    document.getElementById("b-back").click();
+    await ticks(10);
+    check(!!document.getElementById("f-order"), "Bestellansicht bleibt offen");
+    gate.release(new Response("", { status: 500 }));
+    await until(() => $(".order-result"));
+    check(!!$(".order-result"), `Ergebnis sichtbar: ${$(".order-result")?.textContent.slice(0, 70)}`);
+    check(!document.getElementById("b-back")?.disabled, "„Zurück“ danach wieder frei");
+  }
+  $out.textContent = summary(lines);
+}
+</script>

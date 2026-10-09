@@ -93,10 +93,9 @@ function clientFor(customerNo) {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-/** Konto speichern (neu oder mit aktuellem Namen) und als Reiter wählen. */
+/** Konto speichern (neu oder mit aktuellem Namen) und als Reiter wählen; wirft, wenn das Gerät nicht speichern kann. */
 async function saveCreds(c, name = "") {
-  store.accounts = await upsertAccount({ customerNo: c.customerNo, password: c.password, ...(name ? { name } : {}) })
-    .catch(() => store.accounts);
+  store.accounts = await upsertAccount({ customerNo: c.customerNo, password: c.password, ...(name ? { name } : {}) });
   selectAccount(c.customerNo);
 }
 function selectAccount(customerNo) {
@@ -114,8 +113,8 @@ async function clearCreds() {
   store.active = null;
   store.pushWeekdays = [1, 2, 3, 4, 5];
   clients.clear();
-  await kvClear().catch(() => {});
   store.lastOk = store.lastPushOk = null;
+  await kvClear();
 }
 
 /** Vorname des Kindes: gespeichert beim Konto, sonst aus der laufenden Anmeldung. */
@@ -240,11 +239,21 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false } 
     } catch (e) {
       const isPause = e instanceof IbsPausedError;
       showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}` : e.message, creds,
-        isPause ? { creds, remember } : null, { adding });
+        isPause ? { creds, remember, wantPush: !!perm } : null, { adding });
       return;
     }
-    if (remember) await saveCreds(creds, c.profile?.name || "");
-    else sessionCreds = creds;
+    if (remember) {
+      try {
+        await saveCreds(creds, c.profile?.name || "");
+      } catch (e) {
+        // Etwa im privaten Modus oder bei vollem Speicher: ohne Konto keine Erinnerung.
+        if (adding) return showSetup(`Speichern auf diesem Gerät fehlgeschlagen: ${e.message}`, creds, null, { adding });
+        sessionCreds = creds;
+        pushNotice = `Zugangsdaten konnten auf diesem Gerät nicht gespeichert werden (${e.message}). `
+          + "Angemeldet nur, bis die Seite geschlossen wird; die Erinnerung ist aus.";
+        return showHome();
+      }
+    } else sessionCreds = creds;
     if (perm && remember) {
       busy("Erinnerung wird eingeschaltet …");
       pushNotice = await enableAfterLogin(perm);
@@ -269,8 +278,10 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false } 
   });
   if (retry) {
     document.getElementById("b-resume").onclick = async () => {
+      // Wie beim Abschicken: die Erlaubnis noch im Klick erfragen, vor jedem await.
+      const perm = retry.wantPush && !store.push ? Notification.requestPermission().catch(() => "denied") : null;
       await resume();
-      attempt(retry.creds, retry.remember);
+      attempt(retry.creds, retry.remember, perm);
     };
   }
 }
@@ -937,14 +948,18 @@ async function showOrder(focusDate = null) {
     if (submitting) return;
 
     // Bis zum Neuladen bleibt der Knopf aus: zwei Bestellungen auf einem Warenkorb zählen sich gegenseitig.
+    // „Zurück“ ebenso: die Ergebnismeldung, auch „nicht bestätigt“, steht nur in dieser Ansicht.
     submitting = true;
     document.getElementById("b-submit").disabled = true;
+    document.getElementById("b-back").disabled = true;
     working(true);
     const previouslyInCart = all.flatMap((d) => d.entries.filter((e) => e.quantityInCart === "1" && e.selectable));
     const outcome = await withLogin(creds, (c) =>
       placeOrders(c, changes, { previouslyInCart, reload: (ds) => collect(c, ds, { fresh: true }) }),
     ).catch((e) => ({ kind: "aborted", reason: e.message }));
     working(false);
+    const back = document.getElementById("b-back");
+    if (back) back.disabled = false;
 
     if (outcome.kind === "done") setResult(`Erledigt:\n${outcome.changes.map(describe).join("\n")}`, "ok");
     else if (outcome.kind === "aborted") setResult(`Nichts abgeschickt: ${outcome.reason}`, "error");
@@ -1159,7 +1174,12 @@ function showSettings(message = "") {
     b.onclick = async () => {
       const acc = store.accounts.find((a) => a.customerNo === b.dataset.remove);
       if (!acc || !confirm(`${accountLabel(acc)} (Kd. ${acc.customerNo}) von diesem Gerät entfernen? Seine Termine gehen mit.`)) return;
-      store.accounts = await removeAccount(acc.customerNo);
+      try {
+        store.accounts = await removeAccount(acc.customerNo);
+      } catch (e) {
+        store.accounts = await loadAccounts().catch(() => store.accounts);
+        return showSettings(`Entfernen fehlgeschlagen: ${e.message}`);
+      }
       clients.delete(acc.customerNo);
       if (store.active === acc.customerNo) selectAccount(store.accounts[0].customerNo);
       showSettings();
@@ -1168,7 +1188,8 @@ function showSettings(message = "") {
   document.getElementById("b-logout").onclick = async () => {
     if (!confirm("Alles auf diesem Gerät löschen? Zugangsdaten, Sdui, Einstellungen und Erinnerung.")) return;
     await pushDisable().catch(() => {});
-    await clearCreds();
+    // Ein Fehler wird nur gemeldet: nach freezeWrites kann die Seite ohnehin nichts mehr ablegen.
+    await clearCreds().catch((e) => alert(`Löschen fehlgeschlagen, auf dem Gerät kann noch etwas liegen: ${e.message}`));
     // Neu laden beendet alle noch laufenden Abfragen dieser Seite.
     location.replace(location.pathname);
   };
@@ -1290,6 +1311,7 @@ async function wireSduiBox(message = "") {
 
 function sduiSetupForm(message = "") {
   const box = document.getElementById("sdui-box");
+  if (!box) return; // Einstellungen inzwischen verlassen
   box.innerHTML = `<div class="group-pad">
     ${message ? `<p class="small error">${esc(message)}</p>` : ""}
     <p class="small muted u-m0">${SDUI_NOTE}</p>
@@ -1323,7 +1345,7 @@ function sduiSetupForm(message = "") {
       const plan = await Sdui.cachedPlan({ force: true });
       wireSduiBox(plan?.error || "");
     } catch (e) {
-      sduiSetupForm(e.message);
+      if (box.isConnected) sduiSetupForm(e.message);
     }
   };
 }
@@ -1331,6 +1353,7 @@ function sduiSetupForm(message = "") {
 function chooseChild(kids) {
   return new Promise((resolve) => {
     const box = document.getElementById("sdui-box");
+    if (!box) return resolve(null);
     box.innerHTML = `<div class="group-pad"><p class="small muted u-mb6">Für welches Kind?</p>
       ${kids.map((k, i) => `<button class="text kid u-block u-pl0" data-i="${i}">${esc(k.name)}</button>`).join("")}
       <button class="text u-pl0" id="b-kid-cancel">Abbrechen</button></div>`;
@@ -1407,7 +1430,8 @@ function wirePushBox(message = "") {
   if (test) test.onclick = () => runPushTest(test);
   const adm = document.getElementById("b-push-admin");
   if (adm) adm.onclick = guard(async () => {
-    await api("POST", `/subscriptions/${store.push.id}/admin`, null, store.push.secret,
+    const p = await currentPush();
+    await api("POST", `/subscriptions/${p.id}/admin`, null, p.secret,
       { "X-Admin-Key": document.getElementById("admin-key").value });
     alert("Dieses Gerät ist jetzt Betreiber-Gerät.");
   });
@@ -1417,8 +1441,12 @@ function wirePushBox(message = "") {
   });
   // Ohne Abo merkt sich das Feld nur die Wahl fürs Einschalten.
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
-  for (const b of box.querySelectorAll(".wd-pick .wd-btn")) {
+  const wdButtons = box.querySelectorAll(".wd-pick .wd-btn");
+  for (const b of wdButtons) {
     b.onclick = guard(async () => {
+      // Jeder Tipp rechnet vom gespeicherten Stand aus: bis der Server geantwortet hat (danach
+      // zeichnet guard neu, bei Fehler mit dem alten Stand), nimmt die Leiste keinen weiteren an.
+      for (const x of wdButtons) x.disabled = true;
       const n = Number(b.dataset.wd);
       const next = store.pushWeekdays.includes(n) ? store.pushWeekdays.filter((x) => x !== n) : [...store.pushWeekdays, n].sort();
       if (!next.length) throw new Error("Mindestens ein Tag muss bleiben. Ganz aus geht mit dem Schalter oben.");
@@ -1435,7 +1463,10 @@ const b64ToBytes = (b64) => {
 async function api(method, path, body, secret, extra = {}) {
   const headers = { "Content-Type": "application/json", ...extra };
   if (secret) headers.Authorization = `Bearer ${secret}`;
-  const r = await fetch(`/api${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  // Mit Frist: solange eine Änderung läuft, sind z. B. die Wochentage gesperrt.
+  const r = await fetch(`/api${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(20000) })
+    .catch((e) => { throw new Error(e?.name === "TimeoutError" ? "Server antwortet nicht" : `Server nicht erreichbar: ${e.message}`); });
   if (!r.ok) throw new Error(`Server: HTTP ${r.status}`);
   return r.json().catch(() => ({}));
 }
@@ -1463,17 +1494,25 @@ async function pushEnable(time) {
   await kvSet("push", store.push);
 }
 
+/** Abo frisch aus dem Speicher: der Service Worker legt es bei pushsubscriptionchange womöglich neu an. */
+async function currentPush() {
+  store.push = (await kvGet("push")) ?? store.push;
+  return store.push;
+}
+
 /** Tage merken (auch für den Service Worker) und, wenn die Erinnerung läuft, dem Server melden. */
 async function pushSetWeekdays(weekdays) {
-  if (store.push) await api("PUT", `/subscriptions/${store.push.id}`, { weekdays }, store.push.secret);
+  const p = await currentPush();
+  if (p) await api("PUT", `/subscriptions/${p.id}`, { weekdays }, p.secret);
   store.pushWeekdays = weekdays;
   await kvSet("pushWeekdays", weekdays);
 }
 
 async function pushSetTime(time) {
   if (!/^\d{2}:\d{2}$/.test(time)) return;
-  await api("PUT", `/subscriptions/${store.push.id}`, { time }, store.push.secret);
-  store.push = { ...store.push, time };
+  const p = await currentPush();
+  await api("PUT", `/subscriptions/${p.id}`, { time }, p.secret);
+  store.push = { ...p, time };
   await kvSet("push", store.push);
 }
 
@@ -1513,11 +1552,12 @@ async function runPushTest(btn) {
 }
 
 async function pushTest() {
-  await api("POST", `/subscriptions/${store.push.id}/test`, null, store.push.secret);
+  const p = await currentPush();
+  await api("POST", `/subscriptions/${p.id}/test`, null, p.secret);
 }
 
 async function pushDisable() {
-  const p = store.push;
+  const p = await currentPush();
   store.push = null;
   await kvDel("push");
   if (p) await api("DELETE", `/subscriptions/${p.id}`, null, p.secret).catch(() => {});
