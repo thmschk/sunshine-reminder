@@ -7,8 +7,9 @@ steht im README unter „Architektur“.
   Arbeitskopie                          GitHub                       Hetzner Cloud: Server „privat“
   ~/cloud_privat/Apps/             thmschk/sunshine-reminder         Debian 13, CPX12
   ibs-order-watch  ── git push ──▶ (öffentlich, main)
-        │                                                            /srv/caddy     Caddy (Docker)
-        └──────── server/deploy.sh (rsync + ssh) ─────────────────▶ /srv/sunshine  Web-Dateien + Push-Dienst (Docker)
+        │                                 │ Tarball des Commits      /srv/caddy     Caddy (Docker)
+        │                                 └────────────────────────▶ /srv/sunshine  Web-Dateien + Push-Dienst (Docker)
+        └──────── server/deploy.sh (ssh: Commit von main) ─────────▶ (lädt und spielt auf)
 
   Browser/Handy ──HTTPS──▶ sunshine.thomschke.info (DNS bei Variomedia) ──▶ Caddy
        │                                                                      ├─ statische Seite  /srv/sunshine/web
@@ -30,7 +31,9 @@ steht im README unter „Architektur“.
 
 - Ein Repository für alles: `thmschk/sunshine-reminder` mit `ibswatch/` (Python-Variante),
   `web/` (Web-App), `server/` (Push-Dienst und Konfiguration), `docs/`.
-- Auf dem Server liegt **kein** Git-Klon. `server/deploy.sh` kopiert per `rsync` aus der Arbeitskopie.
+- Live ist `main` auf GitHub. Auf dem Server liegt kein Git-Klon (und kein Git): `server/deploy.sh` lässt ihn
+  den Commit als Tarball von GitHub laden. Uncommittetes oder Ungepushtes geht so nie live. Welcher Commit
+  läuft, steht in `/srv/sunshine/DEPLOYED`.
 
 ## Was auf dem Server läuft
 
@@ -51,10 +54,11 @@ Caddy schreibt keine Zugriffs- und keine Fehlerprotokolle einzelner Anfragen
 ## Aufspielen
 
 ```sh
-server/deploy.sh
+server/deploy.sh            # Stand von main auf GitHub
+server/deploy.sh feature/x  # anderer gepushter Branch oder ein voller Commit-Hash
 ```
 
-Kopiert Web-Dateien und Push-Dienst, baut den Push-Container neu, kopiert die Caddy-Site und lädt Caddy
+Lädt den Commit auf dem Server von GitHub, kopiert daraus Web-Dateien und Push-Dienst, baut den Push-Container neu, kopiert die Caddy-Site und lädt Caddy
 neu, bis die geladene Konfiguration (Admin-API `localhost:2019/config/`) der übersetzten Datei
 (`caddy adapt`) entspricht — höchstens dreimal, der erste Reload griff wiederholt nicht. Danach muss die
 Seite antworten. Beide Docker-Stacks haben `restart: unless-stopped`.

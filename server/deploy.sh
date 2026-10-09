@@ -1,17 +1,39 @@
 #!/usr/bin/env bash
-# Spielt die Web-App auf den Server (SSH-Alias "privat") und lädt Caddy neu.
+# Spielt einen gepushten Stand von GitHub auf den Server (SSH-Alias "privat") und lädt Caddy neu.
+# ./server/deploy.sh [branch|commit], Standard main. Der Server lädt den Commit selbst als
+# Tarball von GitHub; was nur lokal liegt (uncommittet, ungepusht), geht so nicht live.
 # Caddy läuft als gemeinsamer Proxy in /srv/caddy; diese App liefert nur ihre
 # statischen Dateien nach /srv/sunshine/web und ihre Site-Datei.
 set -euo pipefail
 HOST="${HOST:-privat}"
-cd "$(dirname "$0")/.."
+REF="${1:-main}"
+REPO="https://github.com/thmschk/sunshine-reminder"
 
-rsync -a --delete --exclude tests/ web/ "$HOST:/srv/sunshine/web/"
-rsync -a --delete server/push/ "$HOST:/srv/sunshine/push/"
-scp -q server/compose.yaml "$HOST:/srv/sunshine/compose.yaml"
+if [[ $REF =~ ^[0-9a-f]{40}$ ]]; then
+  SHA=$REF
+else
+  SHA=$(git ls-remote "$REPO" "refs/heads/$REF" | cut -f1)
+  [[ -n $SHA ]] || { echo "FEHLER: Branch $REF gibt es auf GitHub nicht" >&2; exit 1; }
+fi
+LOCAL=$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || true)
+[[ $LOCAL == "$SHA" ]] || echo "Hinweis: lokal ist ${LOCAL:0:7} ausgecheckt, live geht ${SHA:0:7} ($REF)."
+
+ssh "$HOST" "SHA=$SHA REPO=$REPO bash -s" <<'EOF'
+set -euo pipefail
+src=$(mktemp -d)
+trap 'rm -rf "$src"' EXIT
+curl -sfL "$REPO/archive/$SHA.tar.gz" | tar -xz --no-same-owner -C "$src" --strip-components=1
+[[ -f $src/web/index.html && -f $src/server/compose.yaml ]] || { echo "FEHLER: Tarball von $SHA unvollständig" >&2; exit 1; }
+rsync -a --delete --exclude tests/ "$src/web/" /srv/sunshine/web/
+rsync -a --delete "$src/server/push/" /srv/sunshine/push/
+cp "$src/server/compose.yaml" /srv/sunshine/compose.yaml
+cp "$src/server/sunshine.caddy" /srv/caddy/sites/sunshine.caddy
 # data/ (VAPID-Schlüssel, Abos) bleibt auf dem Server und gehört dem Container-User.
-ssh "$HOST" 'mkdir -p /srv/sunshine/data && chown 1000:1000 /srv/sunshine/data && chmod 700 /srv/sunshine/data && cd /srv/sunshine && docker compose up -d --build --quiet-pull 2>&1 | grep -vE "^ *(#|=>)" | tail -3' 
-scp -q server/sunshine.caddy "$HOST:/srv/caddy/sites/sunshine.caddy"
+mkdir -p /srv/sunshine/data && chown 1000:1000 /srv/sunshine/data && chmod 700 /srv/sunshine/data
+cd /srv/sunshine
+docker compose up -d --build --quiet-pull 2>&1 | grep -vE "^ *(#|=>)" | tail -3
+echo "$SHA" > /srv/sunshine/DEPLOYED
+EOF
 
 ssh "$HOST" bash -s <<'EOF'
 set -euo pipefail
@@ -39,4 +61,4 @@ echo "FEHLER: geladene Caddy-Konfiguration weicht von /etc/caddy/Caddyfile ab" >
 exit 1
 EOF
 curl -sf -o /dev/null https://sunshine.thomschke.info/ || { echo "FEHLER: Seite antwortet nicht" >&2; exit 1; }
-echo "deployt: https://sunshine.thomschke.info/"
+echo "deployt: ${SHA:0:7} ($REF) auf https://sunshine.thomschke.info/"
