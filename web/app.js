@@ -108,7 +108,7 @@ function selectAccount(customerNo) {
  * Noch laufende Abfragen dürfen danach nichts mehr ablegen; der Aufrufer lädt die Seite neu.
  */
 async function clearCreds() {
-  viewSeq++;
+  nextView();
   freezeWrites();
   store.accounts = [];
   store.active = null;
@@ -167,6 +167,13 @@ function busy(text) {
  * eine andere Ansicht offen ist, darf sie danach nicht mehr zeichnen.
  */
 let viewSeq = 0;
+/** Bricht die IBS5-Abfragen der bisherigen Ansicht ab (⟳, Reiterwechsel, andere Ansicht) — vor der nächsten Anfrage. */
+let viewAbort = new AbortController();
+function nextView() {
+  viewAbort.abort();
+  viewAbort = new AbortController();
+  return ++viewSeq;
+}
 /** Zuletzt gezeichnete Startseite; der Ferien-Dialog überlebt das zweite Zeichnen und zeichnet danach damit neu. */
 let homeState = null;
 
@@ -176,7 +183,7 @@ let homeState = null;
  * (die Erinnerung prüft nur gespeicherte Konten).
  */
 function showSetup(message = "", prefill = {}, retry = null, { adding = false } = {}) {
-  viewSeq++;
+  nextView();
   chrome(false);
   if (adding) $header.hidden = true;
   $app.innerHTML = adding ? `
@@ -381,7 +388,8 @@ const currentCreds = () => loadCreds() ?? sessionCreds;
 async function showHome(fresh = false) {
   const creds = currentCreds();
   if (!creds) return showSetup();
-  const my = ++viewSeq;
+  const my = nextView();
+  const { signal } = viewAbort;
   chrome(true);
 
   const today = todayBerlin();
@@ -403,7 +411,7 @@ async function showHome(fresh = false) {
 
   let days;
   try {
-    days = await withLogin(creds, (c) => collect(c, dates, { fresh, onProgress: setProgress, history: true }));
+    days = await withLogin(creds, (c) => collect(c, dates, { fresh, onProgress: setProgress, history: true, signal }));
   } catch (e) {
     if (my !== viewSeq) return;
     if (e instanceof IbsAuthError && !client.token) {
@@ -763,7 +771,8 @@ async function showOrder(focusDate = null) {
   const creds = currentCreds();
   if (!creds) return showSetup();
   const client = clientFor(creds.customerNo);
-  const my = ++viewSeq;
+  const my = nextView();
+  const { signal } = viewAbort;
   chrome(false);
   $header.hidden = true; // wie OrderScreen der App: nur „Bestellen“ und „Zurück“
   // Bei mehreren Kindern steht im Kopf, für wen bestellt wird.
@@ -839,7 +848,7 @@ async function showOrder(focusDate = null) {
     const $more = document.getElementById("o-more");
     const today = todayBerlin();
     const monday = addDays(today, 1 - weekdayNo(today));
-    const get = (dates) => withLogin(creds, (c) => collect(c, dates));
+    const get = (dates) => withLogin(creds, (c) => collect(c, dates, { signal }));
     const offered = (ds) => ds.some((d) => d.state !== OrderState.NO_OFFER);
     const anyHoliday = (ds) => ds.some((d) => holidayOn(ferien, d));
     days = [];
@@ -1112,7 +1121,7 @@ function accountRows(creds) {
 
 /** Einstellungen im Android-Stil: Bereiche ohne Karten, Werte rechts, Ändern per Antippen. */
 function showSettings(message = "") {
-  viewSeq++;
+  nextView();
   const creds = currentCreds();
   chrome(false);
   $header.hidden = true;

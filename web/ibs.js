@@ -14,6 +14,26 @@ export const WEB_URL = "https://ibs.sunshine-catering.de/IBS5";
 /** Frist je Anfrage an IBS5. */
 const REQUEST_TIMEOUT_MS = 15000;
 
+/**
+ * Zu viele Anfragen in kurzer Zeit quittiert IBS5 mit einer IP-Sperre (HTTP 406 auf
+ * alles). Deshalb startet in diesem Kontext (Seite oder Service Worker) jede Anfrage
+ * frühestens gapMs (+ Zufall) nach der vorigen — über alle Clients, Kinder und
+ * Abfragearten hinweg, auch Login und Bestellen. Der Zufall verhindert Gleichtakt
+ * mehrerer Geräte hinter derselben IP. Tests setzen die Werte auf 0.
+ */
+export const pacing = { gapMs: 400, jitterMs: 300 };
+let paceChain = Promise.resolve();
+let lastStart = 0;
+function pace() {
+  const turn = paceChain.then(async () => {
+    const wait = lastStart + pacing.gapMs + Math.floor(Math.random() * pacing.jitterMs) - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastStart = Date.now();
+  });
+  paceChain = turn.catch(() => {});
+  return turn;
+}
+
 export class IbsError extends Error {}
 /** Login abgelehnt, oder der Token ist nicht (mehr) gültig. */
 export class IbsAuthError extends IbsError {}
@@ -186,6 +206,7 @@ export class IbsClient {
     // Mit Token schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
     // nicht, sie zwischenzuspeichern): bei IBS5 kommen zwei Anfragen an.
     await this.hooks.before?.({ path, weight: auth ? 2 : 1 });
+    await pace();
     let resp;
     try {
       resp = await fetch(this.base + path, {
@@ -541,8 +562,8 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
  * der Bestellhistorie; nur für die Übersicht, denn solche Tage tragen keine
  * Bestell-IDs.
  */
-export async function collect(client, dates, { fresh = false, onProgress, history = false } = {}) {
-  const byDay = () => (history ? collectByHistory : collectByDay)(client, dates, fresh, onProgress);
+export async function collect(client, dates, { fresh = false, onProgress, history = false, signal } = {}) {
+  const byDay = () => (history ? collectByHistory : collectByDay)(client, dates, fresh, onProgress, signal);
   if (client.dayView) return byDay();
   const weeks = new Map();
   for (const d of dates) {
@@ -554,6 +575,7 @@ export async function collect(client, dates, { fresh = false, onProgress, histor
   const result = [];
   for (const key of [...weeks.keys()].sort()) {
     const { y, w, dates: ds } = weeks.get(key);
+    signal?.throwIfAborted();
     const plan = parseWeekplan(await client.weekplan(y, w));
     if (plan.view === "day") {
       client.dayView = true;
@@ -568,11 +590,8 @@ export async function collect(client, dates, { fresh = false, onProgress, histor
   return result.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// Die Tagesansicht kostet eine Anfrage je Tag. Zu viele in kurzer Zeit quittiert
-// IBS5 mit einer IP-Sperre (HTTP 406 auf alles, auch die eigene Startseite) —
-// deshalb strikt nacheinander, mit Pause, und zwischengespeichert.
-const DAY_GAP_MS = 400;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Die Tagesansicht kostet eine Anfrage je Tag: strikt nacheinander (Abstand siehe
+// pacing), abbrechbar und zwischengespeichert.
 
 // Wie lange ein geladener Tag gilt: nach Bestellschluss ändert er sich nicht mehr,
 // ohne Angebot bekommt er vielleicht bald einen Speiseplan, alles andere ändert
@@ -617,7 +636,7 @@ function saveDayCache(client) {
   return Promise.resolve(client.dayStore.save({ customerNo: client.dayCache.customerNo, rows })).catch(() => {});
 }
 
-async function collectByDay(client, dates, fresh, onProgress) {
+async function collectByDay(client, dates, fresh, onProgress, signal) {
   const cache = await dayCache(client);
   const out = [];
   let fetched = 0;
@@ -628,10 +647,8 @@ async function collectByDay(client, dates, fresh, onProgress) {
       out.push(hit.day);
       continue;
     }
-    // Mit etwas Zufall, damit Geräte hinter derselben IP nicht im Gleichtakt fragen.
-    const gap = DAY_GAP_MS + Math.floor(Math.random() * 300);
-    if (client.lastDayFetch) await sleep(Math.max(0, client.lastDayFetch + gap - Date.now()));
-    client.lastDayFetch = Date.now();
+    // Eine überholte Abfrage (⟳, Reiterwechsel, andere Ansicht) fragt nicht weiter.
+    signal?.throwIfAborted();
     const plan = parseWeekplan(await client.dayplan(d));
     const other = [...plan.days.keys()].find((k) => k !== d);
     if (other) throw new IbsError(`Angefragt war ${De.short(d)}, geliefert wurde ${De.short(other)}`);
@@ -653,15 +670,16 @@ const HISTORY_DAYS = 90;
  * (offen, zu spät, kein Angebot unterscheidet nur sie). Ist die Historie nicht
  * lesbar, wird wie bisher je Tag geladen.
  */
-async function collectByHistory(client, dates, fresh, onProgress) {
+async function collectByHistory(client, dates, fresh, onProgress, signal) {
   if (!dates.length) return [];
+  signal?.throwIfAborted();
   const today = todayBerlin();
   let ordered;
   try {
     ordered = parseOrderHistory(await client.orderHistory(addDays(today, -HISTORY_DAYS), addDays(today, 1)));
   } catch (e) {
     if (!(e instanceof ParserError)) throw e;
-    return collectByDay(client, dates, fresh, onProgress);
+    return collectByDay(client, dates, fresh, onProgress, signal);
   }
   // Zwischengespeicherte Tage, die der Historie widersprechen (anderswo bestellt
   // oder abbestellt), sind veraltet.
@@ -673,7 +691,7 @@ async function collectByHistory(client, dates, fresh, onProgress) {
   if (dropped) await saveDayCache(client);
   const known = dates.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
   const progress = onProgress && ((done) => onProgress(known.length + done, dates.length));
-  const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, progress);
+  const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, progress, signal);
   return [...known, ...rest].sort((a, b) => a.date.localeCompare(b.date));
 }
 

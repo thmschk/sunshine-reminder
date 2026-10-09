@@ -682,6 +682,33 @@ await test("IBS5 antwortet nicht: Frist gesetzt, eigene Meldung, kein zweiter Lo
   eq([!!err, err?.maybeAuth, /antwortet nicht/.test(err?.message || "")], [true, false, true], `Fehler: ${err?.message}`);
 });
 
+await test("Taktung: Anfragen aller Clients nacheinander mit Abstand, auch gleichzeitig gestartete", async () => {
+  const { IbsClient, pacing } = await import("../ibs.js");
+  const old = { ...pacing };
+  Object.assign(pacing, { gapMs: 80, jitterMs: 0 });
+  const starts = [];
+  const realFetch = window.fetch;
+  window.fetch = async () => { starts.push(performance.now()); return new Response('<div id="weekplan"></div>'); };
+  try {
+    const [a, b] = [new IbsClient(), new IbsClient()];
+    a.token = b.token = "t";
+    await Promise.all([a.weekplan(2026, 45), b.weekplan(2026, 45), a.dayplan("2026-11-02")]);
+  } finally {
+    window.fetch = realFetch;
+    Object.assign(pacing, old);
+  }
+  const gaps = starts.slice(1).map((t, i) => Math.round(t - starts[i]));
+  eq([starts.length, gaps.every((g) => g >= 75)], [3, true], `Abstände ${gaps} ms`);
+});
+await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", async () => {
+  const asked = [];
+  const ctl = new AbortController();
+  const fake = { customerNo: "1000", dayView: true, async dayplan(d) { asked.push(d); ctl.abort(); return emptyDay; } };
+  let err = null;
+  try { await collect(fake, ["2026-11-02", "2026-11-03", "2026-11-04"], { fresh: true, signal: ctl.signal }); } catch (e) { err = e; }
+  eq([asked.length, err?.name], [1, "AbortError"]);
+});
+
 const failed = results.filter((r) => r.startsWith("FAIL")).length;
 document.getElementById("out").textContent = `${results.join("\n")}\n\n${failed ? `${failed} FEHLGESCHLAGEN` : "ALLE OK"}`;
 </script>

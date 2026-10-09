@@ -12,7 +12,7 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v53";
+const VERSION = "v54";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;

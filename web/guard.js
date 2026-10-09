@@ -11,7 +11,7 @@
 // Seite und Service Worker teilen den Zustand über IndexedDB.
 
 import { IbsError } from "./ibs.js";
-import { kvDel, kvGet, kvSet } from "./idb.js";
+import { kvDel, kvGet, kvSet, kvUpdate } from "./idb.js";
 
 const PAUSE_MS = 3 * 3600 * 1000;
 const SILENT_PAUSE_MS = 15 * 60 * 1000;
@@ -62,14 +62,17 @@ export const guardHooks = {
     const p = await paused();
     if (p) throw new IbsPausedError(p.until, p.reason);
     const now = Date.now();
-    const recent = ((await kvGet("ibsBudget")) || []).filter((t) => now - t < 3600 * 1000);
-    // Volles Kontingent ist keine Sperre: nur warten, bis genug aus der Stunde gefallen ist.
-    if (recent.length + weight > HOUR_CAP) {
-      const until = recent.sort((a, b) => a - b)[recent.length + weight - HOUR_CAP - 1] + 3600 * 1000;
-      throw new IbsPausedError(until, `mehr als ${HOUR_CAP} Anfragen in einer Stunde`);
-    }
-    for (let i = 0; i < weight; i++) recent.push(now);
-    await kvSet("ibsBudget", recent);
+    // In einer Transaktion: Seite und Service Worker zählen gleichzeitig, keiner darf den anderen überschreiben.
+    const full = await kvUpdate("ibsBudget", (list) => {
+      const recent = (list || []).filter((t) => now - t < 3600 * 1000);
+      // Volles Kontingent ist keine Sperre: nur warten, bis genug aus der Stunde gefallen ist.
+      if (recent.length + weight > HOUR_CAP) {
+        return { result: recent.sort((a, b) => a - b)[recent.length + weight - HOUR_CAP - 1] + 3600 * 1000 };
+      }
+      for (let i = 0; i < weight; i++) recent.push(now);
+      return { value: recent };
+    }).catch(() => null); // ohne IndexedDB (privater Modus) nicht zählen statt gar nicht fragen
+    if (full) throw new IbsPausedError(full, `mehr als ${HOUR_CAP} Anfragen in einer Stunde`);
   },
   async failed({ path, status, network }) {
     // Ohne Netz ist es keine Sperre; dann nichts pausieren.

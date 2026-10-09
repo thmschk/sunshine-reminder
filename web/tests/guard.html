@@ -98,6 +98,12 @@ try {
   try { await c3.weekplan(2026, 41); } catch { /* */ }
   check("HTTP 403 bei Abruf pausiert nicht", !(await paused()));
 
+  // Stundenbudget: gleichzeitige Zählungen (Seite, Service Worker, mehrere Kinder) gehen nicht verloren.
+  await reset();
+  await Promise.all(Array.from({ length: 20 }, () => guardHooks.before({ weight: 1 })));
+  const counted = ((await kvGet("ibsBudget")) || []).length;
+  check("gleichzeitig gezählt", counted === 20, `${counted} von 20`);
+
   // 4. Stundenbudget.
   await reset();
   const oldest = Date.now() - 50 * 60 * 1000;
