@@ -473,6 +473,14 @@ function historyDay(date, lines) {
 
 export const DEFAULT_CHECK = Object.freeze({ daysAhead: 9, weekdays: [1, 2, 3, 4, 5], includeToday: false });
 
+/**
+ * Vorwarnzeit in Tagen, Standard 7. Unter 3 käme ein Montag erst am Freitag
+ * davor in die Prüfung, oft nach dem Bestellschluss.
+ */
+export const DAYS_AHEAD = Object.freeze({ def: 7, min: 3, max: 14 });
+/** Gespeicherte Vorwarnzeit, in die Grenzen gezogen; ältere Werte unter 3 werden 3. */
+export const clampDaysAhead = (n) => (Number.isInteger(n) ? Math.min(DAYS_AHEAD.max, Math.max(DAYS_AHEAD.min, n)) : DAYS_AHEAD.def);
+
 /** Erster Tag nach today, dessen Wochentag (1 = Mo … 7 = So) in weekdays liegt. */
 export function nextWeekday(today, weekdays) {
   for (let i = 1; i <= 7; i++) {

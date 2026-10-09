@@ -78,6 +78,12 @@ Abos mit `is_admin = 1` bekommen die Alarme der Selbstprüfung. Ein Gerät marki
 `…/#betreiber` → ⚙ → Erinnerung mit dem Schlüssel aus `ADMIN_KEY`. Austauschen: neuen Wert in `.env`,
 dann `docker compose up -d`.
 
+## Ferientermine
+
+`web/ferien.json` (Berliner Schulferien) erzeugt `python3 tools/ferien.py` aus der OpenHolidaysAPI, bis
+zum Ende der letzten bekannten Sommerferien. Reicht die Datei keine 180 Tage mehr, meldet die Selbstprüfung
+das; dann das Skript laufen lassen, Diff ansehen, committen und `server/deploy.sh`.
+
 ## Tests
 
 | | |

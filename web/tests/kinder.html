@@ -27,6 +27,7 @@ window.fetch = async (url, init = {}) => {
     const no = new URLSearchParams(init.body).get("identifierValue");
     return new Response(JSON.stringify({ token: `tok-${no}`, name1: NAMES[no] }));
   }
+  if (url.endsWith("ferien.json")) return new Response("", { status: 404 });
   const auth = new Headers(init.headers).get("Authorization") || "";
   const no = auth.replace(/^Bearer tok-/, "");
   seen.push(no);

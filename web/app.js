@@ -1,5 +1,5 @@
 import {
-  DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState,
+  DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, clampDaysAhead,
   addDays, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
@@ -10,6 +10,7 @@ import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks, resume } from "./guard.js";
 import { login, withSession } from "./session.js";
 import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
+import { holidayOn, loadHolidays, loadMealPref, nextHoliday, rangeText, saveMealPref, skipDates } from "./holidays.js";
 
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
 // diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
@@ -19,8 +20,6 @@ const ORDER_WEEKS = 8;
 /** So viele Tage zeigt die Liste auf der Startseite (wie DAY_LIST_LENGTH der App). */
 const DAY_LIST_LENGTH = 5;
 
-// Wie SettingsStore der Android-App: Standard 7, 1–14 Tage; Prüfzeit Standard 12:00.
-const DAYS_AHEAD = { def: 7, min: 1, max: 14 };
 // 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
 const DEFAULT_PUSH_TIME = "17:00";
 // accounts: je Kind ein IBS5-Konto (siehe accounts.js), active: Kundennummer des gewählten Reiters.
@@ -41,7 +40,7 @@ async function loadStore() {
   store.accounts = await loadAccounts().catch(() => []);
   store.active = (await loadActive()) || null;
   const n = await kvGet("daysAhead");
-  store.daysAhead = n >= DAYS_AHEAD.min && n <= DAYS_AHEAD.max ? n : DAYS_AHEAD.def;
+  store.daysAhead = clampDaysAhead(n);
   store.push = (await kvGet("push")) || null;
   const wd = await kvGet("pushWeekdays");
   if (Array.isArray(wd) && wd.length) store.pushWeekdays = wd;
@@ -455,9 +454,12 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const strip = sdui ? stripMaker(sdui.lessons, scfg?.subjects || []) : null;
   const today = todayBerlin();
   const events = eventsFor(await loadEvents(today).catch(() => []), creds.customerNo);
+  const ferien = await loadHolidays();
+  const pref = await loadMealPref(creds.customerNo);
   // An Tagen ohne Schulessen ist „nicht bestellt“ gewollt: kein „offen“ in der Statuskarte.
   const noMeal = noMealDates(events);
-  const relevant = days.filter((d) => !noMeal.has(d.date));
+  const skip = skipDates(ferien, pref, days.map((d) => d.date));
+  const relevant = days.filter((d) => !noMeal.has(d.date) && !skip.has(d.date));
   if (my !== viewSeq) return;
 
   $app.innerHTML = `
@@ -466,12 +468,14 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
     ${pushNotice ? `<p class="small error">${esc(pushNotice)}</p>` : ""}
     ${wantInstall ? installTip() : ""}
     ${heroCard(relevant, kidName(creds))}
+    ${ferienCard(ferien, pref, today, creds)}
     ${eventsCard(events, days, today)}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
     ${days.length ? `
       <div class="section">DIE NÄCHSTEN TAGE</div>
       ${byWeek(days.slice(0, DAY_LIST_LENGTH)).map((week) => `
-        <ul class="days">${week.map((d) => dayRow(d, strip, events.filter((e) => e.date === d.date))).join("")}</ul>`).join("")}` : ""}
+        <ul class="days">${week.map((d) => dayRow(d, strip, events.filter((e) => e.date === d.date),
+          holidayOn(ferien, d.date), skip.has(d.date))).join("")}</ul>`).join("")}` : ""}
     <div class="center"><button id="b-all" class="text">Alle bestellbaren Tage →</button></div>`;
 
   wireInstallTip();
@@ -487,6 +491,12 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const now = document.getElementById("b-order-now");
   if (now) now.onclick = () => showOrder(relevant.find((d) => d.isActionable).date);
   for (const b of $app.querySelectorAll("[data-cancel]")) b.onclick = () => showOrder(b.dataset.cancel);
+  for (const b of $app.querySelectorAll("[data-ferien]")) {
+    b.onclick = async () => {
+      await saveMealPref(creds.customerNo, b.dataset.ferien === "1").catch(() => {});
+      renderHome(viewSeq, creds, days, { staleAt });
+    };
+  }
 
   if (!staleAt) await kvSet("lastOk", { at: Date.now(), via: "app" }).catch(() => {});
   store.lastPushOk = await kvGet("lastPushOk").catch(() => null);
@@ -630,8 +640,24 @@ function eventsCard(events, days, today) {
   }).join("")}</div>`;
 }
 
-/** Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts; eigene Termine im Status. */
-function dayRow(d, strip = null, dayEvents = []) {
+/** Vor den nächsten Ferien einmal je Kind fragen, ob dort bestellt und erinnert werden soll. */
+function ferienCard(ferien, pref, today, creds) {
+  if (pref != null) return "";
+  const h = nextHoliday(ferien, today);
+  if (!h) return "";
+  const name = kidName(creds);
+  return `<div class="card events ferien-ask">
+    <p>${esc(h.name)} ${esc(rangeText(h))}: Soll ${name ? `für ${esc(name)} ` : ""}in den Ferien Essen bestellt und daran erinnert werden?</p>
+    <div class="row"><button class="text" data-ferien="1">Ja, erinnern</button><button class="text" data-ferien="0">Nein, kein Essen</button></div>
+    <p class="small muted">Bis zur Antwort wird auch in den Ferien erinnert. Ändern unter ⚙ → Ferien.</p>
+  </div>`;
+}
+
+/**
+ * Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts;
+ * eigene Termine und Ferien im Status. skip: Ferientag eines Kindes ohne Ferienessen.
+ */
+function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false) {
   let dish = d.state === OrderState.NOT_ORDERED ? "Gericht wählen"
     : d.state === OrderState.DEADLINE_PASSED ? "nicht bestellt"
     : d.orderedItems[0] || "—";
@@ -640,15 +666,19 @@ function dayRow(d, strip = null, dayEvents = []) {
   let [sym, symCls] = d.state === OrderState.ORDERED ? ["✓", "ok"] : d.isActionable ? ["!", "open"] : ["✕", "bad"];
   const titles = dayEvents.map((e) => e.title).join(", ");
   if (dayEvents.some((e) => e.noMeal)) {
-    if (d.state === OrderState.ORDERED) [sub, subCls, sym, symCls] = [`${titles} · bestellt, abbestellen?`, "open", "!", "open"];
-    else [dish, sub, subCls, sym, symCls] = ["kein Schulessen", titles, "", "✓", "ok"];
-  } else if (titles) sub = `${titles} · ${sub}`;
+    if (d.state === OrderState.ORDERED) [sub, subCls, sym, symCls] = ["bestellt, abbestellen?", "open", "!", "open"];
+    else [dish, sub, subCls, sym, symCls] = ["kein Schulessen", "", "", "✓", "ok"];
+  } else if (holiday && (d.state === OrderState.NO_OFFER || (skip && (d.isActionable || d.state === OrderState.DEADLINE_PASSED)))) {
+    [dish, sub, subCls, sym, symCls] = [holiday, d.state === OrderState.NO_OFFER ? "kein Angebot" : "kein Essen in den Ferien", "", "✓", "ok"];
+  } else if (holiday) sub = `${holiday} · ${sub}`;
+  // Eigene Termine vorn in der Statuszeile, farblich abgehoben.
+  const subHtml = [titles && `<span class="ev">${esc(titles)}</span>`, sub && esc(sub)].filter(Boolean).join(" · ");
   return `
     <li data-date="${d.date}">
       <div class="date"><div class="wd">${esc(De.chip(d.date).slice(0, 2))}</div><div class="dom">${Number(d.date.slice(8, 10))}</div></div>
       <div class="text"><div class="dish">${esc(dish)}</div>${
         // Mit Zeitleiste sagt der Haken rechts schon „bestellt“, wie in der App.
-        timeline && d.state === OrderState.ORDERED && !titles ? "" : `<div class="sub ${subCls}">${esc(sub)}</div>`}${timeline}</div>
+        timeline && d.state === OrderState.ORDERED && !titles ? "" : `<div class="sub ${subCls}">${subHtml}</div>`}${timeline}</div>
       <div class="sym ${symCls}">${sym}</div>
     </li>`;
 }
@@ -691,6 +721,7 @@ async function showOrder(focusDate = null) {
 
   let days = [];
   let all = [];
+  const ferien = await loadHolidays();
   // Die bestellte Linie, falls sie sich noch ändern lässt (DayStatus.ordered() der App).
   const orderedOf = (d) => d.entries.find((e) => e.isOrdered && e.selectable) ?? null;
   const isChangeable = (d) =>
@@ -708,7 +739,7 @@ async function showOrder(focusDate = null) {
       </label>`).join("");
     return `
       <fieldset class="card day-order" id="day-${d.date}">
-        <legend>${esc(De.long(d.date) + what)}</legend>
+        <legend>${esc(De.long(d.date) + (holidayOn(ferien, d.date) ? ` (${holidayOn(ferien, d.date)})` : "") + what)}</legend>
         ${options}
         <label class="option">
           <input type="radio" name="d-${d.date}" value="" ${current ? "" : "checked"}>
@@ -721,7 +752,9 @@ async function showOrder(focusDate = null) {
    * Kalenderwoche für Kalenderwoche laden und jede gleich anzeigen. IBS5 stellt
    * Speisepläne wochenweise ein: Haben nach Tagen mit Speiseplan Montag und
    * Dienstag einer Woche keinen, ist weiter voraus noch nichts eingestellt.
-   * (Ein einzelner Feiertag hält das nicht auf.)
+   * (Ein einzelner Feiertag hält das nicht auf.) Ferien sind keine solche
+   * Grenze: Eine leere Ferienwoche wird nach Mo/Di übersprungen und zählt
+   * nicht zu den ORDER_WEEKS, Ferienessen wird angezeigt wie jede Woche.
    */
   async function load() {
     working(true);
@@ -733,21 +766,29 @@ async function showOrder(focusDate = null) {
     const monday = addDays(today, 1 - weekdayNo(today));
     const get = (dates) => withLogin(creds, (c) => collect(c, dates));
     const offered = (ds) => ds.some((d) => d.state !== OrderState.NO_OFFER);
+    const anyHoliday = (ds) => ds.some((d) => holidayOn(ferien, d));
     days = [];
     all = [];
     let error = null;
     try {
-      for (let w = 0; w < ORDER_WEEKS && my === viewSeq; w++) {
+      // Ferienwochen verlängern das Fenster, aber nicht unbegrenzt (Sommerferien: 7 Wochen).
+      for (let w = 0, n = 0; n < ORDER_WEEKS && w < ORDER_WEEKS + 8 && my === viewSeq; w++) {
         const mon = addDays(monday, 7 * w);
         const dates = [0, 1, 2, 3, 4].map((i) => addDays(mon, i)).filter((d) => d >= today);
         if (!dates.length) continue;
         $more.textContent = `KW ${isoWeek(mon)[1]} wird geladen …`;
         let week = await get(dates.slice(0, 2));
-        const stop = dates.length === 5 && offered(all) && !offered(week);
+        const holidayWeek = dates.every((d) => holidayOn(ferien, d));
+        const stop = dates.length === 5 && offered(all) && !offered(week) && !anyHoliday(dates.slice(0, 2));
+        if (holidayWeek && !offered(week)) {
+          all = all.concat(week);
+          continue;
+        }
+        n++;
         if (!stop && my === viewSeq) week = week.concat(await get(dates.slice(2)));
         if (my !== viewSeq) return;
         all = all.concat(week);
-        if (stop || (!offered(week) && offered(all))) break;
+        if (stop || (!offered(week) && offered(all) && !anyHoliday(dates))) break;
         const shown = week.filter(isChangeable);
         days = days.concat(shown);
         $days.insertAdjacentHTML("beforeend", shown.map(dayFieldset).join(""));
@@ -1002,6 +1043,9 @@ function showSettings(message = "") {
     <div class="group-title">Erinnerung</div>
     <div class="group" id="push-box"></div>
 
+    <div class="group-title">Ferien (Berlin)</div>
+    <div class="group" id="ferien-box"></div>
+
     <div class="group-title">Stundenplan (Sdui)</div>
     <div class="group" id="sdui-box"></div>
 
@@ -1017,6 +1061,7 @@ function showSettings(message = "") {
   document.getElementById("b-back").onclick = () => showHome();
   document.getElementById("b-about").onclick = showAbout;
   wirePushBox();
+  wireFerienBox();
   wireSduiBox();
   const add = document.getElementById("b-kid-add");
   if (add) add.onclick = () => showSetup("", {}, null, { adding: true });
@@ -1059,7 +1104,7 @@ function wireDaysAhead() {
     e.hidden = !e.hidden;
   };
   const step = (d) => () => {
-    saveDaysAhead(Math.min(DAYS_AHEAD.max, Math.max(DAYS_AHEAD.min, loadDaysAhead() + d)));
+    saveDaysAhead(clampDaysAhead(loadDaysAhead() + d));
     const n = loadDaysAhead();
     document.getElementById("days-ahead-val").textContent = n;
     document.getElementById("days-minus").disabled = n <= DAYS_AHEAD.min;
@@ -1067,6 +1112,28 @@ function wireDaysAhead() {
   };
   document.getElementById("days-minus").onclick = step(-1);
   document.getElementById("days-plus").onclick = step(1);
+}
+
+/** Je Kind: in den Ferien bestellen und erinnern? Ohne Antwort wird erinnert. */
+async function wireFerienBox() {
+  const box = document.getElementById("ferien-box");
+  if (!box) return;
+  const creds = currentCreds();
+  const kids = store.accounts.length ? store.accounts : creds ? [creds] : [];
+  const prefs = await Promise.all(kids.map((a) => loadMealPref(a.customerNo)));
+  const ferien = await loadHolidays();
+  if (!document.body.contains(box)) return;
+  const known = ferien.until ? `Termine bekannt bis ${De.long(ferien.until)}.` : "Termine gerade nicht verfügbar.";
+  box.innerHTML = kids.map((a, i) => srow("school", multi() ? `In den Ferien erinnern: ${esc(accountLabel(a))}` : "In den Ferien erinnern", {
+    right: toggle(`ferien-${i}`, prefs[i] !== false, "In den Ferien erinnern"),
+    hint: i < kids.length - 1 ? "" : `Aus: offene Ferientage sind kein Alarm (kein Hort-Essen). ${known}`,
+  })).join("");
+  kids.forEach((a, i) => {
+    document.getElementById(`ferien-${i}`).onclick = async () => {
+      await saveMealPref(a.customerNo, prefs[i] === false).catch(() => {});
+      wireFerienBox();
+    };
+  });
 }
 
 // ---------------------------------------------------------------- Sdui
@@ -1180,6 +1247,17 @@ const pushSupported = "serviceWorker" in navigator && "PushManager" in window &&
 
 const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr"];
 
+/** „Mo–Fr“, „Mo–Mi“, „Mo, Do“: zusammenhängende Tage als Spanne. */
+function weekdaysText(days) {
+  const parts = [];
+  for (const d of [...days].sort()) {
+    const last = parts.at(-1);
+    if (last && last[1] === d - 1) last[1] = d;
+    else parts.push([d, d]);
+  }
+  return parts.map(([a, b]) => (a === b ? WEEKDAYS[a - 1] : `${WEEKDAYS[a - 1]}${b - a > 1 ? "–" : ", "}${WEEKDAYS[b - 1]}`)).join(", ");
+}
+
 const toggle = (id, on, label) =>
   `<button type="button" id="${id}" class="switch${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="${label}"></button>`;
 
@@ -1201,9 +1279,9 @@ function pushBoxHtml(message = "") {
     ${srow("bell", "Erinnerung werktags", { right: toggle("push-switch", on, "Erinnerung") })}
     ${srow("clock", "Uhrzeit", { hint: "Meldung kommt bis zu 30 min später",
       right: `<input id="push-time" class="time-value" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit">` })}
-    ${srow("calendar", "Tage", { hint: "Tage, an denen geprüft wird.",
-      right: `<span class="wd-pick">${WEEKDAYS.map((n, i) => `<button type="button" class="wd-btn${store.pushWeekdays.includes(i + 1) ? " on" : ""}"
-        data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}">${n}</button>`).join("")}</span>` })}
+    ${srow("calendar", "Tage", { value: weekdaysText(store.pushWeekdays) })}
+    <div class="srow-edit wd-pick">${WEEKDAYS.map((n, i) => `<button type="button" class="wd-btn${store.pushWeekdays.includes(i + 1) ? " on" : ""}"
+      data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}">${n}</button>`).join("")}</div>
     ${daysAheadRow()}
     ${on ? srow("play", "Jetzt testen", { tag: "button", id: "b-push-test" }) : ""}
     ${admin}`;

@@ -2,7 +2,7 @@
 // Weckruf des Servers selbst bei IBS5, ob etwas offen ist. Der Server erfährt
 // davon nichts; er schickt nur {"t":"check"} zur gewählten Uhrzeit.
 import {
-  AlarmText, DEFAULT_CHECK, De, IbsAuthError, IbsClient, addDays, collect, evaluate, nextWeekday, targetDates, todayBerlin,
+  AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, addDays, collect, evaluate, nextWeekday, targetDates, todayBerlin,
 } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
 import { accountLabel, dayStore, loadAccounts, upsertAccount } from "./accounts.js";
@@ -10,10 +10,11 @@ import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
+import { loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v48";
+const VERSION = "v49";
 const PUSH_MAX_DAYS = 5;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js"];
+const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "ferien.json"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -120,20 +121,23 @@ function failTitle(e, client) {
 
 /**
  * Ein Konto prüfen. Termine gelten je Kind (eigene und die für alle), deshalb
- * fragt jedes Konto seine eigenen Tage ohne Schulessen mit ab.
+ * fragt jedes Konto seine eigenen Tage ohne Schulessen mit ab. Ferientage eines
+ * Kindes ohne Ferienessen fragt es gar nicht erst ab.
  */
-async function checkAccount(account, checkDates, events, today) {
+async function checkAccount(account, checkDates, events, today, ferien) {
   const mine = eventsFor(events, account.customerNo);
   const due = dueEvents(mine, today);
   const noMeal = noMealDates(mine);
-  const dates = [...new Set([...checkDates, ...due.filter((e) => e.noMeal).map((e) => e.date)])].sort();
+  const skip = skipDates(ferien, await loadMealPref(account.customerNo), checkDates);
+  const dates = [...new Set([...checkDates.filter((d) => !skip.has(d)), ...due.filter((e) => e.noMeal).map((e) => e.date)])].sort();
   const client = new IbsClient(undefined, guardHooks);
   client.dayView = !!(await kvGet("ibsDayView"));
   client.dayStore = dayStore(client);
   const kid = { customerNo: account.customerNo, due, firstName: "" };
   try {
-    kid.days = await withSession(client, account, () => collect(client, dates, { history: true }));
-    kid.checked = kid.days.filter((d) => checkDates.includes(d.date) && !noMeal.has(d.date));
+    // Ganz in den Ferien ohne Ferienessen: nichts zu prüfen, auch keine Anmeldung.
+    kid.days = dates.length ? await withSession(client, account, () => collect(client, dates, { history: true })) : [];
+    kid.checked = kid.days.filter((d) => checkDates.includes(d.date) && !noMeal.has(d.date) && !skip.has(d.date));
   } catch (e) {
     kid.error = e;
     kid.failTitle = failTitle(e, client);
@@ -141,6 +145,19 @@ async function checkAccount(account, checkDates, events, today) {
   kid.name = client.profile?.name || account.name || "";
   kid.firstName = client.profile?.firstName || "";
   return kid;
+}
+
+/**
+ * Tage, die ein Weckruf prüft. Höchstens die nächsten Schultage: auf dem Handy
+ * kostet jeder Tag eine Anfrage, und zu viele quittiert IBS5 mit einer IP-Sperre.
+ * Bis einschließlich zum nächsten Weckruf-Tag: dazwischen schaut keiner mehr nach.
+ * Höchstens 5 Schultage reichen dafür auch bei nur einem Weckruf pro Woche.
+ * Ferientage fallen erst danach heraus (checkAccount), der erste Schultag nach
+ * den Ferien bleibt so im Fenster.
+ */
+export function pushCheckDates(today, daysAhead, pushDays) {
+  const coverUntil = nextWeekday(today, pushDays);
+  return targetDates(today, { ...DEFAULT_CHECK, daysAhead, coverUntil }).slice(0, PUSH_MAX_DAYS);
 }
 
 // Beim Test („Jetzt testen“) dieselbe Meldung wie beim echten Weckruf, nur immer laut.
@@ -151,18 +168,13 @@ async function checkAndNotify(isTest) {
   if (!accounts.length) {
     return notify("Nicht angemeldet", "Bitte die Seite öffnen und anmelden.", { url: "./" });
   }
-  const daysAhead = (await kvGet("daysAhead")) || 7;
+  const daysAhead = clampDaysAhead(await kvGet("daysAhead"));
   const today = todayBerlin();
-  // Höchstens die nächsten Schultage: auf dem Handy kostet jeder Tag eine
-  // Anfrage, und zu viele quittiert IBS5 mit einer IP-Sperre.
-  // Bis einschließlich zum nächsten Weckruf-Tag: dazwischen schaut keiner mehr nach.
-  // Höchstens 5 Schultage reichen dafür auch bei nur einem Weckruf pro Woche.
-  const pushDays = (await kvGet("pushWeekdays")) || DEFAULT_CHECK.weekdays;
-  const coverUntil = nextWeekday(today, pushDays);
-  const checkDates = targetDates(today, { ...DEFAULT_CHECK, daysAhead, coverUntil }).slice(0, PUSH_MAX_DAYS);
+  const checkDates = pushCheckDates(today, daysAhead, (await kvGet("pushWeekdays")) || DEFAULT_CHECK.weekdays);
   const events = await loadEvents(today).catch(() => []);
+  const ferien = await loadHolidays();
   const kids = [];
-  for (const account of accounts) kids.push(await checkAccount(account, checkDates, events, today));
+  for (const account of accounts) kids.push(await checkAccount(account, checkDates, events, today, ferien));
 
   // Namen fürs Gerät merken (Reiter, Meldung), auch wenn die Seite seit dem Login nicht offen war.
   for (const [i, k] of kids.entries()) {

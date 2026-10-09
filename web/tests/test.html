@@ -6,7 +6,7 @@
 <script type="module">
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
-  parseOrderHistory, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap,
+  parseOrderHistory, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
 } from "../ibs.js";
 
 const results = [];
@@ -394,6 +394,55 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     eq([m.title, m.url], ["Essen abbestellen: Wandertag", `./?order=${d1}&k=1`]);
     eq(m.body.match(/Wandertag/g).length, 1, m.body);
     eq(m.body.includes("bitte abbestellen (Anna)"), true, m.body);
+  });
+}
+
+// Berliner Ferien aus ferien.json.
+{
+  const Fe = await import("../holidays.js");
+  const doc = await Fe.loadHolidays();
+  const t = "2026-10-09";
+  await test("Ferien: ferien.json geladen, Herbstferien 2026", () => {
+    eq(doc.state, "DE-BE");
+    eq([Fe.holidayOn(doc, "2026-10-19"), Fe.holidayOn(doc, "2026-10-30"), Fe.holidayOn(doc, "2026-11-02")], ["Herbstferien", "Herbstferien", null]);
+  });
+  await test("Ferien: hinter until unbekannt", () => {
+    const d = { until: "2026-12-31", holidays: [{ start: "2026-12-23", end: "2027-01-02", name: "Weihnachtsferien" }] };
+    eq([Fe.holidayOn(d, "2026-12-28"), Fe.holidayOn(d, "2027-01-01")], ["Weihnachtsferien", null]);
+  });
+  await test("Ferien: Frage nur bis 3 Wochen vorher und während der Ferien", () => {
+    eq(Fe.nextHoliday(doc, "2026-09-20"), null, "zu früh");
+    eq(Fe.nextHoliday(doc, t)?.name, "Herbstferien", "10 Tage vorher");
+    eq(Fe.nextHoliday(doc, "2026-10-28")?.name, "Herbstferien", "mittendrin");
+    eq(Fe.rangeText(Fe.nextHoliday(doc, t)), "19.10.–31.10.");
+  });
+  await test("Ferien: nur ohne Ferienessen übersprungen", () => {
+    const ds = ["2026-10-16", "2026-10-19", "2026-10-20"];
+    eq([...Fe.skipDates(doc, false, ds)], ["2026-10-19", "2026-10-20"], "nein");
+    eq(Fe.skipDates(doc, true, ds).size, 0, "ja");
+    eq(Fe.skipDates(doc, undefined, ds).size, 0, "nicht gefragt");
+  });
+  await test("Ferien: Montag danach prüft der letzte Weckruf vorher, bei jeder Vorwarnzeit", async () => {
+    const { pushCheckDates } = await import("../sw.js");
+    const monday = "2026-11-02";
+    for (const ahead of [3, 7, 14]) {
+      for (const pushDays of [[1, 2, 3, 4, 5], [1, 4], [5], [1]]) {
+        let last = null;
+        for (let d = "2026-10-12"; d < monday; d = addDays(d, 1)) if (pushDays.includes(weekdayNo(d))) last = d;
+        const dates = pushCheckDates(last, ahead, pushDays);
+        const skip = Fe.skipDates(doc, false, dates);
+        eq(dates.filter((d) => !skip.has(d)).includes(monday), true, `Vorwarnzeit ${ahead}, Weckruf ${pushDays.join("")}, am ${last}`);
+      }
+    }
+  });
+  await test("Vorwarnzeit: mindestens 3 Tage, alte kürzere Werte werden 3", () => {
+    eq([clampDaysAhead(1), clampDaysAhead(2), clampDaysAhead(3), clampDaysAhead(20), clampDaysAhead(undefined)], [3, 3, 3, 14, 7]);
+  });
+  await test("Ferien: Wahl je Kind gespeichert", async () => {
+    const { kvDel } = await import("../idb.js");
+    await Fe.saveMealPref("test-ferien", false);
+    eq([await Fe.loadMealPref("test-ferien"), await Fe.loadMealPref("test-ferien-2")], [false, undefined]);
+    await kvDel("ferienEssen:test-ferien");
   });
 }
 

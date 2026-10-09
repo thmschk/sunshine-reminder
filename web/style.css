@@ -15,6 +15,7 @@
   --ok: #2E7D32;
   --ok-container: #DDF0DC;
   --open-text: #7A5D00;
+  --event-text: #A67C00;
   color-scheme: light;
 }
 
@@ -135,6 +136,8 @@ button:disabled { opacity: .45; cursor: default; }
 }
 .days li + li { border-top: 1px solid var(--surface-variant); }
 .days li:active { background: var(--bg); }
+/* Eigene Termine in der Statuszeile: dunkles Gelb, reines Gelb wäre auf Weiß nicht lesbar. */
+.days .sub .ev { color: var(--event-text); font-weight: 600; }
 .days .date { width: 30px; flex: none; text-align: center; line-height: 1.15; }
 .days .wd { font-size: .68rem; color: var(--on-surface-variant); }
 .days .dom { font-size: 1rem; font-weight: 500; }
@@ -397,9 +400,10 @@ header { justify-content: flex-end; min-height: 44px; }
 .srow-x { margin-left: 6px; padding: 4px 6px; font-size: .85rem; }
 
 /* Wochentage der Erinnerung. */
-.wd-pick { display: flex; gap: 4px; flex: none; }
+/* Zweite Zeile unter „Tage“, die Knöpfe teilen sich die Breite. */
+.srow-edit.wd-pick { gap: 6px; margin-top: -4px; }
 .wd-btn {
-  min-width: 34px; padding: 5px 0; font-size: .82rem; font-weight: 500; border-radius: 8px;
+  flex: 1; max-width: 56px; padding: 7px 0; font-size: .85rem; font-weight: 500; border-radius: 8px;
   background: transparent; color: var(--on-surface-variant); border: 1px solid var(--surface-variant);
 }
 .wd-btn.on { background: var(--secondary); border-color: var(--secondary); color: #fff; }

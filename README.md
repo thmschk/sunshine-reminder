@@ -33,6 +33,12 @@ offen ist.
   vorher, in derselben Meldung wie das Essen. Mit „kein Schulessen an dem Tag“
   gilt der Tag nicht als offen, und ist dort doch bestellt, erinnert sie ans
   Abbestellen. Die Termine liegen nur auf dem Gerät, nicht auf dem Server.
+* **Berliner Schulferien** stehen an den Tagen dran. Vor den nächsten Ferien
+  fragt die Startseite je Kind, ob dort Essen bestellt wird (etwa im Hort); bei
+  „nein“ ist ein offener Ferientag kein Alarm, ändern unter ⚙ → Ferien. Ohne
+  Antwort wird erinnert wie sonst. Die Bestellansicht hört an einer leeren
+  Ferienwoche nicht auf. Die Termine liefert die Seite selbst mit
+  (`web/ferien.json`, aus der OpenHolidaysAPI); fremde Dienste fragt sie dafür nicht.
 * Für die Erinnerung weckt ein kleiner Server das Gerät werktags zur gewählten
   Uhrzeit mit einer leeren Push-Nachricht. Geprüft wird dann **auf dem Gerät**.
   Der Server kennt weder die IBS5-Zugangsdaten noch den Bestellstand. Für die
@@ -170,7 +176,7 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 | Seite laden | IP-Adresse, angefragte Datei | nichts; Zugriffs- und Fehlerprotokolle einzelner Anfragen sind abgeschaltet | – |
 | Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs; IP nur im Arbeitsspeicher für die Begrenzung auf 10 neue Abos je Stunde | Abo bis zum Ausschalten oder bis der Push-Dienst es als ungültig meldet; IP eine Stunde |
 | Sdui (nur wenn eingerichtet) | IP-Adresse, beim Einrichten E-Mail und Passwort, danach Token, Kind-ID im Pfad, Stundenplan | nichts; IP nur im Arbeitsspeicher für die Begrenzung auf 20 Aufrufe | IP zehn Minuten |
-| tägliche Selbstprüfung | – (fragt selbst bei IBS5 und Sdui an, ohne Nutzerdaten) | Ergebnis unter `/api/health` | bis zur nächsten Prüfung |
+| tägliche Selbstprüfung | – (fragt selbst bei IBS5 und Sdui an, ohne Nutzerdaten, und liest die eigene `ferien.json`) | Ergebnis unter `/api/health` | bis zur nächsten Prüfung |
 
 Name, Kundennummer, Bestellungen und das IBS5-Passwort erreichen den Server nie.
 
@@ -202,8 +208,9 @@ iPhone ist noch nicht ausprobiert.
 **Damit Schweigen auffällt:** Die Startseite zeigt, wann die Erinnerung zuletzt
 erfolgreich geprüft hat, und warnt, wenn das über vier Tage her ist. Jeder
 Fehler beim Weckruf führt zu einer Meldung. Der Server prüft zudem jeden Morgen,
-ob IBS5 und Sdui sich noch so verhalten, wie die Web-Version es braucht, und
-meldet Abweichungen an den Betreiber.
+ob IBS5 und Sdui sich noch so verhalten, wie die Web-Version es braucht und ob
+die Ferientermine noch mindestens ein halbes Jahr reichen, und meldet
+Abweichungen an den Betreiber.
 
 **Integrität:** Die Web-Version lädt ihren Code bei jedem Aufruf vom Server. Wer den Server kontrolliert, könnte also anderen Code
 ausliefern. Die Seite lädt keine fremden Skripte, und eine strenge

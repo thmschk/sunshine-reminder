@@ -6,7 +6,9 @@ import os
 import unittest
 from zoneinfo import ZoneInfo
 
-from app import BadRequest, RateLimit, check_endpoint, check_keys, is_due, parse_settings, sdui_login_body, sdui_route_ok
+from app import (
+    BadRequest, RateLimit, check_endpoint, check_keys, ferien_problem, is_due, parse_settings, sdui_login_body, sdui_route_ok,
+)
 
 TZ = ZoneInfo("Europe/Berlin")
 
@@ -191,3 +193,26 @@ class Betreiber(unittest.TestCase):
         self.assertFalse(app.admin_key_ok("geheim-12"))
         self.assertFalse(app.admin_key_ok(""))
         os.environ.pop("ADMIN_KEY")
+
+
+class Ferien(unittest.TestCase):
+    TODAY = dt.date(2026, 10, 9)
+
+    def problem(self, status=200, body=None, until="2030-08-17"):
+        body = json.dumps({"until": until, "holidays": []}).encode() if body is None else body
+        return ferien_problem(lambda: (status, {}, body), self.TODAY)
+
+    def test_lange_genug(self):
+        self.assertIsNone(self.problem())
+
+    def test_laeuft_bald_aus(self):
+        self.assertIn("tools/ferien.py", self.problem(until="2027-03-01"))
+
+    def test_fehlt_oder_kaputt(self):
+        self.assertIn("HTTP 404", self.problem(status=404, body=b""))
+        self.assertIn("nicht lesbar", self.problem(body=b"<html>"))
+
+    def test_nicht_erreichbar(self):
+        def boom():
+            raise OSError("weg")
+        self.assertIn("OSError", ferien_problem(boom, self.TODAY))

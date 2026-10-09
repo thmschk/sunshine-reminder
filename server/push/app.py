@@ -316,10 +316,13 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
 
 
 # Tägliche Selbstprüfung: Gerade die Eigenheiten, von denen die Web-Version lebt,
-# können unbemerkt kippen (CORS-Freigabe von IBS5, Login ohne Preflight, Sdui).
+# können unbemerkt kippen (CORS-Freigabe von IBS5, Login ohne Preflight, Sdui),
+# und die mitgelieferten Ferientermine laufen irgendwann aus.
 # Weicht etwas ab, geht eine Meldung an die Betreiber-Abos (is_admin).
 SELFCHECK_AT = os.environ.get("SELFCHECK_AT", "06:30")
 ORIGIN = "https://sunshine.thomschke.info"
+# So lange vorher mahnt die Selbstprüfung, ferien.json neu zu erzeugen (tools/ferien.py).
+FERIEN_WARN_DAYS = 180
 selfcheck_state = {"at": None, "ok": None, "problems": []}
 
 
@@ -327,12 +330,12 @@ def selfcheck() -> list[str]:
     """Prüft ohne Zugangsdaten, ob IBS5 und Sdui sich noch so verhalten, wie die Web-Version es braucht."""
     problems = []
 
-    def req(method, url, headers=None, data=None):
+    def req(method, url, headers=None, data=None, limit=2000):
         h = {"Origin": ORIGIN, "User-Agent": "theoretisch-satt Selbstprüfung", **(headers or {})}
         r = urllib.request.Request(url, data=data, method=method, headers=h)
         try:
             with urllib.request.urlopen(r, timeout=20) as resp:
-                return resp.status, resp.headers, resp.read(2000)
+                return resp.status, resp.headers, resp.read(limit)
         except urllib.error.HTTPError as exc:
             return exc.code, exc.headers, b""
 
@@ -357,7 +360,24 @@ def selfcheck() -> list[str]:
             problems.append(f"Sdui ohne Token: HTTP {st} statt 401")
     except Exception as exc:
         problems.append(f"Sdui nicht erreichbar: {type(exc).__name__}")
+    problem = ferien_problem(lambda: req("GET", f"{ORIGIN}/ferien.json", limit=200_000), dt.date.today())
+    if problem:
+        problems.append(problem)
     return problems
+
+
+def ferien_problem(get, today: dt.date) -> str | None:
+    """Meldung, wenn ferien.json fehlt, kaputt ist oder in weniger als FERIEN_WARN_DAYS Tagen ausläuft."""
+    try:
+        st, _, body = get()
+        until = dt.date.fromisoformat(json.loads(body)["until"]) if st == 200 else None
+    except Exception as exc:
+        return f"ferien.json nicht lesbar: {type(exc).__name__}"
+    if until is None:
+        return f"ferien.json: HTTP {st}"
+    if (until - today).days < FERIEN_WARN_DAYS:
+        return f"Ferientermine nur bis {until.isoformat()}: tools/ferien.py ausführen und deployen"
+    return None
 
 
 def run_selfcheck(vapid: Vapid) -> None:
