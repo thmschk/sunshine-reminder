@@ -69,6 +69,13 @@ def de_short(date: dt.date) -> str:
 
 
 
+def _quantity(raw: str) -> int | None:
+    """Menge als Zahl: leer = 0, nicht numerisch = None (nicht deutbar)."""
+    if not raw:
+        return 0
+    return int(raw) if raw.isdecimal() else None
+
+
 @dataclass
 class MenuEntry:
     date: dt.date
@@ -80,11 +87,19 @@ class MenuEntry:
 
     @property
     def is_ordered(self) -> bool:
-        return self.status == _STATUS_ORDERED or bool(self.quantity_ordered)
+        return self.status == _STATUS_ORDERED or (_quantity(self.quantity_ordered) or 0) > 0
+
+    @property
+    def in_cart(self) -> bool:
+        return (_quantity(self.quantity_in_cart) or 0) > 0
 
     @property
     def is_understood(self) -> bool:
-        return self.status in (_STATUS_ORDERED, _STATUS_NOT_ORDERED)
+        return (
+            self.status in (_STATUS_ORDERED, _STATUS_NOT_ORDERED)
+            and _quantity(self.quantity_ordered) is not None
+            and _quantity(self.quantity_in_cart) is not None
+        )
 
 
 @dataclass
@@ -119,7 +134,14 @@ class WeekPlan:
     displayed_week: int | None = None
 
     def status_for(self, date: dt.date) -> DayStatus:
-        """Ein Tag, der in einer geladenen Woche fehlt, hat kein Angebot."""
+        """Ein Tag, der in einer Woche mit erkannten Knöpfen fehlt, hat kein Angebot.
+
+        Eine Woche ganz ohne erkannte Knöpfe kann ebenso eine Ferienwoche wie
+        ein geändertes Markup sein — das wird als unklar gemeldet statt als
+        „kein Angebot“ stillschweigend durchgewunken.
+        """
+        if not self.days:
+            return DayStatus(date, OrderState.UNKNOWN)
         return self.days.get(date, DayStatus(date, OrderState.NO_OFFER))
 
 
@@ -134,7 +156,7 @@ def _entry_date(tag) -> dt.date | None:
 def _day_state(entries: list[MenuEntry]) -> OrderState:
     if any(e.is_ordered for e in entries):
         return OrderState.ORDERED
-    if any(e.quantity_in_cart for e in entries):
+    if any(e.in_cart for e in entries):
         return OrderState.IN_CART
     if not all(e.is_understood for e in entries):
         return OrderState.UNKNOWN
@@ -144,14 +166,18 @@ def _day_state(entries: list[MenuEntry]) -> OrderState:
 def parse_weekplan(html: str) -> WeekPlan:
     soup = BeautifulSoup(html, "html.parser")
 
-    if soup.find(id="weekplan") is None:
+    container = soup.find(id="weekplan")
+    if container is None:
         raise ParserNotCalibrated(
             "Antwort enthält keinen Container mit id='weekplan' — vermutlich "
             "eine Fehler- oder Login-Seite statt eines Wochenplans."
         )
 
+    # KW nur aus der Überschrift lesen, sonst träfe ein "KW 12" in einem
+    # Menünamen oder Hinweistext zuerst.
+    heading = container.select_one(".weekplan-title") or container
     week = None
-    if m := _KW.search(soup.get_text(" ", strip=True)):
+    if m := _KW.search(heading.get_text(" ", strip=True)):
         week = int(m[1])
 
     by_date: dict[dt.date, list[MenuEntry]] = {}
@@ -180,6 +206,6 @@ def parse_weekplan(html: str) -> WeekPlan:
             orderable=any(e.orderable for e in entries),
         )
 
-    # Ein leerer Wochenplan ist legitim (Ferienwoche) — deshalb hängt die
-    # Kalibrierungs-Ausnahme oben am Container, nicht an der Trefferzahl.
+    # Die Kalibrierungs-Ausnahme hängt am Container; eine Woche ohne Knöpfe
+    # wird erst in WeekPlan.status_for als unklar gemeldet.
     return WeekPlan(days=days, displayed_week=week)

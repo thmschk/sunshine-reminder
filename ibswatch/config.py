@@ -45,7 +45,8 @@ class Config:
     web_url: str = "https://ibs.sunshine-catering.de/IBS5"
     netrc_machine: str = "ibs.sunshine-catering.de"
     timezone: str = "Europe/Berlin"
-    #: how many calendar days ahead to inspect (1 = only the next delivery day)
+    #: wie viele kommende relevante Werktage (siehe `weekdays`) geprüft werden
+    #: (1 = nur der nächste Liefertag; freitags ist das der Montag)
     days_ahead: int = 2
     #: also look at today (useful if the order deadline is later the same day)
     include_today: bool = False
@@ -81,7 +82,9 @@ def netrc_credentials(machine: str) -> tuple[str, str]:
     Raises ConfigError with an actionable message — never echoes the values.
     """
     try:
-        auth = netrc.netrc().authenticators(machine)
+        # hosts statt authenticators(): letzteres fällt still auf einen
+        # default-Eintrag zurück und würde fremde Zugangsdaten liefern.
+        auth = netrc.netrc().hosts.get(machine)
     except FileNotFoundError as exc:
         raise ConfigError("~/.netrc existiert nicht") from exc
     except netrc.NetrcParseError as exc:

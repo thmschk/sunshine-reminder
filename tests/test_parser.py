@@ -84,10 +84,36 @@ def test_day_without_offer_is_not_a_missed_order():
     assert plan.status_for(dt.date(2026, 8, 29)).state is OrderState.NO_OFFER  # Samstag
 
 
-def test_empty_holiday_week_parses_without_error():
-    plan = parse_weekplan('<div id="weekplan"><div>KW 30</div></div>')
+def test_week_without_buttons_is_unclear_not_no_offer():
+    """Ohne erkannte Knöpfe (Ferien oder geändertes Markup) -> unklar melden."""
+    plan = parse_weekplan('<div id="weekplan"><div class="weekplan-title">KW 30</div></div>')
     assert plan.days == {}
-    assert plan.status_for(MON).state is OrderState.NO_OFFER
+    assert plan.displayed_week == 30
+    assert plan.status_for(MON).state is OrderState.UNKNOWN
+
+
+def test_quantity_zero_is_not_ordered():
+    html = _patch_day(
+        _without_orders(FIXTURE, "2026-08-27"), "2026-08-27",
+        ('data-quantity-ordered=""', 'data-quantity-ordered="0"'),
+        ('data-quantity-in-shopping-cart=""', 'data-quantity-in-shopping-cart="0"'),
+    )
+    assert parse_weekplan(html).days[THU].state is OrderState.NOT_ORDERED
+
+
+def test_non_numeric_quantity_is_unknown():
+    html = _patch_day(
+        _without_orders(FIXTURE, "2026-08-27"), "2026-08-27",
+        ('data-quantity-ordered=""', 'data-quantity-ordered="x"'),
+    )
+    assert parse_weekplan(html).days[THU].state is OrderState.UNKNOWN
+
+
+def test_week_number_is_read_from_heading_only():
+    html = FIXTURE.replace(
+        '<div class="weekplan-title">', '<p>Hinweis KW 12 Feiertag</p><div class="weekplan-title">', 1
+    )
+    assert parse_weekplan(html).displayed_week == 35
 
 
 def test_error_page_raises_instead_of_alarming():
@@ -98,6 +124,16 @@ def test_error_page_raises_instead_of_alarming():
         except ParserNotCalibrated:
             continue
         raise AssertionError("haette ParserNotCalibrated werfen muessen")
+
+
+def load_tests(loader, tests, pattern):
+    """Die test_-Funktionen auch unter `unittest discover` laufen lassen."""
+    import unittest
+    suite = unittest.TestSuite(tests)
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            suite.addTest(unittest.FunctionTestCase(fn, description=name))
+    return suite
 
 
 if __name__ == "__main__":

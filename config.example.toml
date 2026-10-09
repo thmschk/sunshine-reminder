@@ -6,7 +6,7 @@ web_url       = "https://ibs.sunshine-catering.de/IBS5"   # Link in den Nachrich
 netrc_machine = "ibs.sunshine-catering.de"
 timezone      = "Europe/Berlin"
 
-# Wie viele Tage im Voraus geprueft werden (1 = nur morgen).
+# Wie viele kommende Werktage (siehe weekdays) geprueft werden (1 = nur der naechste Liefertag; freitags ist das der Montag).
 days_ahead = 2
 # Auch den heutigen Tag pruefen (falls Bestellschluss erst spaeter am Tag ist).
 include_today = false

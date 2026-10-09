@@ -12,9 +12,13 @@ from .config import Config, ConfigError, netrc_credentials
 def send_mail(cfg: Config, subject: str, body: str, dry_run: bool = False) -> None:
     smtp = cfg.smtp
 
-    if dry_run or not smtp.configured:
-        reason = "--dry-run" if dry_run else "SMTP nicht konfiguriert"
-        print(f"--- Mail nicht versendet ({reason}) ---")
+    # Ohne Konfiguration ist das ein Fehler (kein stilles Verwerfen); der
+    # Aufrufer meldet ihn auf stderr und setzt einen Exitcode ≠ 0.
+    if not dry_run and not smtp.configured:
+        raise ConfigError("SMTP nicht konfiguriert (host, mail_from, mail_to)")
+
+    if dry_run:
+        print("--- Mail nicht versendet (--dry-run) ---")
         print(f"An:      {', '.join(smtp.mail_to) or '<niemand>'}")
         print(f"Betreff: {subject}\n")
         print(body)

@@ -24,20 +24,39 @@ from .parser import (DayStatus, OrderState, ParserNotCalibrated, de_long,
                      de_short, parse_weekplan)
 
 
-def notify(cfg: Config, subject: str, body: str, dry_run: bool) -> None:
-    """Mail senden, aber ein SMTP-Problem nie das Ergebnis verschlucken lassen."""
+#: Exitcode, wenn die Prüfung lief, aber eine nötige Mail nicht zugestellt wurde.
+EXIT_MAIL_FAILED = 3
+
+
+def notify(cfg: Config, subject: str, body: str, dry_run: bool) -> bool:
+    """Mail senden; True bei Erfolg. Ein SMTP-Problem verschluckt nie das Ergebnis."""
     try:
         send_mail(cfg, subject, body, dry_run=dry_run)
-    except Exception as exc:  # smtplib, DNS, netrc — alles gleich behandelt
+    except Exception as exc:  # smtplib, DNS, netrc, fehlende SMTP-Konfiguration
         print(f"Mailversand fehlgeschlagen ({type(exc).__name__}: {exc})", file=sys.stderr)
         print(f"Nicht zugestellte Nachricht: {subject}\n{body}", file=sys.stderr)
+        return False
+    return True
 
 
 def target_dates(cfg: Config, today: dt.date) -> list[dt.date]:
-    """The days this run cares about: the next `days_ahead` days, weekdays only."""
-    start = 0 if cfg.include_today else 1
-    days = (today + dt.timedelta(days=offset) for offset in range(start, cfg.days_ahead + 1))
-    return [d for d in days if d.isoweekday() in cfg.weekdays]
+    """Die nächsten `days_ahead` relevanten Werktage (optional inkl. heute).
+
+    Gezählt werden nur Tage aus `cfg.weekdays` — freitags kommt so der Montag
+    in die Prüfung, statt dass das Fenster auf Samstag/Sonntag verpufft.
+    """
+    if not cfg.weekdays:
+        return []
+    dates: list[dt.date] = []
+    day = today if cfg.include_today else today + dt.timedelta(days=1)
+    # Obergrenze schützt vor Endlosschleife bei exotischer weekdays-Konfiguration
+    for _ in range(14):
+        if len(dates) >= cfg.days_ahead:
+            break
+        if day.isoweekday() in cfg.weekdays:
+            dates.append(day)
+        day += dt.timedelta(days=1)
+    return dates
 
 
 def collect_status(client: IbsClient, dates: list[dt.date]) -> dict[dt.date, DayStatus]:
@@ -106,6 +125,8 @@ def run(cfg: Config, today: dt.date, dry_run: bool = False) -> int:
         elif day.state is OrderState.DEADLINE_PASSED:
             too_late.append(day)
 
+    mail_failed = False
+
     if actionable or too_late:
         parts = []
         if actionable:
@@ -127,7 +148,8 @@ def run(cfg: Config, today: dt.date, dry_run: bool = False) -> int:
             "[IBS] Kein Essen bestellt" if actionable
             else "[IBS] Kein Essen — Bestellschluss vorbei"
         )
-        notify(cfg, subject, "\n\n".join(parts) + f"\n\n{cfg.web_url}\n", dry_run=dry_run)
+        if not notify(cfg, subject, "\n\n".join(parts) + f"\n\n{cfg.web_url}\n", dry_run=dry_run):
+            mail_failed = True
 
     if unclear:
         days = ", ".join(de_short(d) for d in unclear)
@@ -142,7 +164,7 @@ def run(cfg: Config, today: dt.date, dry_run: bool = False) -> int:
             )
         return 2
 
-    return 0
+    return EXIT_MAIL_FAILED if mail_failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
