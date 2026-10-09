@@ -11,6 +11,8 @@
 
 export const BASE_URL = "https://ibs.sunshine-catering.de/ibs5";
 export const WEB_URL = "https://ibs.sunshine-catering.de/IBS5";
+/** Frist je Anfrage an IBS5. */
+const REQUEST_TIMEOUT_MS = 15000;
 
 export class IbsError extends Error {}
 /** Login abgelehnt, oder der Token ist nicht (mehr) gültig. */
@@ -192,11 +194,17 @@ export class IbsClient {
         credentials: "omit",
         redirect: "manual",
         cache: "no-store",
+        // Ohne Frist hängt ein Weckruf, bis der Browser den Service Worker beendet — ganz ohne Meldung.
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (e) {
       await this.hooks.failed?.({ path, network: true });
-      const err = new IbsError(`Keine Verbindung zum Bestellsystem (${path}): ${e.message}`);
-      err.maybeAuth = auth;
+      const timeout = e?.name === "TimeoutError";
+      const err = new IbsError(timeout
+        ? `Bestellsystem antwortet nicht (${path}, ${REQUEST_TIMEOUT_MS / 1000} s)`
+        : `Keine Verbindung zum Bestellsystem (${path}): ${e.message}`);
+      // Eine Zeitüberschreitung ist kein abgelaufener Token: kein zweiter Login hinterher.
+      err.maybeAuth = auth && !timeout;
       throw err;
     }
     if (!resp.ok && resp.type !== "opaqueredirect") await this.hooks.failed?.({ path, status: resp.status });
@@ -334,17 +342,21 @@ export class DayStatus {
     this.entries = entries;
   }
   get orderedItems() { return this.entries.filter((e) => e.isOrdered).map((e) => e.name); }
-  get orderable() { return this.entries.some((e) => e.orderable); }
+  get orderable() { return this.entries.some(orderableMeal); }
   get isActionable() { return this.state === OrderState.NOT_ORDERED || this.state === OrderState.IN_CART; }
   get label() { return STATE_LABEL[this.state]; }
 }
+
+// Kaltverpflegung hält einen Tag nicht offen: die Tagesansicht liefert sie auch nach
+// dem Bestellschluss mit data-readonly="false" (gesperrt nur im Seiten-JS).
+const orderableMeal = (e) => e.orderable && !e.isKv;
 
 // Ein unbekannter Status ergibt UNKNOWN und gilt nie stillschweigend als bestellt.
 function dayState(entries) {
   if (entries.some((e) => e.isOrdered)) return OrderState.ORDERED;
   if (entries.some((e) => e.quantityInCart !== "")) return OrderState.IN_CART;
   if (!entries.every((e) => e.isUnderstood)) return OrderState.UNKNOWN;
-  if (entries.some((e) => e.orderable)) return OrderState.NOT_ORDERED;
+  if (entries.some(orderableMeal)) return OrderState.NOT_ORDERED;
   return OrderState.DEADLINE_PASSED;
 }
 
@@ -757,22 +769,31 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
       await rollback();
       return { kind: "dryrun", changes };
     }
+  } catch (e) {
+    await rollback();
+    return { kind: "aborted", reason: e.message };
+  }
+
+  // Ab hier kann die Bestellung durch sein, auch wenn keine Antwort kommt: dann nie
+  // „nichts abgeschickt“ melden und nichts zurückrollen, sondern nachsehen.
+  let lost = null;
+  try {
     const sent = await client.submitCart();
     if (!sent.ok) {
       await rollback();
       return { kind: "aborted", reason: sent.message || "Bestellung abgelehnt." };
     }
   } catch (e) {
-    await rollback();
-    return { kind: "aborted", reason: e.message };
+    lost = e;
   }
 
   const dates = changes.map((c) => c.date);
+  const why = lost ? `Antwort auf das Abschicken fehlt (${lost.message})` : null;
   let after;
   try {
     after = await reload(dates);
   } catch (e) {
-    return { kind: "unconfirmed", reason: `Nachprüfung fehlgeschlagen: ${e.message}`, missing: dates };
+    return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates };
   }
   const asRequested = (c) => {
     // Eine Linie mit liegengebliebener Abbestellung (Status 3) gilt weiter als bestellt.
@@ -781,6 +802,6 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
   };
   const missing = changes.filter((c) => !asRequested(c)).map((c) => c.date);
   return missing.length
-    ? { kind: "unconfirmed", reason: "Nicht alle Tage stehen so im Wochenplan wie gewünscht.", missing }
+    ? { kind: "unconfirmed", reason: why || "Nicht alle Tage stehen so im Wochenplan wie gewünscht.", missing }
     : { kind: "done", changes };
 }

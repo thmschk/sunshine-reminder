@@ -5,15 +5,17 @@ import {
   AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, addDays, collect, evaluate, nextWeekday, targetDates, todayBerlin,
 } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
-import { accountLabel, dayStore, loadAccounts, upsertAccount } from "./accounts.js";
+import { accountLabel, dayStore, loadAccounts, renameAccount } from "./accounts.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v50";
+const VERSION = "v51";
 const PUSH_MAX_DAYS = 5;
+// Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
+const PUSH_DEADLINE_MS = 60000;
 const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "ferien.json"];
 
 self.addEventListener("install", (ev) => {
@@ -69,7 +71,11 @@ self.addEventListener("push", (ev) => {
   // Was auch immer schiefgeht, eine Meldung muss erscheinen — sonst kündigt iOS das Abo.
   ev.waitUntil((async () => {
     try {
-      await checkAndNotify(kind === "test");
+      let timer;
+      const deadline = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Die Prüfung dauerte zu lange.")), PUSH_DEADLINE_MS);
+      });
+      await Promise.race([checkAndNotify(kind === "test"), deadline]).finally(() => clearTimeout(timer));
     } catch (e) {
       await notify("Prüfung fehlgeschlagen", `${e?.message || e}\nBitte die App öffnen.`, { url: "./" }).catch(() => {});
     }
@@ -178,7 +184,7 @@ async function checkAndNotify(isTest) {
 
   // Namen fürs Gerät merken (Reiter, Meldung), auch wenn die Seite seit dem Login nicht offen war.
   for (const [i, k] of kids.entries()) {
-    if (k.name && k.name !== accounts[i].name) await upsertAccount({ ...accounts[i], name: k.name }).catch(() => {});
+    if (k.name && k.name !== accounts[i].name) await renameAccount(accounts[i].customerNo, k.name).catch(() => {});
   }
 
   let msg;

@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid
 import requests
@@ -243,6 +244,11 @@ def check_keys(keys) -> None:
         raise BadRequest("subscription.keys ungültig")
     if len(p256dh) != 65 or p256dh[0] != 4 or len(auth) != 16:
         raise BadRequest("subscription.keys ungültig")
+    # Ein Punkt neben der Kurve scheitert erst beim Verschlüsseln, ohne 404/410 — das Abo bliebe für immer.
+    try:
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), p256dh)
+    except ValueError:
+        raise BadRequest("subscription.keys ungültig")
 
 
 def parse_settings(body: dict, partial: bool = False) -> dict:
@@ -309,6 +315,13 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
         return False
     except requests.TooManyRedirects:
         log.warning("Push fehlgeschlagen: Umleitung nicht gefolgt")
+        return False
+    except ValueError:
+        # Schlüssel nicht verwendbar (vor der Kurvenprüfung angelegt): wird nie zustellbar.
+        with db_lock:
+            CONN.execute("DELETE FROM subs WHERE id = ?", (row["id"],))
+            CONN.commit()
+        log.warning("Abo mit unbrauchbarem Schlüssel gelöscht")
         return False
     except Exception:
         log.exception("Push nicht versendbar")
@@ -529,7 +542,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(429, {"error": "zu viele neue Abos, bitte später"})
                 new_id, secret = secrets.token_urlsafe(18), secrets.token_urlsafe(24)
                 with db_lock:
-                    if CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0] >= MAX_SUBSCRIPTIONS:
+                    # Dasselbe Gerät zählt nicht mit: es ersetzt nur sein altes Abo.
+                    if CONN.execute("SELECT COUNT(*) FROM subs WHERE endpoint != ?", (s["endpoint"],)).fetchone()[0] >= MAX_SUBSCRIPTIONS:
                         return self.reply(503, {"error": "voll"})
                     # Dasselbe Gerät neu angemeldet: altes Abo ersetzen, Betreiber bleibt Betreiber.
                     old = CONN.execute("SELECT is_admin FROM subs WHERE endpoint = ?", (s["endpoint"],)).fetchone()

@@ -6,6 +6,8 @@ const DB = "happy-sunshine";
 const STORE = "kv";
 
 let opening = null;
+// Nach „Alles löschen“ darf diese Seite nichts mehr ablegen, auch nicht aus noch laufenden Abfragen.
+let frozen = false;
 function open() {
   opening ??= new Promise((resolve, reject) => {
     const req = indexedDB.open(DB, 1);
@@ -21,16 +23,20 @@ function run(mode, fn) {
     const tx = db.transaction(STORE, mode);
     const req = fn(tx.objectStore(STORE));
     tx.oncomplete = () => resolve(req?.result);
-    tx.onerror = () => reject(tx.error);
+    // tx.error ist beim error-Event der Anfrage noch leer, erst beim Abbruch gesetzt.
+    tx.onerror = (e) => reject(e.target?.error || tx.error);
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB-Transaktion abgebrochen"));
   }));
 }
 
 /** Liefert undefined, wenn IndexedDB fehlt (privater Modus) oder der Schlüssel unbekannt ist. */
 export const kvGet = (key) => run("readonly", (s) => s.get(key)).catch(() => undefined);
-export const kvSet = (key, value) => run("readwrite", (s) => s.put(value, key));
+export const kvSet = (key, value) => (frozen ? Promise.resolve() : run("readwrite", (s) => s.put(value, key)));
 export const kvDel = (key) => run("readwrite", (s) => s.delete(key)).catch(() => {});
 /** Leert den ganzen Speicher dieser Seite, auch den Schlüssel der Verschlüsselung. */
 export const kvClear = () => run("readwrite", (s) => s.clear());
+/** Ab jetzt schreibt dieser Kontext nichts mehr (Abmelden; die Seite lädt danach neu). */
+export const freezeWrites = () => { frozen = true; };
 
 // ---------------------------------------------------------------- verschlüsselt
 //
@@ -42,16 +48,28 @@ export const kvClear = () => run("readwrite", (s) => s.clear());
 
 const KEY = "cryptoKey";
 
+/**
+ * Schlüssel lesen oder einmalig anlegen. Seite und Service Worker können das
+ * gleichzeitig tun: add() statt put(), der Verlierer nimmt den Schlüssel des
+ * Gewinners — sonst wäre, was der andere damit verschlüsselt hat, verloren.
+ * Ein Lesefehler legt keinen neuen Schlüssel an.
+ */
 async function key() {
-  let k = await kvGet(KEY);
-  if (!k) {
-    k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-    await kvSet(KEY, k);
+  const k = await run("readonly", (s) => s.get(KEY));
+  if (k) return k;
+  if (frozen) throw new Error("Speicher gelöscht");
+  const fresh = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  try {
+    await run("readwrite", (s) => s.add(fresh, KEY));
+    return fresh;
+  } catch (e) {
+    if (e?.name !== "ConstraintError") throw e;
+    return run("readonly", (s) => s.get(KEY));
   }
-  return k;
 }
 
 export async function secretSet(name, value) {
+  if (frozen) return;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = new TextEncoder().encode(JSON.stringify(value));
   const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), data);

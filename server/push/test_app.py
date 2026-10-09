@@ -6,6 +6,9 @@ import os
 import unittest
 from zoneinfo import ZoneInfo
 
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
 from app import (
     BadRequest, RateLimit, check_endpoint, check_keys, ferien_problem, is_due, parse_settings, sdui_login_body, sdui_route_ok,
 )
@@ -77,7 +80,12 @@ def b64(raw, pad=False):
     return s if pad else s.rstrip("=")
 
 
-GOOD_KEYS = {"p256dh": b64(b"\x04" + os.urandom(64)), "auth": b64(os.urandom(16))}
+def point():
+    """Öffentlicher P-256-Schlüssel wie aus PushSubscription.getKey("p256dh")."""
+    return ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+
+
+GOOD_KEYS = {"p256dh": b64(point()), "auth": b64(os.urandom(16))}
 
 
 class PushEndpoints(unittest.TestCase):
@@ -103,14 +111,15 @@ class PushEndpoints(unittest.TestCase):
 class PushKeys(unittest.TestCase):
     def test_gueltig(self):
         check_keys(GOOD_KEYS)
-        check_keys({"p256dh": b64(b"\x04" + os.urandom(64), pad=True), "auth": b64(os.urandom(16), pad=True)})
+        check_keys({"p256dh": b64(point(), pad=True), "auth": b64(os.urandom(16), pad=True)})
 
     def test_ungueltig(self):
         auth = b64(os.urandom(16))
         for keys in (
             {"p256dh": b64(b"\x04" + os.urandom(63)), "auth": auth},  # zu kurz
             {"p256dh": b64(b"\x02" + os.urandom(64)), "auth": auth},  # falsches erstes Byte
-            {"p256dh": b64(b"\x04" + os.urandom(64)), "auth": b64(os.urandom(15))},
+            {"p256dh": b64(b"\x04" + bytes(64)), "auth": auth},  # Punkt neben der Kurve
+            {"p256dh": b64(point()), "auth": b64(os.urandom(15))},
             {"p256dh": "kein base64!", "auth": auth},
             {"p256dh": GOOD_KEYS["p256dh"]},
             {"p256dh": 1, "auth": auth},

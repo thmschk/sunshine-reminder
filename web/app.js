@@ -2,9 +2,9 @@ import {
   DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, clampDaysAhead,
   addDays, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
-import { kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
+import { freezeWrites, kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
 import {
-  accountKey, accountLabel, dayStore, loadAccounts, loadActive, removeAccount, saveActive, upsertAccount,
+  accountKey, accountLabel, dayStore, loadAccounts, loadActive, removeAccount, renameAccount, saveActive, upsertAccount,
 } from "./accounts.js";
 import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks, resume } from "./guard.js";
@@ -103,8 +103,13 @@ function selectAccount(customerNo) {
   store.active = customerNo;
   saveActive(customerNo);
 }
-/** Abmelden: alles, was diese Seite auf dem Gerät abgelegt hat, samt Schlüssel. */
+/**
+ * Abmelden: alles, was diese Seite auf dem Gerät abgelegt hat, samt Schlüssel.
+ * Noch laufende Abfragen dürfen danach nichts mehr ablegen; der Aufrufer lädt die Seite neu.
+ */
 async function clearCreds() {
+  viewSeq++;
+  freezeWrites();
   store.accounts = [];
   store.active = null;
   store.pushWeekdays = [1, 2, 3, 4, 5];
@@ -124,7 +129,7 @@ async function rememberName(creds) {
   const name = clients.get(creds.customerNo)?.profile?.name;
   const acc = store.accounts.find((a) => a.customerNo === creds.customerNo);
   if (!name || !acc || acc.name === name) return;
-  store.accounts = await upsertAccount({ ...acc, name }).catch(() => store.accounts);
+  store.accounts = await renameAccount(creds.customerNo, name).catch(() => store.accounts);
 }
 
 /**
@@ -785,6 +790,10 @@ async function showOrder(focusDate = null) {
 
   let days = [];
   let all = [];
+  // Jeder Ladevorgang hat seine Nummer: ein überholter (z. B. nach dem Abschicken neu
+  // gestartet) bricht ab, statt weiter Tage in die neue Liste zu hängen.
+  let loadSeq = 0;
+  let submitting = false;
   const ferien = await loadHolidays();
   // Die bestellte Linie, falls sie sich noch ändern lässt (DayStatus.ordered() der App).
   const orderedOf = (d) => d.entries.find((e) => e.isOrdered && e.selectable) ?? null;
@@ -821,6 +830,8 @@ async function showOrder(focusDate = null) {
    * nicht zu den ORDER_WEEKS, Ferienessen wird angezeigt wie jede Woche.
    */
   async function load() {
+    const mine = ++loadSeq;
+    const current = () => my === viewSeq && mine === loadSeq;
     working(true);
     form.innerHTML = `<div id="o-days"></div><p id="o-more" class="small muted"></p>
       <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
@@ -836,12 +847,13 @@ async function showOrder(focusDate = null) {
     let error = null;
     try {
       // Ferienwochen verlängern das Fenster, aber nicht unbegrenzt (Sommerferien: 7 Wochen).
-      for (let w = 0, n = 0; n < ORDER_WEEKS && w < ORDER_WEEKS + 8 && my === viewSeq; w++) {
+      for (let w = 0, n = 0; n < ORDER_WEEKS && w < ORDER_WEEKS + 8 && current(); w++) {
         const mon = addDays(monday, 7 * w);
         const dates = [0, 1, 2, 3, 4].map((i) => addDays(mon, i)).filter((d) => d >= today);
         if (!dates.length) continue;
         $more.textContent = `KW ${isoWeek(mon)[1]} wird geladen …`;
         let week = await get(dates.slice(0, 2));
+        if (!current()) return;
         const holidayWeek = dates.every((d) => holidayOn(ferien, d));
         const stop = dates.length === 5 && offered(all) && !offered(week) && !anyHoliday(dates.slice(0, 2));
         if (holidayWeek && !offered(week)) {
@@ -849,8 +861,8 @@ async function showOrder(focusDate = null) {
           continue;
         }
         n++;
-        if (!stop && my === viewSeq) week = week.concat(await get(dates.slice(2)));
-        if (my !== viewSeq) return;
+        if (!stop) week = week.concat(await get(dates.slice(2)));
+        if (!current()) return;
         all = all.concat(week);
         if (stop || (!offered(week) && offered(all) && !anyHoliday(dates))) break;
         const shown = week.filter(isChangeable);
@@ -864,7 +876,7 @@ async function showOrder(focusDate = null) {
     } catch (e) {
       error = e;
     }
-    if (my !== viewSeq) return;
+    if (!current()) return;
     working(false);
     $more.remove();
     // Solange darunter noch Wochen fehlten, konnte der Tag nicht ganz nach oben;
@@ -894,7 +906,7 @@ async function showOrder(focusDate = null) {
     for (const d of days) {
       document.getElementById(`day-${d.date}`)?.classList.toggle("changed", changes.some((c) => c.date === d.date));
     }
-    submit.disabled = !changes.length;
+    submit.disabled = submitting || !changes.length;
     submit.textContent = !changes.length ? "Nichts geändert"
       : changes.every((c) => changeKind(c) === "ORDER") ? `${changes.length} Essen bestellen`
       : changes.length === 1 ? "1 Änderung abschicken"
@@ -910,9 +922,13 @@ async function showOrder(focusDate = null) {
   form.addEventListener("change", refresh);
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    if (submitting) return;
     const changes = pending();
     if (!changes.length || !(await confirmDialog("Verbindlich abschicken?", changes.map(describe)))) return;
+    if (submitting) return;
 
+    // Bis zum Neuladen bleibt der Knopf aus: zwei Bestellungen auf einem Warenkorb zählen sich gegenseitig.
+    submitting = true;
     document.getElementById("b-submit").disabled = true;
     working(true);
     const previouslyInCart = all.flatMap((d) => d.entries.filter((e) => e.quantityInCart === "1" && e.selectable));
@@ -929,6 +945,7 @@ async function showOrder(focusDate = null) {
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
     // Die geänderten Tage hat placeOrders frisch geladen, der Rest kommt aus dem Zwischenspeicher.
+    submitting = false;
     if (outcome.kind === "done" || outcome.kind === "unconfirmed") await load();
     else refresh();
   });
@@ -1143,8 +1160,8 @@ function showSettings(message = "") {
     if (!confirm("Alles auf diesem Gerät löschen? Zugangsdaten, Sdui, Einstellungen und Erinnerung.")) return;
     await pushDisable().catch(() => {});
     await clearCreds();
-    sessionCreds = null;
-    showSetup();
+    // Neu laden beendet alle noch laufenden Abfragen dieser Seite.
+    location.replace(location.pathname);
   };
 }
 

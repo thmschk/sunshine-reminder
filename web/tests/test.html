@@ -230,8 +230,11 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
 }
 
 const { withSession } = await import("../session.js");
+// Token werden nur für gespeicherte Konten abgelegt; die Testkonten danach wieder entfernen.
+const SessAcc = await import("../accounts.js");
 await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu", async () => {
   const creds = { customerNo: `test-${Date.now()}`, password: "x" };
+  await SessAcc.upsertAccount(creds);
   let logins = 0;
   const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max", ""); } });
   const a = mk();
@@ -244,11 +247,24 @@ await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu",
   eq([r, calls, logins], ["T2", 2, 2], "neu angemeldet und wiederholt");
   const c = mk();
   eq(await withSession(c, creds, async () => c.token, { persist: false }), "T3", "ohne Speichern kein gespeicherter Token");
+  await SessAcc.removeAccount(creds.customerNo);
+});
+
+await test("Sitzung: kein Token für ein inzwischen entferntes Konto", async () => {
+  const creds = { customerNo: `weg-${Date.now()}`, password: "x" };
+  let logins = 0;
+  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max", ""); } });
+  const a = mk();
+  await withSession(a, creds, async () => 0);
+  const b = mk();
+  eq(await withSession(b, creds, async () => b.token), "T2", "nicht gespeichert, neu angemeldet");
 });
 
 await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async () => {
   const stamp = Date.now();
   const [ca, cb] = [{ customerNo: `a-${stamp}`, password: "x" }, { customerNo: `b-${stamp}`, password: "y" }];
+  await SessAcc.upsertAccount(ca);
+  await SessAcc.upsertAccount(cb);
   let logins = 0;
   const mk = () => ({ async login(no) { logins++; this.token = `${no}-T${logins}`; return new Profile("Muster, Max", ""); } });
   const x = mk();
@@ -257,6 +273,8 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   const y = mk();
   eq(await withSession(y, ca, async () => y.token), `a-${stamp}-T1`, "Token von A überlebt B");
   eq(logins, 2, "kein dritter Login");
+  await SessAcc.removeAccount(ca.customerNo);
+  await SessAcc.removeAccount(cb.customerNo);
 });
 
 // Mehrere Kinder: Konten, Übernahme, Zwischenspeicher.
@@ -299,6 +317,24 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   });
   // Echte Daten der Testseite wiederherstellen.
   await kvDel("accounts");
+  await test("Konten: Namen merken holt kein entferntes Kind zurück und lässt das neue Passwort", async () => {
+    await kvDel("accounts");
+    await Acc.upsertAccount({ customerNo: "3333", password: "alt", name: "" });
+    await Acc.upsertAccount({ customerNo: "3333", password: "neu" }); // Seite: neues Passwort
+    await Acc.renameAccount("3333", "Muster, Ida"); // Service Worker: Name aus IBS5
+    eq((await Acc.loadAccounts()).map((a) => [a.password, a.name]), [["neu", "Muster, Ida"]]);
+    await Acc.removeAccount("3333");
+    await Acc.renameAccount("3333", "Muster, Ida");
+    eq((await Acc.loadAccounts()).length, 0, "entferntes Konto bleibt entfernt");
+  });
+  await test("Schlüssel: gleichzeitig zum ersten Mal angelegt, beide Einträge lesbar", async () => {
+    await kvDel("accounts");
+    await kvDel("cryptoKey");
+    await Promise.all([secretSet("t.k1", { a: 1 }), secretSet("t.k2", { b: 2 })]);
+    eq([await secretGet("t.k1"), await secretGet("t.k2")], [{ a: 1 }, { b: 2 }]);
+    await kvDel("t.k1");
+    await kvDel("t.k2");
+  });
   if (backup.accounts) await secretSet("accounts", backup.accounts);
   if (backup.creds) await secretSet("creds", backup.creds);
   await kvSet("events", backup.events || []);
@@ -558,6 +594,49 @@ await test("Nachprüfung findet falsche Linie", async () => {
   const c = new FakeClient();
   const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "828") });
   eq(r.kind, "unconfirmed");
+});
+
+await test("Bestellen: Antwort aufs Abschicken fehlt, Bestellung aber da → erledigt, kein Zurückrollen", async () => {
+  const c = new FakeClient();
+  c.submitCart = async () => { c.calls.push("submit"); throw new Error("Netz weg"); };
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "done");
+  eq(c.calls.slice(c.calls.indexOf("submit") + 1), [], "nach dem Abschicken nichts zurückgerollt");
+});
+await test("Bestellen: Antwort aufs Abschicken fehlt, Bestellung nicht da → unbestätigt statt „nichts abgeschickt“", async () => {
+  const c = new FakeClient();
+  c.submitCart = async () => { throw new Error("Netz weg"); };
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: async () => [] });
+  eq(r.kind, "unconfirmed");
+  eq(r.reason.includes("Antwort auf das Abschicken fehlt"), true, `Grund: ${r.reason}`);
+  eq(r.missing, ["2026-10-12"]);
+});
+
+// Tagesansicht (Handy): Kaltverpflegung bleibt dort data-readonly="false", auch nach dem Bestellschluss.
+{
+  const btn = (id, name, ro) => `<button class="menuplan-checkbox" data-quantity-ordered="" data-quantity-in-shopping-cart="" data-order-status="0" data-name="${name}" data-date="12.10.2026" data-readonly="${ro}" id="menu_quantity_mobile-2026-10-12_16_${id}" onclick="DayPlan.changeItemQuantity('', 1, 'x', '1000', '${id}', '2026-10-12', 'u', true, '16', 'n');"></button>`;
+  const day = (...b) => parseWeekplan(`<ul><li class="plan" id="dayplan">${b.join("")}</li></ul>`).days.get("2026-10-12");
+  await test("Tagesansicht: offene Kaltverpflegung hält einen abgelaufenen Tag nicht offen", () => {
+    const d = day(btn(827, "Linseneintopf", "true"), btn(828, "Gemüsepfanne", "true"), btn(831, "Kaltverpflegung", "false"));
+    eq([d.state, d.orderable], [OrderState.DEADLINE_PASSED, false]);
+  });
+  await test("Tagesansicht: offener Tag bleibt offen", () => {
+    const d = day(btn(827, "Linseneintopf", "false"), btn(831, "Kaltverpflegung", "false"));
+    eq([d.state, d.orderable], [OrderState.NOT_ORDERED, true]);
+  });
+}
+
+await test("IBS5 antwortet nicht: Frist gesetzt, eigene Meldung, kein zweiter Login", async () => {
+  const { IbsClient } = await import("../ibs.js");
+  const realFetch = window.fetch;
+  let signal = null;
+  window.fetch = async (url, init) => { signal = init?.signal; throw new DOMException("timeout", "TimeoutError"); };
+  const c = new IbsClient();
+  c.token = "t";
+  let err = null;
+  try { await c.orderHistory(); } catch (e) { err = e; } finally { window.fetch = realFetch; }
+  eq(signal instanceof AbortSignal, true, "AbortSignal übergeben");
+  eq([!!err, err?.maybeAuth, /antwortet nicht/.test(err?.message || "")], [true, false, true], `Fehler: ${err?.message}`);
 });
 
 const failed = results.filter((r) => r.startsWith("FAIL")).length;

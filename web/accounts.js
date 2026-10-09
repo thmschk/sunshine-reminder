@@ -42,6 +42,19 @@ export async function upsertAccount(account) {
   return list;
 }
 
+/**
+ * Nur den Namen eines noch vorhandenen Kontos setzen. Wer parallel ein Kind entfernt
+ * oder ein neues Passwort speichert, wird dabei nicht mit altem Stand überschrieben.
+ */
+export async function renameAccount(customerNo, name) {
+  const list = await loadAccounts();
+  const acc = list.find((a) => a.customerNo === customerNo);
+  if (!acc || acc.name === name) return list;
+  acc.name = name;
+  await saveAccounts(list);
+  return list;
+}
+
 /** Konto samt seiner Zwischenspeicher und nur ihm zugeordneter Termine löschen. */
 export async function removeAccount(customerNo) {
   const list = (await loadAccounts()).filter((a) => a.customerNo !== customerNo);
