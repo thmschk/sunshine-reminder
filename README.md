@@ -80,7 +80,8 @@ Was nach dem Eingeben der Zugangsdaten passiert:
 3. **Erinnerung einschalten (einmalig).** Der Browser erzeugt ein Push-Abo, eine
    zufällige Adresse beim Push-Dienst von Google bzw. Apple. Die Seite schickt
    nur dieses Abo und die Uhrzeit an unseren Server.
-4. **Jeden Werktag zur gewählten Zeit** läuft der Weckruf so:
+4. **Jeden Werktag zur gewählten Zeit** läuft der Weckruf so (oben zur
+   Einordnung noch einmal die Anmeldung aus Schritt 3):
 
    ```mermaid
    %%{init: {"sequence": {"mirrorActors": false}}}%%
@@ -89,11 +90,19 @@ Was nach dem Eingeben der Zugangsdaten passiert:
        participant P as Push-Dienst (Google/Apple)
        participant H as Handy (Service Worker)
        participant I as IBS5
+       Note over S,H: einmalig: Erinnerung einschalten
+       H->>S: Push-Abo und Uhrzeit
+       Note over S,I: jeden Werktag zur gewählten Zeit
        S->>P: leerer Weckruf an die Push-Adresse
        P->>H: zustellen
        Note over H: liest die verschlüsselten<br/>Zugangsdaten vom Gerät
        H->>I: anmelden, Speiseplan abfragen
        I-->>H: Bestellstand
+       opt nur wenn Sdui eingerichtet
+           H->>S: Stundenplan abfragen
+           Note over S: reicht nur an Sdui durch
+           S-->>H: Stundenplan
+       end
        Note over H: Meldung „2 Tage offen“<br/>oder still „satt … theoretisch ✓“
    ```
 
