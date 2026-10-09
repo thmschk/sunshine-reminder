@@ -64,6 +64,16 @@ PUSH_HOSTS = re.compile(
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 SDUI_BASE = "https://api.sdui.app/v1"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Umleitungen nie folgen: urllib gäbe den Authorization-Header (Sdui-Token) an jedes Ziel weiter."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+SDUI_OPENER = urllib.request.build_opener(NoRedirect)
 # Nur die Aufrufe der App: Login, eigenes Konto, Kind, Stundenplan.
 SDUI_ROUTES = [
     ("POST", re.compile(r"^auth/login$", re.ASCII)),
@@ -513,9 +523,11 @@ class Handler(BaseHTTPRequestHandler):
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(f"{SDUI_BASE}/{rest}", data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with SDUI_OPENER.open(req, timeout=20) as r:
                 status, body = r.status, r.read()
         except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                return self.reply(502, {"error": "Sdui leitet um, nicht gefolgt"})
             status, body = exc.code, exc.read()
         except Exception:
             return self.reply(502, {"error": "Sdui nicht erreichbar"})

@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from app import (
-    BadRequest, RateLimit, check_endpoint, check_keys, ferien_problem, is_due, parse_settings, sdui_login_body, sdui_route_ok,
+    SDUI_OPENER, BadRequest, RateLimit, check_endpoint, check_keys, ferien_problem, is_due, parse_settings, sdui_login_body, sdui_route_ok,
 )
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -141,6 +141,47 @@ class RateLimitTest(unittest.TestCase):
         import time
         time.sleep(0.06)
         self.assertTrue(rl.allow("a"))
+
+
+class SduiUmleitung(unittest.TestCase):
+    def test_token_geht_nie_an_ein_umleitungsziel(self):
+        import http.server
+        import threading
+        import urllib.error
+        import urllib.request
+
+        seen = []
+
+        class Ziel(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        ziel = http.server.HTTPServer(("127.0.0.1", 0), Ziel)
+
+        class Umleiter(Ziel):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{ziel.server_port}/x")
+                self.end_headers()
+
+        quelle = http.server.HTTPServer(("127.0.0.1", 0), Umleiter)
+        for s in (ziel, quelle):
+            threading.Thread(target=s.serve_forever, daemon=True).start()
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{quelle.server_port}/users/self",
+                                         headers={"Authorization": "Bearer geheim"})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                SDUI_OPENER.open(req, timeout=5)
+            self.assertEqual(ctx.exception.code, 302)
+            self.assertEqual(seen, [], "Umleitungsziel darf nicht aufgerufen werden")
+        finally:
+            ziel.shutdown()
+            quelle.shutdown()
 
 
 class SduiPfad(unittest.TestCase):
