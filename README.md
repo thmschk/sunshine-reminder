@@ -229,34 +229,11 @@ done
 Die Web-Version spricht direkt aus dem Browser mit IBS5. Das geht nur, weil
 IBS5 solche Zugriffe von anderen Webseiten derzeit zulässt. Ändert der
 Hersteller das, funktioniert die Web-Version nicht mehr, bis sie umgebaut ist.
-Die Python-Variante ist davon nicht betroffen.
 
 Warum keine iPhone-App? iOS entscheidet selbst, ob und wann eine App im
 Hintergrund rechnen darf. Eine Prüfung mit Frist kann Stunden zu spät kommen
 oder ausfallen. Eine Erinnerung empfangen kann das iPhone aber tadellos — nur
-auslösen muss sie jemand anders. Das übernimmt hier der Server. Wer ganz ohne
-fremden Server auskommen will, nimmt die [Python-Variante](#die-python-variante)
-auf einem eigenen Rechner, der ohnehin durchläuft.
-
-## Die Python-Variante
-
-`ibswatch/` ist die Referenzimplementierung, mit der das Protokoll erschlossen
-wurde. Sie prüft dasselbe von der Kommandozeile aus und schickt eine E-Mail —
-sinnvoll auf einem Rechner, der ohnehin durchläuft (Raspberry Pi, NAS, Server).
-
-```bash
-python3 -m pip install -r requirements.txt
-cp config.example.toml config.toml     # anpassen
-python3 -m ibswatch.check --dry-run
-```
-
-Zugangsdaten kommen dort aus `~/.netrc`:
-
-```
-machine ibs.sunshine-catering.de login <Kundennummer> password <Passwort>
-```
-
-Für den regelmäßigen Lauf liegen in `deploy/` fertige systemd-Timer.
+auslösen muss sie jemand anders. Das übernimmt hier der Server.
 
 ## Technische Notizen
 
@@ -334,11 +311,6 @@ Zwei Eigenheiten des Servers, die Zeit gekostet haben:
 * Ohne `Accept-Language`-Header antwortet der IIS mit **HTTP 500**
   (`Request.UserLanguages` ist dann null in `Views/Shared/_Layout.cshtml`).
 * Authentifizierte Endpunkte erwarten zusätzlich `X-Requested-With: XMLHttpRequest`.
-
-Und eine Falle in der Python-Variante: `requests` liest von sich aus `~/.netrc`
-und setzt für passende Hosts HTTP-Basic-Auth — das überschreibt den
-Bearer-Token, und der Server antwortet mit 500. Da die Zugangsdaten dort per
-Design unter genau diesem Hostnamen liegen, trifft das jede Installation.
 
 ## Entstehung
 

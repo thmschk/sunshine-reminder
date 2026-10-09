@@ -1,6 +1,4 @@
 # Alles, was Zugangsdaten oder personenbezogene Daten enthalten kann
-config.toml
-dumps/
 *.log
 .env
 .netrc

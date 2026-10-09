@@ -29,8 +29,8 @@ steht im README unter „Architektur“.
 
 ## Code
 
-- Ein Repository für alles: `thmschk/sunshine-reminder` mit `ibswatch/` (Python-Variante),
-  `web/` (Web-App), `server/` (Push-Dienst und Konfiguration), `docs/`.
+- Ein Repository für alles: `thmschk/sunshine-reminder` mit `web/` (Web-App), `server/` (Push-Dienst
+  und Konfiguration), `tools/` (Ferientermine), `docs/`.
 - Live ist `main` auf GitHub. Auf dem Server liegt kein Git-Klon (und kein Git): `server/deploy.sh` lässt ihn
   den Commit als Tarball von GitHub laden. Uncommittetes oder Ungepushtes geht so nie live. Welcher Commit
   läuft, steht in `/srv/sunshine/DEPLOYED`.
@@ -123,5 +123,4 @@ das; dann das Skript laufen lassen, Diff ansehen, committen und `server/deploy.s
 | | |
 |---|---|
 | Server | `ssh privat 'cd /srv/sunshine && docker compose run --rm -T -v /srv/sunshine/push:/app push python -m unittest test_app'` oder lokal in einem venv mit `server/push/requirements.txt`: `cd server/push && python -m unittest test_app` |
-| Python-Variante | `python3 -m unittest discover -s tests` |
 | Web | `python3 -m http.server` im Repo, dann `web/tests/test.html`, `web/tests/guard.html`, `web/tests/xss.html`, `web/tests/kinder.html`, `web/tests/ferien.html`, `web/tests/anmelden.html?mode=granted|denied|off`, `web/tests/ui.html` und `web/tests/crypto.html` im Browser |
