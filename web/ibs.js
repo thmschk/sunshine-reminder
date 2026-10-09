@@ -309,6 +309,11 @@ const ONCLICK = [
   { re: /clickMenuCheckbox\(([^)]*)\)/, index: 5 },
   { re: /changeItemQuantity\(([^)]*)\)/, index: 3 },
 ];
+/**
+ * Neueres Layout (seit 09.10.2026): kein onclick am Knopf, sondern ein Skript daneben,
+ * $('#<id>').click(function () { …changeItemQuantity(…) }), mit denselben Argumenten.
+ */
+const CLICK_BINDING = /\$\(\s*['"]#([\w-]+)['"]\s*\)\s*\.click\(\s*function\s*\(\)\s*\{([\s\S]*?)\}\s*\)/g;
 /** Die Regel aus dem Seiten-JS von IBS5 (M5/KV-SPERRLOGIK). */
 const KV_NAME = /M5|KALTVERPFLEGUNG|\bKV\b/i;
 
@@ -374,6 +379,9 @@ export function parseWeekplan(html) {
   const text = decode(html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " "));
   const kw = /\bKW\s*(\d{1,2})\b/.exec(text);
 
+  const bound = new Map();
+  for (const m of html.matchAll(CLICK_BINDING)) bound.set(m[1], m[2]);
+
   const byDate = new Map();
   for (const m of html.matchAll(TAG)) {
     if (!/data-order-status/i.test(m[2])) continue;
@@ -400,7 +408,7 @@ export function parseWeekplan(html) {
       isKv: KV_NAME.test(name),
       menuGroupId: full?.[2] || "",
       menuLineId: full?.[3] || "",
-      customerId: customerIdFrom(a.get("onclick") || ""),
+      customerId: customerIdFrom(a.get("onclick") || bound.get(id) || ""),
     });
     if (!byDate.has(date)) byDate.set(date, []);
     byDate.get(date).push(entry);
@@ -572,7 +580,11 @@ const DAY_CACHE_MS = 10 * 60 * 1000;
 // Ab nächster Woche länger: dort ist kein Bestellschluss nah, und ob anderswo
 // bestellt wurde, gleicht die Übersicht über die Bestellhistorie ab.
 const FAR_CACHE_MS = 6 * 60 * 60 * 1000;
+// Ein offenes Gericht ohne Kundennummer kann nicht bestellt werden: dann hat der Parser
+// das Markup nicht verstanden (z. B. neues IBS5-Layout), der Tag wird neu geladen.
+const unusable = (day) => day.entries.some((e) => e.orderable && !e.isKv && !e.customerId);
 const isFresh = (hit) => {
+  if (unusable(hit.day)) return false;
   const nextMonday = addDays(todayBerlin(), 8 - weekdayNo(todayBerlin()));
   const ttl = DAY_TTL_MS[hit.day.state] ?? (hit.day.date >= nextMonday ? FAR_CACHE_MS : DAY_CACHE_MS);
   return Date.now() - hit.at < ttl;

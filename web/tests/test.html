@@ -209,6 +209,15 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
     eq(days.map((d) => d.state), [OrderState.NO_OFFER, OrderState.NOT_ORDERED, OrderState.NO_OFFER, OrderState.DEADLINE_PASSED]);
     eq(store.rows.find((r) => r.date === near).day.state, OrderState.NO_OFFER, "gespeichert");
   });
+  await test("Zwischenspeicher: offenes Gericht ohne Kundennummer wird neu geladen", async () => {
+    const asked = [];
+    const far = addDays(t, 14);
+    const r = row(far, OrderState.NOT_ORDERED, 1);
+    r.day.entries = [{ name: "Linseneintopf", orderable: true, isKv: false, customerId: "", menuGroupId: "16", menuLineId: "827", status: "0", quantityOrdered: "", quantityInCart: "" }];
+    const fake = { customerNo: "1000", dayView: true, dayStore: memStore([r]), async dayplan(d) { asked.push(d); return emptyDay; } };
+    await collect(fake, [far]);
+    eq(asked, [far], "neu geladen");
+  });
   await test("Zwischenspeicher: Widerspruch zur Historie verwirft den Tag", async () => {
     const asked = [];
     const store = memStore([row(d1, OrderState.ORDERED, 1)]); // laut Historie nicht (mehr) bestellt
@@ -621,6 +630,29 @@ await test("Bestellen: Antwort aufs Abschicken fehlt, Bestellung nicht da → un
   eq(r.kind, "unconfirmed");
   eq(r.reason.includes("Antwort auf das Abschicken fehlt"), true, `Grund: ${r.reason}`);
   eq(r.missing, ["2026-10-12"]);
+});
+
+// Layout seit 09.10.2026: Klick per Skript neben dem Knopf statt onclick (Struktur aus echten Antworten).
+await test("Neues Layout: Kundennummer aus $('#id').click(…), Tages- und Wochenansicht", () => {
+  const day = parseWeekplan(`<ul><li class="plan" id="dayplan"><button class="btn quantity-one basket-marker menuplan-checkbox"
+      data-quantity-ordered="" data-quantity-in-shopping-cart="" data-order-status="0" data-price="" data-name="Linseneintopf"
+      data-date="02.11.2026" data-readonly="false" id="menu_quantity_mobile-2026-11-02_16_827">
+    </button><script>
+    $('#menu_quantity_mobile-2026-11-02_16_827').click(function () {
+        DayPlan.changeItemQuantity( '', 1, 'menu_quantity_mobile-2026-11-02_16_827', '1000', '827', '2026-11-02', 'https://ibs.sunshine-catering.de/IBS5', true, '16', 'order-note-open-dialog-827-20261102' )
+    })
+    <\/script></li></ul>`).days.get("2026-11-02");
+  eq([day.state, day.entries[0].customerId, day.entries[0].selectable], [OrderState.NOT_ORDERED, "1000", true], "Tagesansicht");
+  const week = parseWeekplan(`<div id="weekplan"><h2>KW 45</h2><button id="menu_quantity_2026-11-02_16_828" class="menuplan-checkbox" data-quantity-ordered="" tabindex="3"
+      data-quantity-in-shopping-cart="" data-order-status="0" data-date="02.11.2026" data-name="Fusilli" data-price=""></button>
+    <script>
+    $('#menu_quantity_2026-11-02_16_828').click(function () {
+        console.log('menu_quantity_2026-11-02_16_828 click')
+        IbsOrderMenu.clickMenuCheckbox( 0, '', '', 1 , 'menu_quantity_2026-11-02_16_828', '2000', '828', '2026-11-02', 'https://ibs.sunshine-catering.de/IBS5' , true, '16' );
+        orderNoteButtonDisplay('order-note-open-dialog-828-20261102', this.dataset.orderStatus);
+    })
+    <\/script></div>`).days.get("2026-11-02");
+  eq([week.entries[0].customerId, week.entries[0].menuLineId, week.entries[0].selectable], ["2000", "828", true], "Wochenansicht");
 });
 
 // Tagesansicht (Handy): Kaltverpflegung bleibt dort data-readonly="false", auch nach dem Bestellschluss.
