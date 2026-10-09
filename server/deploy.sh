@@ -18,6 +18,8 @@ fi
 LOCAL=$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || true)
 [[ $LOCAL == "$SHA" ]] || echo "Hinweis: lokal ist ${LOCAL:0:7} ausgecheckt, live geht ${SHA:0:7} ($REF)."
 
+# Die Server-Blöcke kommen per stdin (bash -s): jeder docker-Aufruf bekommt
+# </dev/null, sonst liest er womöglich den Rest des Skripts weg und bash endet still mit 0.
 ssh "$HOST" "SHA=$SHA REPO=$REPO bash -s" <<'EOF'
 set -euo pipefail
 src=$(mktemp -d)
@@ -32,7 +34,7 @@ site=/srv/caddy/sites/sunshine.caddy
 prev=/srv/caddy/sunshine.caddy.prev
 [[ -f $site ]] && cp "$site" "$prev"
 cp "$src/server/sunshine.caddy" "$site"
-if ! (cd /srv/caddy && docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1); then
+if ! (cd /srv/caddy && docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile </dev/null >/dev/null 2>&1); then
   if [[ -f $prev ]]; then cp "$prev" "$site"; else rm -f "$site"; fi
   echo "FEHLER: sunshine.caddy von $SHA besteht caddy validate nicht, nichts geändert" >&2
   exit 1
@@ -45,12 +47,12 @@ cp "$src/server/compose.yaml" /srv/sunshine/compose.yaml
 # data/ (VAPID-Schlüssel, Abos) bleibt auf dem Server und gehört dem Container-User.
 mkdir -p /srv/sunshine/data && chown 1000:1000 /srv/sunshine/data && chmod 700 /srv/sunshine/data
 cd /srv/sunshine
-docker compose build --quiet
+docker compose build --quiet </dev/null
 rsync -a --delete --exclude tests/ "$src/web/" /srv/sunshine/web/
 # Welcher Commit läuft, ist so auch unter /version.txt zu sehen (#3).
 echo "$SHA" > /srv/sunshine/web/version.txt
 cp "$src/server/sunshine.caddy" "$site"
-docker compose up -d --quiet-pull 2>&1 | grep -vE "^ *(#|=>)" | tail -3
+docker compose up -d --quiet-pull </dev/null 2>&1 | grep -vE "^ *(#|=>)" | tail -3
 install -m 755 "$src/server/update-images.sh" /srv/sunshine/update-images.sh
 install -m 755 "$src/server/backup-data.sh" /srv/sunshine/backup-data.sh
 install -m 644 "$src/server/sunshine.cron" /etc/cron.d/sunshine
@@ -63,16 +65,16 @@ cd /srv/caddy
 # Caddy muss das Web-Verzeichnis sehen; einmalig in compose.yaml eintragen.
 if ! grep -q "/srv/sunshine/web" compose.yaml; then
   sed -i 's#      - ./sites:/etc/caddy/sites:ro#      - ./sites:/etc/caddy/sites:ro\n      - /srv/sunshine/web:/srv/sunshine/web:ro#' compose.yaml
-  docker compose up -d
+  docker compose up -d </dev/null
 fi
-docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null
+docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile </dev/null >/dev/null
 # Neu laden, bis die geladene Konfiguration (Admin-API, dank network_mode: host
 # auf localhost:2019) der Datei entspricht. Das erste Reload nach dem Kopieren
 # griff wiederholt nicht; verglichen wird die ganze Konfiguration, nicht nur ein Header.
 for try in 1 2 3; do
-  docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+  docker compose exec -T caddy caddy reload --force --config /etc/caddy/Caddyfile </dev/null >/dev/null 2>&1 || true
   sleep 1
-  want=$(docker compose exec -T caddy caddy adapt --config /etc/caddy/Caddyfile 2>/dev/null)
+  want=$(docker compose exec -T caddy caddy adapt --config /etc/caddy/Caddyfile </dev/null 2>/dev/null)
   got=$(curl -s localhost:2019/config/)
   if python3 -c 'import json, sys; sys.exit(json.loads(sys.argv[1]) != json.loads(sys.argv[2]))' "$want" "$got" 2>/dev/null; then
     exit 0
