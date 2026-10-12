@@ -25,6 +25,7 @@ const DAY_LIST_LENGTH = 5;
 
 // 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
 const DEFAULT_PUSH_TIME = "17:00";
+const DEFAULT_MORNING_TIME = "07:00";
 // accounts: je Kind ein IBS5-Konto (siehe accounts.js), active: Kundennummer des gewählten Reiters.
 // pushWeekdays: Tage des Weckrufs (1 = Mo); gemerkt auch bei ausgeschalteter Erinnerung, der Service Worker liest sie mit.
 const store = { accounts: [], active: null, daysAhead: DAYS_AHEAD.def, push: null, pushWeekdays: [1, 2, 3, 4, 5] };
@@ -409,6 +410,8 @@ async function showHome(fresh = false) {
   // nur so steht fest, ob dort noch abbestellt werden muss.
   const events = eventsFor(await loadEvents(today).catch(() => []), creds.customerNo);
   const dates = [...new Set([...targetDates(today, cfg), ...dueEvents(events, today).filter((e) => e.noMeal).map((e) => e.date)])].sort();
+  // Heute nur zum Anzeigen: kommt aus der ohnehin geladenen Bestellhistorie, ohne eigene Anfrage.
+  const peek = cfg.weekdays.includes(weekdayNo(today)) ? [today] : [];
   const client = clientFor(creds.customerNo);
   // Ob IBS5 diesem Gerät nur Tagesansichten liefert, ist gemerkt: spart die Probe-Anfrage.
   client.dayView ||= !!(await kvGet("ibsDayView").catch(() => false));
@@ -422,7 +425,7 @@ async function showHome(fresh = false) {
 
   let days;
   try {
-    days = await withLogin(creds, (c) => collect(c, dates, { fresh, onProgress: setProgress, history: true, signal }));
+    days = await withLogin(creds, (c) => collect(c, dates, { fresh, onProgress: setProgress, history: true, signal, peek }));
   } catch (e) {
     if (my !== viewSeq) return;
     if (e instanceof IbsAuthError && !client.token) {
@@ -485,13 +488,17 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const events = eventsFor(await loadEvents(today).catch(() => []), creds.customerNo);
   const ferien = await loadHolidays();
   const pref = await loadMealPref(creds.customerNo);
+  // Heute steht für sich oben: nicht mehr änderbar, also weder Alarm noch Abbestellen.
+  const todayDay = days.find((d) => d.date === today);
+  const allDays = days;
+  days = days.filter((d) => d.date !== today);
   // An Tagen ohne Schulessen ist „nicht bestellt“ gewollt: kein „offen“ in der Statuskarte.
   const noMeal = noMealDates(events);
-  const skip = skipDates(ferien, pref, days.map((d) => d.date));
+  const skip = skipDates(ferien, pref, allDays.map((d) => d.date));
   const relevant = days.filter((d) => !noMeal.has(d.date) && !skip.has(d.date));
   const ferienAsk = await ferienQuestion(ferien, pref, today, creds);
   if (my !== viewSeq) return;
-  homeState = { creds, days, staleAt };
+  homeState = { creds, days: allDays, staleAt };
 
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
@@ -502,6 +509,10 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
     ${ferienHint(ferienAsk)}
     ${eventsCard(events, days, today)}
     ${sdui?.error ? `<p class="small error">${esc(sdui.error)}</p>` : ""}
+    ${todayDay ? `
+      <div class="section">HEUTE</div>
+      <ul class="days today">${dayRow(todayDay, strip, events.filter((e) => e.date === today),
+        holidayOn(ferien, today), skip.has(today), true)}</ul>` : ""}
     ${days.length ? `
       <div class="section">DIE NÄCHSTEN TAGE</div>
       ${byWeek(days.slice(0, DAY_LIST_LENGTH)).map((week) => `
@@ -511,7 +522,7 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
 
   wireInstallTip();
   if (!staleAt) pushNotice = "";
-  for (const li of $app.querySelectorAll(".days li")) {
+  for (const li of $app.querySelectorAll(".days:not(.today) li")) {
     li.onclick = () => {
       const d = days.find((x) => x.date === li.dataset.date);
       if (d.isActionable || d.state === OrderState.ORDERED) showOrder(d.date);
@@ -745,15 +756,19 @@ async function showFerien(creds, h, onDone, { fromSettings = false } = {}) {
  * Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts;
  * eigene Termine und Ferien im Status. skip: Ferientag eines Kindes ohne Ferienessen.
  */
-function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false) {
+function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, isToday = false) {
   let dish = d.state === OrderState.NOT_ORDERED ? "Gericht wählen"
     : d.state === OrderState.DEADLINE_PASSED ? "nicht bestellt"
     : d.orderedItems[0] || "—";
   let [sub, subCls] = SUB[d.state];
   const timeline = strip?.(d.date) || "";
   let [sym, symCls] = d.state === OrderState.ORDERED ? ["✓", "ok"] : d.isActionable ? ["!", "open"] : ["✕", "bad"];
+  // Heute ist nichts mehr zu ändern: ohne Bestellung nur „nicht bestellt“, ohne Aufforderung.
+  if (isToday && d.state !== OrderState.ORDERED && d.state !== OrderState.NO_OFFER) {
+    [dish, sub, subCls, sym, symCls] = ["nicht bestellt", "", "", "✕", "bad"];
+  }
   const titles = dayEvents.map((e) => e.title).join(", ");
-  if (dayEvents.some((e) => e.noMeal)) {
+  if (dayEvents.some((e) => e.noMeal) && !(isToday && d.state === OrderState.ORDERED)) {
     if (d.state === OrderState.ORDERED) [sub, subCls, sym, symCls] = ["bestellt, abbestellen?", "open", "!", "open"];
     else [dish, sub, subCls, sym, symCls] = ["kein Schulessen", "", "", "✓", "ok"];
   } else if (holiday && (d.state === OrderState.NO_OFFER || (skip && (d.isActionable || d.state === OrderState.DEADLINE_PASSED)))) {
@@ -763,7 +778,7 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false) {
   const subHtml = [titles && `<span class="ev">${esc(titles)}</span>`, sub && esc(sub)].filter(Boolean).join(" · ");
   return `
     <li data-date="${d.date}">
-      <div class="date"><div class="wd">${esc(De.chip(d.date).slice(0, 2))}</div><div class="dom">${Number(d.date.slice(8, 10))}</div></div>
+      <div class="date"><div class="wd">${isToday ? "heute" : esc(De.chip(d.date).slice(0, 2))}</div><div class="dom">${Number(d.date.slice(8, 10))}</div></div>
       <div class="text"><div class="dish">${esc(dish)}</div>${
         // Mit Zeitleiste sagt der Haken rechts schon „bestellt“, wie in der App.
         timeline && d.state === OrderState.ORDERED && !titles ? "" : `<div class="sub ${subCls}">${subHtml}</div>`}${timeline}</div>
@@ -1107,6 +1122,7 @@ const ICON = {
   person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
   logout: "M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z",
   add: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
+  sun: "M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V19.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z",
   key: "M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z",
 };
 const ico = (name) => `<svg class="s-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
@@ -1407,7 +1423,18 @@ function pushBoxHtml(message = "") {
       data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}">${n}</button>`).join("")}</div>
     ${daysAheadRow()}
     ${on ? srow("play", "Jetzt testen", { tag: "button", id: "b-push-test" }) : ""}
+    ${on ? morningRows() : ""}
     ${admin}`;
+}
+
+/** Morgenmeldung „heute gibt's …“: hängt am Abo der Erinnerung, gleiche Tage. */
+function morningRows() {
+  const m = store.push.morning;
+  return `${srow("sun", "Morgens: Essen von heute", { right: toggle("morning-switch", !!m, "Morgenmeldung"),
+      hint: "an denselben Tagen wie die Erinnerung" })}
+    ${m ? srow("clock", "Uhrzeit morgens", { hint: "Meldung kommt bis zu 10 min später",
+      right: `<input id="morning-time" class="time-value" type="time" value="${esc(m)}" step="300" aria-label="Uhrzeit morgens">` }) : ""}
+    ${m ? srow("play", "Morgenmeldung testen", { tag: "button", id: "b-morning-test" }) : ""}`;
 }
 
 function wirePushBox(message = "") {
@@ -1428,6 +1455,12 @@ function wirePushBox(message = "") {
   };
   if (sw) sw.onclick = guard(() => (store.push ? pushDisable() : pushEnable(time?.value || DEFAULT_PUSH_TIME)));
   if (test) test.onclick = () => runPushTest(test);
+  const msw = document.getElementById("morning-switch");
+  if (msw) msw.onclick = guard(() => pushSetMorning(store.push.morning ? null : DEFAULT_MORNING_TIME));
+  const mtest = document.getElementById("b-morning-test");
+  if (mtest) mtest.onclick = () => runPushTest(mtest, "today");
+  const mtime = document.getElementById("morning-time");
+  if (mtime) mtime.onchange = guard(() => pushSetMorning(mtime.value));
   const adm = document.getElementById("b-push-admin");
   if (adm) adm.onclick = guard(async () => {
     const p = await currentPush();
@@ -1436,9 +1469,11 @@ function wirePushBox(message = "") {
     alert("Dieses Gerät ist jetzt Betreiber-Gerät.");
   });
   // Die ganze Zeile öffnet die Zeitauswahl, nicht nur die Ziffern.
-  time?.closest(".srow")?.addEventListener("click", (ev) => {
-    if (ev.target !== time) try { time.showPicker(); } catch { time.focus(); }
-  });
+  for (const input of [time, mtime]) {
+    input?.closest(".srow")?.addEventListener("click", (ev) => {
+      if (ev.target !== input) try { input.showPicker(); } catch { input.focus(); }
+    });
+  }
   // Ohne Abo merkt sich das Feld nur die Wahl fürs Einschalten.
   if (store.push && time) time.onchange = guard(() => pushSetTime(time.value));
   const wdButtons = box.querySelectorAll(".wd-pick .wd-btn");
@@ -1508,6 +1543,15 @@ async function pushSetWeekdays(weekdays) {
   await kvSet("pushWeekdays", weekdays);
 }
 
+/** Morgenmeldung ein (Uhrzeit) oder aus (null). */
+async function pushSetMorning(morning) {
+  if (morning !== null && !/^\d{2}:\d{2}$/.test(morning)) return;
+  const p = await currentPush();
+  await api("PUT", `/subscriptions/${p.id}`, { morning_time: morning }, p.secret);
+  store.push = { ...p, morning };
+  await kvSet("push", store.push);
+}
+
 async function pushSetTime(time) {
   if (!/^\d{2}:\d{2}$/.test(time)) return;
   const p = await currentPush();
@@ -1520,7 +1564,7 @@ async function pushSetTime(time) {
  * „Jetzt testen“ mit sichtbarem Ablauf: Weckruf senden, auf die Meldung warten,
  * Erfolg zeigen. Der Service Worker meldet sich, sobald die Meldung angezeigt ist.
  */
-async function runPushTest(btn) {
+async function runPushTest(btn, kind = "") {
   btn.disabled = true;
   btn.insertAdjacentHTML("afterend", `<div id="test-status" class="srow-edit">
     <div class="pbar pbar-run"><span></span></div><span class="small muted" id="test-text">Weckruf wird gesendet …</span></div>`);
@@ -1542,7 +1586,7 @@ async function runPushTest(btn) {
     setTimeout(() => resolve(null), 45000);
   });
   try {
-    await pushTest();
+    await pushTest(kind);
     if (text()) text().textContent = "Gesendet, das Gerät prüft gerade beim Bestellsystem …";
   } catch (e) {
     return finish(`Senden fehlgeschlagen: ${e.message}`, false);
@@ -1551,9 +1595,9 @@ async function runPushTest(btn) {
   finish(title ? `✓ Meldung angezeigt: „${title}“` : "Gesendet, aber keine Meldung bestätigt. Sind Benachrichtigungen erlaubt?", !!title);
 }
 
-async function pushTest() {
+async function pushTest(kind = "") {
   const p = await currentPush();
-  await api("POST", `/subscriptions/${p.id}/test`, null, p.secret);
+  await api("POST", `/subscriptions/${p.id}/test`, kind ? { kind } : null, p.secret);
 }
 
 async function pushDisable() {

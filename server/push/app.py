@@ -2,8 +2,9 @@
 
 Speichert je Gerät nur ein Web-Push-Abo samt Uhrzeit, Zeitzone und Wochentagen —
 keine Zugangsdaten, keinen Namen, keinen Bestellstand. Zur gewählten Zeit geht
-ein Push mit {"t": "check"} hinaus; ob es etwas zu melden gibt, entscheidet der
-Service Worker auf dem Gerät, der IBS5 selbst abfragt.
+ein Push mit {"t": "check"} hinaus, zur Morgenzeit (falls gewählt) {"t": "today"};
+was gemeldet wird, entscheidet der Service Worker auf dem Gerät, der IBS5 selbst
+abfragt.
 
 Die id ist öffentlich, ändern oder löschen darf nur, wer das beim Anlegen
 ausgegebene Geheimnis kennt (gespeichert wird nur dessen SHA-256).
@@ -56,6 +57,8 @@ MAX_ENDPOINT_LEN = 1024
 # halbe Stunde verteilt: Handys hinter derselben Mobilfunk-IP (CGNAT) sollen IBS5
 # nicht in derselben Minute abfragen, sonst sperrt IBS5 die IP.
 MAX_OFFSET_MIN = 29
+# Die Morgenmeldung („heute gibt's …“) soll vor dem Losgehen ankommen: nur bis 9 min später.
+MORNING_MAX_OFFSET_MIN = 9
 
 # Nur echte Push-Dienste, sonst ließe sich der Server als Relay für beliebige URLs missbrauchen.
 PUSH_HOSTS = re.compile(
@@ -188,6 +191,9 @@ def init() -> Vapid:
             CONN.execute("ALTER TABLE subs ADD COLUMN offset_min INTEGER")
         if "is_admin" not in cols:
             CONN.execute("ALTER TABLE subs ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        if "morning_time" not in cols:
+            CONN.execute("ALTER TABLE subs ADD COLUMN morning_time TEXT")
+            CONN.execute("ALTER TABLE subs ADD COLUMN morning_last_sent TEXT")
         # Übergang: früher standen Betreiber-Abos als Liste in ADMIN_SUBS.
         for legacy in [x for x in os.environ.get("ADMIN_SUBS", "").split(",") if x]:
             CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (legacy,))
@@ -271,6 +277,11 @@ def parse_settings(body: dict, partial: bool = False) -> dict:
         if not isinstance(t, str) or not TIME_RE.match(t):
             raise BadRequest("time muss HH:MM sein")
         out["time"] = t
+    if "morning_time" in body or not partial:
+        m = body.get("morning_time")
+        if m is not None and (not isinstance(m, str) or not TIME_RE.match(m)):
+            raise BadRequest("morning_time muss HH:MM oder null sein")
+        out["morning_time"] = m
     if "weekdays" in body or not partial:
         w = body.get("weekdays", [1, 2, 3, 4, 5])
         if not isinstance(w, list) or not w or not all(isinstance(x, int) and 1 <= x <= 7 for x in w):
@@ -425,17 +436,28 @@ def run_selfcheck(vapid: Vapid) -> None:
         log.info("Selbstprüfung ok")
 
 
-def is_due(row, now: dt.datetime) -> bool:
+# Weckruf-Arten je Abo: Push-Inhalt → (Spalte Uhrzeit, Spalte letzter Versand, größte Verschiebung).
+SLOTS = {
+    "check": ("time", "last_sent", MAX_OFFSET_MIN),
+    "today": ("morning_time", "morning_last_sent", MORNING_MAX_OFFSET_MIN),
+}
+
+
+def is_due(row, now: dt.datetime, kind: str = "check") -> bool:
     """Wochentag passt, heute noch nicht geweckt, Uhrzeit + Verschiebung erreicht (bis 1 h nachholen)."""
-    due = now.replace(hour=int(row["time"][:2]), minute=int(row["time"][3:]), second=0, microsecond=0)
+    time_col, last_col, max_offset = SLOTS[kind]
+    if not row[time_col]:
+        return False
+    due = now.replace(hour=int(row[time_col][:2]), minute=int(row[time_col][3:]), second=0, microsecond=0)
     # Verschiebung nie über Mitternacht hinaus, sonst fiele der Tag aus.
-    due += dt.timedelta(minutes=min(row["offset_min"] or 0, 23 * 60 + 59 - due.hour * 60 - due.minute))
+    offset = (row["offset_min"] or 0) % (max_offset + 1)
+    due += dt.timedelta(minutes=min(offset, 23 * 60 + 59 - due.hour * 60 - due.minute))
     # Über Zeitstempel, nicht über die Uhrzeit: am Tag der Sommerzeit-Umstellung gibt es
     # 02:xx nicht, die Wanduhr-Differenz zu 03:00 wäre schon eine volle Stunde.
     late = now.timestamp() - due.timestamp()
     return (
         str(now.isoweekday()) in row["weekdays"]
-        and row["last_sent"] != now.date().isoformat()
+        and row[last_col] != now.date().isoformat()
         and 0 <= late < 3600
     )
 
@@ -445,12 +467,13 @@ def selfcheck_due(now: dt.datetime, last: dt.date | None) -> bool:
     return last != now.date() and now.strftime("%H:%M") >= SELFCHECK_AT
 
 
-def mark_sent(row, today: str) -> None:
-    """last_sent nur setzen, wenn Uhrzeit und Endpoint seit dem Schnappschuss gleich geblieben sind (#4 S3)."""
+def mark_sent(row, today: str, kind: str = "check") -> None:
+    """Versand nur vermerken, wenn Uhrzeit und Endpoint seit dem Schnappschuss gleich geblieben sind (#4 S3)."""
+    time_col, last_col, _ = SLOTS[kind]
     with db_lock:
         CONN.execute(
-            "UPDATE subs SET last_sent = ? WHERE id = ? AND time = ? AND endpoint = ?",
-            (today, row["id"], row["time"], row["endpoint"]),
+            f"UPDATE subs SET {last_col} = ? WHERE id = ? AND {time_col} = ? AND endpoint = ?",
+            (today, row["id"], row[time_col], row["endpoint"]),
         )
         CONN.commit()
 
@@ -459,7 +482,7 @@ def scheduler(vapid: Vapid) -> None:
     now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
     # Nach SELFCHECK_AT gestartet: die Prüfung beim Start (main) zählt für heute.
     selfcheck_last = now.date() if now.strftime("%H:%M") >= SELFCHECK_AT else None
-    failures: dict[tuple[str, str], int] = {}
+    failures: dict[tuple[str, str, str], int] = {}
     while True:
         # Kurz nach jeder vollen Minute prüfen.
         time.sleep(61 - dt.datetime.now().second)
@@ -470,19 +493,20 @@ def scheduler(vapid: Vapid) -> None:
             for row in rows:
                 now = dt.datetime.now(ZoneInfo(row["tz"]))
                 today = now.date().isoformat()
-                if not is_due(row, now):
-                    continue
-                # Erst nach erfolgreicher Zustellung als erledigt markieren: scheitert der
-                # Push-Dienst kurz, versucht der nächste Durchlauf es im Nachholfenster erneut,
-                # höchstens SEND_TRIES-mal am Tag (ein dauerhaft abgelehntes Abo nicht minütlich).
-                if send(row, vapid):
-                    mark_sent(row, today)
-                    sent += 1
-                else:
-                    key = (row["id"], today)
-                    failures[key] = failures.get(key, 0) + 1
-                    if failures[key] >= SEND_TRIES:
-                        mark_sent(row, today)
+                for kind in SLOTS:
+                    if not is_due(row, now, kind):
+                        continue
+                    # Erst nach erfolgreicher Zustellung als erledigt markieren: scheitert der
+                    # Push-Dienst kurz, versucht der nächste Durchlauf es im Nachholfenster erneut,
+                    # höchstens SEND_TRIES-mal am Tag (ein dauerhaft abgelehntes Abo nicht minütlich).
+                    if send(row, vapid, kind):
+                        mark_sent(row, today, kind)
+                        sent += 1
+                    else:
+                        key = (row["id"], today, kind)
+                        failures[key] = failures.get(key, 0) + 1
+                        if failures[key] >= SEND_TRIES:
+                            mark_sent(row, today, kind)
             for key in [k for k in failures if k[1] < (dt.date.today() - dt.timedelta(days=1)).isoformat()]:
                 del failures[key]
             if sent:
@@ -602,10 +626,11 @@ class Handler(BaseHTTPRequestHandler):
                     old = CONN.execute("SELECT is_admin FROM subs WHERE endpoint = ?", (s["endpoint"],)).fetchone()
                     CONN.execute("DELETE FROM subs WHERE endpoint = ?", (s["endpoint"],))
                     CONN.execute(
-                        "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created, offset_min, is_admin) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created, offset_min, is_admin, morning_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (new_id, sha(secret), s["endpoint"], s["keys"], s["time"], s["weekdays"], s["tz"],
-                         dt.date.today().isoformat(), pick_offset(CONN, s["time"]), old["is_admin"] if old else 0),
+                         dt.date.today().isoformat(), pick_offset(CONN, s["time"]), old["is_admin"] if old else 0,
+                         s["morning_time"]),
                     )
                     CONN.commit()
                 return self.reply(201, {"id": new_id, "secret": secret})
@@ -613,7 +638,9 @@ class Handler(BaseHTTPRequestHandler):
                 row = self.owned(sub_id)
                 if row is None:
                     return self.reply(404)
-                return self.reply(200 if send(row, self.vapid, "test") else 502)
+                # {"kind": "today"} probt die Morgenmeldung, sonst die Erinnerung.
+                push_kind = "today-test" if self.body().get("kind") == "today" else "test"
+                return self.reply(200 if send(row, self.vapid, push_kind) else 502)
             if kind == "subs" and test == "/admin":
                 # Gerät als Betreiber-Gerät markieren: Geheimnis des Abos UND Betreiber-Schlüssel.
                 row = self.owned(sub_id)
@@ -644,6 +671,8 @@ class Handler(BaseHTTPRequestHandler):
                     s["offset_min"] = pick_offset(CONN, s["time"])
                     # Neue Uhrzeit: heute zur neuen Zeit wecken, auch wenn die alte schon dran war.
                     s["last_sent"] = None
+                if "morning_time" in s and s["morning_time"] != row["morning_time"]:
+                    s["morning_last_sent"] = None
             cols = ", ".join(f"{k} = ?" for k in s)
             with db_lock:
                 if "endpoint" in s:

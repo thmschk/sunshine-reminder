@@ -44,6 +44,36 @@ class IsDue(unittest.TestCase):
         self.assertTrue(is_due(row(time="23:55", offset=9), at(23, 59)))
 
 
+class Morgens(unittest.TestCase):
+    def morning(self, **kw):
+        return {**row(**kw), "morning_time": "07:00", "morning_last_sent": None}
+
+    def test_aus_heisst_nie(self):
+        self.assertFalse(is_due({**row(), "morning_time": None, "morning_last_sent": None}, at(7, 0), "today"))
+
+    def test_verschiebung_hoechstens_neun_minuten(self):
+        self.assertTrue(is_due(self.morning(offset=3), at(7, 3), "today"))
+        self.assertFalse(is_due(self.morning(offset=23), at(7, 2), "today"))  # 23 % 10 = 3
+        self.assertTrue(is_due(self.morning(offset=23), at(7, 3), "today"))
+
+    def test_unabhaengig_von_der_erinnerung(self):
+        r = {**self.morning(last_sent="2026-10-05"), "morning_last_sent": None}
+        self.assertTrue(is_due(r, at(7, 0), "today"))
+        self.assertFalse(is_due({**r, "morning_last_sent": "2026-10-05"}, at(7, 0), "today"))
+        self.assertFalse(is_due(r, at(12, 0)))  # Erinnerung heute schon verschickt
+
+    def test_gleiche_wochentage(self):
+        self.assertFalse(is_due(self.morning(), at(7, 0, day=10), "today"))  # Samstag
+
+    def test_einstellung(self):
+        self.assertEqual(parse_settings({"morning_time": "07:00"}, partial=True), {"morning_time": "07:00"})
+        self.assertEqual(parse_settings({"morning_time": None}, partial=True), {"morning_time": None})
+        self.assertEqual(parse_settings({"time": "17:00"}, partial=True), {"time": "17:00"})
+        for bad in ("7:00", "24:00", 700, ""):
+            with self.assertRaises(BadRequest):
+                parse_settings({"morning_time": bad}, partial=True)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -304,8 +334,9 @@ class VersandUndAenderung(unittest.TestCase):
         self.old = getattr(app, "CONN", None)
         app.CONN = sqlite3.connect(":memory:", check_same_thread=False)
         app.CONN.row_factory = sqlite3.Row
-        app.CONN.execute("CREATE TABLE subs (id TEXT, endpoint TEXT, keys TEXT, time TEXT, last_sent TEXT)")
-        app.CONN.execute("INSERT INTO subs VALUES ('a', 'https://fcm.googleapis.com/alt', '{}', '12:00', NULL)")
+        app.CONN.execute("CREATE TABLE subs (id TEXT, endpoint TEXT, keys TEXT, time TEXT, last_sent TEXT, "
+                         "morning_time TEXT, morning_last_sent TEXT)")
+        app.CONN.execute("INSERT INTO subs VALUES ('a', 'https://fcm.googleapis.com/alt', '{}', '12:00', NULL, '07:00', NULL)")
         self.snap = app.CONN.execute("SELECT * FROM subs").fetchone()
 
     def tearDown(self):
@@ -322,6 +353,16 @@ class VersandUndAenderung(unittest.TestCase):
     def test_unveraendert_wird_markiert(self):
         self.app.mark_sent(self.snap, "2026-10-05")
         self.assertEqual(self.get()["last_sent"], "2026-10-05")
+
+    def test_morgens_getrennt_markiert(self):
+        self.app.mark_sent(self.snap, "2026-10-05", "today")
+        self.assertEqual(self.get()["morning_last_sent"], "2026-10-05")
+        self.assertIsNone(self.get()["last_sent"])
+
+    def test_neue_morgenzeit_bleibt_heute_offen(self):
+        self.app.CONN.execute("UPDATE subs SET morning_time = '06:30'")
+        self.app.mark_sent(self.snap, "2026-10-05", "today")
+        self.assertIsNone(self.get()["morning_last_sent"])
 
     def test_410_loescht_kein_erneuertes_abo(self):
         from unittest import mock

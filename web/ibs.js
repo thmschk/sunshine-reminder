@@ -561,12 +561,16 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
  * Mit history holt sich die Tagesansicht die bestellten Tage vorab gesammelt aus
  * der Bestellhistorie; nur für die Übersicht, denn solche Tage tragen keine
  * Bestell-IDs.
+ * peek: Tage nur zum Anzeigen (heute), nie mit eigener Tagesansicht: bestellt aus
+ * der Historie, sonst „nicht bestellt“ (DEADLINE_PASSED). Ohne lesbare Historie
+ * fehlen sie im Ergebnis; im Wochenplan kommen sie mit ihrem echten Zustand.
  */
-export async function collect(client, dates, { fresh = false, onProgress, history = false, signal } = {}) {
-  const byDay = () => (history ? collectByHistory : collectByDay)(client, dates, fresh, onProgress, signal);
+export async function collect(client, dates, { fresh = false, onProgress, history = false, signal, peek = [] } = {}) {
+  const byDay = () => (history ? collectByHistory(client, dates, fresh, onProgress, signal, peek)
+    : collectByDay(client, dates, fresh, onProgress, signal));
   if (client.dayView) return byDay();
   const weeks = new Map();
-  for (const d of dates) {
+  for (const d of [...new Set([...dates, ...peek])]) {
     const [y, w] = isoWeek(d);
     const key = `${y}-${String(w).padStart(2, "0")}`;
     if (!weeks.has(key)) weeks.set(key, { y, w, dates: [] });
@@ -672,8 +676,9 @@ const HISTORY_DAYS = 90;
  * (offen, zu spät, kein Angebot unterscheidet nur sie). Ist die Historie nicht
  * lesbar, wird wie bisher je Tag geladen.
  */
-async function collectByHistory(client, dates, fresh, onProgress, signal) {
-  if (!dates.length) return [];
+async function collectByHistory(client, dates, fresh, onProgress, signal, peek = []) {
+  peek = peek.filter((d) => !dates.includes(d));
+  if (!dates.length && !peek.length) return [];
   signal?.throwIfAborted();
   const today = todayBerlin();
   let ordered;
@@ -692,9 +697,10 @@ async function collectByHistory(client, dates, fresh, onProgress, signal) {
   }
   if (dropped) await saveDayCache(client);
   const known = dates.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
+  const peeked = peek.map((d) => (ordered.has(d) ? historyDay(d, ordered.get(d)) : new DayStatus(d, OrderState.DEADLINE_PASSED)));
   const progress = onProgress && ((done) => onProgress(known.length + done, dates.length));
   const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, progress, signal);
-  return [...known, ...rest].sort((a, b) => a.date.localeCompare(b.date));
+  return [...known, ...peeked, ...rest].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /** Tage für den Speicher des Geräts, damit die Übersicht beim Öffnen sofort den letzten Stand zeigt. */

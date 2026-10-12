@@ -27,8 +27,8 @@ kleiner Server das Gerät, ohne die IBS5-Zugangsdaten zu kennen.
 Die Web-Version wird gerade erprobt. Die Adresse folgt, sobald sie allgemein
 offen ist.
 
-* Übersicht der nächsten Tage, bestellen, umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit
-  dem Bestellsystem.
+* Übersicht von heute und den nächsten Tagen, bestellen, umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit
+  dem Bestellsystem. Heute steht abgehoben obenan, nur zum Lesen.
 * **Eigene Termine** (＋ oben): Ausflug, Sportfest … mit Erinnerung 1 bis 7 Tage
   vorher, in derselben Meldung wie das Essen. Mit „kein Schulessen an dem Tag“
   gilt der Tag nicht als offen, und ist dort doch bestellt, erinnert sie ans
@@ -45,6 +45,12 @@ offen ist.
   Erinnerung speichert er nur das Push-Abo und die Uhrzeit. Nur wer Sdui dazunimmt,
   schickt dessen Anmeldung und Abrufe durch ihn (siehe
   [unten](#was-der-server-sieht-und-speichert)).
+* **Morgens, was es heute gibt** (⚙ → „Morgens: Essen von heute“, Standard 7:00 Uhr,
+  aus bis zum Einschalten): an denselben Tagen wie die Erinnerung ein zweiter
+  Weckruf, das Gerät liest dann nur die Bestellhistorie. Ist heute nichts bestellt,
+  kommt „Brot einpacken“; an Tagen ohne Schulessen (Termin, Ferienwoche ohne
+  Essen, kein Angebot) „Heute kein Schulessen“, auf Android still. Für die Ferien
+  einfach abschalten oder Tage abwählen.
 * Jeder Weckruf zeigt eine Meldung, auch wenn alles bestellt ist. Browser und
   vor allem iOS verlangen das, sonst kündigen sie das Abo. Auf Android kommt
   „alles bestellt“ still und ersetzt die Meldung vom Vortag; auf dem iPhone
@@ -144,6 +150,7 @@ ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
 4. **Erinnerung:** ist beim Anmelden schon angehakt („Werktags um 17:00 Uhr
    erinnern“), der Browser fragt dann nach der Erlaubnis. Uhrzeit ändern oder
    ausschalten unter ⚙.
+   Darunter lässt sich „Morgens: Essen von heute“ zuschalten.
    Unter „Tage“ lassen sich Wochentage abwählen. Jeder Weckruf prüft bis zum
    nächsten, es fällt also kein Tag durch; ein offener Tag fällt nur später auf.
 5. **Ausprobieren:** ⚙ → „Jetzt testen“.
@@ -184,7 +191,7 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 | Anlass | sieht | speichert | wie lange |
 |---|---|---|---|
 | Seite laden | IP-Adresse, angefragte Datei | nichts; Zugriffs- und Fehlerprotokolle einzelner Anfragen sind abgeschaltet | – |
-| Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs; IP nur im Arbeitsspeicher für die Begrenzung auf 10 neue Abos je Stunde | Abo bis zum Ausschalten oder bis der Push-Dienst es als ungültig meldet; IP eine Stunde |
+| Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, gegebenenfalls Uhrzeit der Morgenmeldung, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs (je Art); IP nur im Arbeitsspeicher für die Begrenzung auf 10 neue Abos je Stunde | Abo bis zum Ausschalten oder bis der Push-Dienst es als ungültig meldet; IP eine Stunde |
 | Sdui (nur wenn eingerichtet) | IP-Adresse, beim Einrichten E-Mail und Passwort, danach Token, Kind-ID im Pfad, Stundenplan | nichts; IP nur im Arbeitsspeicher für die Begrenzung auf 20 Aufrufe | IP zehn Minuten |
 | tägliche Selbstprüfung | – (fragt selbst bei IBS5 und Sdui an, ohne Nutzerdaten, und liest die eigene `ferien.json`) | Ergebnis unter `/api/health` | bis zur nächsten Prüfung |
 

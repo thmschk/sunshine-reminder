@@ -186,6 +186,25 @@ await test("collect mit history: Fortschritt zählt alle Tage und endet voll", a
   await collect(fake, ["2026-10-05", "2026-10-06", "2026-10-07"], { history: true, onProgress: (d, t) => seen.push(`${d}/${t}`) });
   eq(seen[0], "2/3", "nach der Historie"); eq(seen.at(-1), "3/3", "am Ende");
 });
+await test("collect mit peek: heute nur aus der Historie, nie als Tagesansicht", async () => {
+  const asked = [];
+  const fake = { dayView: true, async orderHistory() { return histMobile; }, async dayplan(d) { asked.push(d); return '<li class="plan" id="dayplan"></li>'; } };
+  const days = await collect(fake, ["2026-10-07"], { history: true, peek: ["2026-10-05", "2026-10-08"] });
+  eq(asked, ["2026-10-07"], "nur der echte Tag");
+  eq(days.map((d) => [d.date, d.state]), [["2026-10-05", OrderState.ORDERED], ["2026-10-07", OrderState.NO_OFFER],
+    ["2026-10-08", OrderState.DEADLINE_PASSED]], "Zustände");
+  eq(days[0].orderedItems, ["Spiralnudeln"], "Gericht");
+  asked.length = 0;
+  eq((await collect(fake, [], { history: true, peek: ["2026-10-06"] })).map((d) => d.state), [OrderState.ORDERED], "nur heute");
+  eq(asked, [], "ohne Tagesansicht");
+});
+await test("collect mit peek im Wochenplan: Tag kommt aus derselben Woche", async () => {
+  const asked = [];
+  const fake = { async weekplan(y, w) { asked.push(w); return kw42; } };
+  const days = await collect(fake, ["2026-10-13"], { peek: ["2026-10-12"] });
+  eq(asked, [42], "eine Woche");
+  eq(days.map((d) => d.date), ["2026-10-12", "2026-10-13"]);
+});
 
 // Zwischenspeicher über client.dayStore, mit Tagen in der Zukunft (Vergangenes wird verworfen).
 const emptyDay = '<li class="plan" id="dayplan"></li>';
@@ -511,6 +530,46 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     eq([m.title, m.url], ["Essen abbestellen: Wandertag", `./?order=${d1}&k=1`]);
     eq(m.body.match(/Wandertag/g).length, 1, m.body);
     eq(m.body.includes("bitte abbestellen (Anna)"), true, m.body);
+  });
+}
+
+// Morgenmeldung „heute gibt's …“.
+{
+  const { composeToday } = await import("../sw.js");
+  const t = todayBerlin();
+  const day = (state, names = ["Nudeln"]) => new DayStatus(t, state, state === OrderState.ORDERED ? names.map((name) => ({ isOrdered: true, name })) : []);
+  const kid = (no, firstName, d, more = {}) => ({ customerNo: no, firstName, day: d, noMeal: "", holiday: "", skip: false, ...more });
+
+  await test("Morgens: bestellt → Gericht im Titel, laut", () => {
+    const m = composeToday([kid("1", "Mia", day(OrderState.ORDERED, ["Nudeln", "Apfel"]))]);
+    eq([m.title, m.body, m.quiet], ["Heute: Nudeln + Apfel", "Guten Appetit, Mia!", false]);
+  });
+  await test("Morgens: Schultag ohne Bestellung → Brot einpacken, laut", () => {
+    const m = composeToday([kid("1", "Mia", day(OrderState.DEADLINE_PASSED))]);
+    eq([m.title, m.body, m.quiet], ["Heute kein Essen bestellt für Mia", "Brot einpacken.", false]);
+  });
+  await test("Morgens: Ausflug ohne Schulessen oder Ferien ohne Essen → still", () => {
+    const a = composeToday([kid("1", "", day(OrderState.DEADLINE_PASSED), { noMeal: "Ausflug" })]);
+    eq([a.title, a.body, a.quiet], ["Heute kein Schulessen", "Ausflug", true]);
+    const f = composeToday([kid("1", "", day(OrderState.DEADLINE_PASSED), { holiday: "Herbstferien", skip: true })]);
+    eq([f.body, f.quiet], ["Herbstferien", true]);
+    const n = composeToday([kid("1", "", day(OrderState.NO_OFFER))]);
+    eq([n.body, n.quiet], ["kein Angebot", true]);
+  });
+  await test("Morgens: Ferien mit Hort-Essen bestellt → Gericht", () => {
+    const m = composeToday([kid("1", "", day(OrderState.ORDERED), { holiday: "Herbstferien" })]);
+    eq([m.title, m.quiet], ["Heute: Nudeln", false]);
+  });
+  await test("Morgens: Fehler oder unlesbare Historie → laut, Hinweis", () => {
+    const e = composeToday([kid("1", "", undefined, { error: new Error("Netz weg"), failTitle: "Bestellstand unbekannt" })]);
+    eq([e.title, e.quiet, e.body.includes("Netz weg")], ["Bestellstand unbekannt", false, true]);
+    eq(composeToday([kid("1", "", undefined)]).title, "Essen heute unbekannt");
+  });
+  await test("Morgens: zwei Kinder in einer Meldung", () => {
+    const m = composeToday([kid("1", "Anna", day(OrderState.ORDERED)), kid("2", "Ben", day(OrderState.DEADLINE_PASSED))]);
+    eq([m.title, m.body, m.quiet], ["Heute kein Essen bestellt für Ben", "Anna: Nudeln\nBen: nichts bestellt", false]);
+    const ok = composeToday([kid("1", "Anna", day(OrderState.ORDERED)), kid("2", "Ben", day(OrderState.NO_OFFER), { holiday: "Herbstferien" })]);
+    eq([ok.title, ok.body], ["Heute gibt's", "Anna: Nudeln\nBen: kein Essen (Herbstferien)"]);
   });
 }
 
@@ -846,7 +905,12 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
     const { calls, f } = fakeFetch([404], [201, { id: "neu", secret: "g" }]);
     const r = await renewPush(push, { endpoint: "e" }, { fetch: f, weekdays: [1, 3] });
     eq([r.id, r.secret, r.time], ["neu", "g", "07:30"]);
-    eq(calls[1], ["POST", "/api/subscriptions", { subscription: { endpoint: "e" }, time: "07:30", weekdays: [1, 3], tz: "Europe/Berlin" }]);
+    eq(calls[1], ["POST", "/api/subscriptions", { subscription: { endpoint: "e" }, time: "07:30", morning_time: null, weekdays: [1, 3], tz: "Europe/Berlin" }]);
+  });
+  await test("Abo erneuern: Morgenmeldung bleibt eingeschaltet", async () => {
+    const { calls, f } = fakeFetch([404], [201, { id: "neu", secret: "g" }]);
+    await renewPush({ ...push, morning: "06:45" }, { endpoint: "e" }, { fetch: f, weekdays: [1] });
+    eq(calls[1][2].morning_time, "06:45");
   });
   await test("Abo erneuern: Serverfehler wird geworfen statt verschluckt (#4 K8)", async () => {
     for (const replies of [[[500]], [[404], [429, { error: "zu viele" }]]]) {

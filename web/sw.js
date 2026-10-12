@@ -1,8 +1,10 @@
 // Service Worker (als Modul registriert): hält die App-Hülle vor und prüft beim
 // Weckruf des Servers selbst bei IBS5, ob etwas offen ist. Der Server erfährt
-// davon nichts; er schickt nur {"t":"check"} zur gewählten Uhrzeit.
+// davon nichts; er schickt nur {"t":"check"} zur gewählten Uhrzeit und, falls
+// eingeschaltet, morgens {"t":"today"} für „heute gibt's …“.
 import {
-  AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, addDays, collect, evaluate, nextWeekday, targetDates, todayBerlin,
+  AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, OrderState, addDays, collect, evaluate, nextWeekday, targetDates,
+  todayBerlin,
 } from "./ibs.js";
 import { kvGet, kvSet } from "./idb.js";
 import { accountLabel, dayStore, loadAccounts, renameAccount } from "./accounts.js";
@@ -10,9 +12,9 @@ import * as Sdui from "./sdui.js";
 import { IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
-import { loadHolidays, loadMealPref, skipDates } from "./holidays.js";
+import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v55";
+const VERSION = "v56";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -80,28 +82,43 @@ self.addEventListener("push", (ev) => {
     ev.waitUntil(notify("Selbstprüfung: Abweichung", message || "Details unter /api/health", { url: "/api/health" }));
     return;
   }
+  if (kind === "today" || kind === "today-test") {
+    ev.waitUntil((async () => {
+      await withDeadline(() => todayAndNotify(), TODAY_TAG);
+      if (kind === "today-test") await confirmTest(TODAY_TAG);
+    })());
+    return;
+  }
   // Essen zuerst: Android dämpft eine zweite Meldung kurz danach, die wichtigere kommt also vorn.
-  // Was auch immer schiefgeht, eine Meldung muss erscheinen — sonst kündigt iOS das Abo.
   ev.waitUntil((async () => {
-    try {
-      let timer;
-      const deadline = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Die Prüfung dauerte zu lange.")), PUSH_DEADLINE_MS);
-      });
-      await Promise.race([checkAndNotify(kind === "test"), deadline]).finally(() => clearTimeout(timer));
-    } catch (e) {
-      await notify("Prüfung fehlgeschlagen", `${e?.message || e}\nBitte die App öffnen.`, { url: "./" }).catch(() => {});
-    }
-    // „Jetzt testen“ in den Einstellungen wartet auf diese Bestätigung.
-    if (kind === "test") {
-      const [n] = await self.registration.getNotifications({ tag: "hs-check" });
-      for (const w of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {
-        w.postMessage({ testShown: n?.title || "Meldung" });
-      }
-    }
+    await withDeadline(() => checkAndNotify(kind === "test"), "hs-check");
+    if (kind === "test") await confirmTest("hs-check");
     await subjectReminder(kind === "test");
   })());
 });
+
+const TODAY_TAG = "hs-today";
+
+/** Was auch immer schiefgeht, eine Meldung muss erscheinen — sonst kündigt iOS das Abo. */
+async function withDeadline(fn, tag) {
+  try {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Die Prüfung dauerte zu lange.")), PUSH_DEADLINE_MS);
+    });
+    await Promise.race([fn(), deadline]).finally(() => clearTimeout(timer));
+  } catch (e) {
+    await notify("Prüfung fehlgeschlagen", `${e?.message || e}\nBitte die App öffnen.`, { url: "./", tag }).catch(() => {});
+  }
+}
+
+/** „Jetzt testen“ in den Einstellungen wartet auf diese Bestätigung. */
+async function confirmTest(tag) {
+  const [n] = await self.registration.getNotifications({ tag });
+  for (const w of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {
+    w.postMessage({ testShown: n?.title || "Meldung" });
+  }
+}
 
 /** Gewählte Fächer am nächsten Schultag, wie SduiCheck der App; still, wenn nichts ansteht. */
 async function subjectReminder(isTest) {
@@ -221,6 +238,78 @@ async function checkAndNotify(isTest) {
 }
 
 /**
+ * Morgenmeldung „heute gibt's …“: je Kind nur die Bestellhistorie (eine Anfrage),
+ * nacheinander wie bei der Erinnerung. Zählt nicht als Erinnerung (lastPushOk),
+ * damit eine kaputte Abendprüfung weiter als „Erinnerung schweigt“ auffällt.
+ */
+async function todayAndNotify() {
+  const accounts = await loadAccounts().catch((e) => {
+    throw new Error(`Gerätespeicher nicht lesbar (${e?.message || e}).`);
+  });
+  if (!accounts.length) return notify("Nicht angemeldet", "Bitte die Seite öffnen und anmelden.", { url: "./", tag: TODAY_TAG });
+  const today = todayBerlin();
+  const events = await loadEvents(today).catch(() => []);
+  const ferien = await loadHolidays();
+  const kids = [];
+  for (const account of accounts) {
+    const mine = eventsFor(events, account.customerNo);
+    const kid = {
+      customerNo: account.customerNo,
+      noMeal: mine.find((e) => e.noMeal && e.date === today)?.title || "",
+      holiday: holidayOn(ferien, today) || "",
+      skip: skipDates(ferien, await loadMealPref(account.customerNo), [today]).has(today),
+    };
+    const client = new IbsClient(undefined, guardHooks);
+    client.dayView = !!(await kvGet("ibsDayView"));
+    try {
+      [kid.day] = await withSession(client, account, () => collect(client, [], { history: true, peek: [today] }));
+    } catch (e) {
+      kid.error = e;
+      kid.failTitle = failTitle(e, client);
+    }
+    kid.firstName = client.profile?.firstName || "";
+    kids.push(kid);
+  }
+  const msg = composeToday(kids);
+  return notify(msg.title, msg.body, { silent: msg.quiet, url: "./", tag: TODAY_TAG });
+}
+
+/**
+ * Text der Morgenmeldung. kids: {customerNo, firstName, day?, noMeal, holiday, skip}
+ * oder mit error/failTitle. Laut, wenn etwas bestellt ist oder an einem Schultag
+ * nichts (Brot einpacken); still, wenn heute ohnehin kein Essen vorgesehen ist.
+ */
+export function composeToday(kids) {
+  const label = (k) => k.firstName || `Kd. ${k.customerNo}`;
+  const status = (k) => {
+    if (k.error) return { text: k.failTitle, loud: true };
+    if (!k.day) return { text: "Bestellstand unbekannt", loud: true };
+    if (k.day.state === OrderState.ORDERED) return { text: k.day.orderedItems.join(" + "), ordered: true, loud: true };
+    if (k.noMeal) return { text: `kein Schulessen (${k.noMeal})`, reason: k.noMeal };
+    if (k.holiday && (k.skip || k.day.state === OrderState.NO_OFFER)) return { text: `kein Essen (${k.holiday})`, reason: k.holiday };
+    if (k.day.state === OrderState.NO_OFFER) return { text: "kein Angebot", reason: "kein Angebot" };
+    return { text: "nichts bestellt", missing: true, loud: true };
+  };
+  const all = kids.map((k) => ({ k, ...status(k) }));
+  const quiet = !all.some((s) => s.loud);
+  if (all.length === 1) {
+    const [s] = all;
+    const forName = s.k.firstName ? ` für ${s.k.firstName}` : "";
+    if (s.ordered) return { title: `Heute: ${s.text}`, body: `Guten Appetit${s.k.firstName ? `, ${s.k.firstName}` : ""}!`, quiet };
+    if (s.missing) return { title: `Heute kein Essen bestellt${forName}`, body: "Brot einpacken.", quiet };
+    if (s.k.error) return { title: s.k.failTitle, body: `${s.k.error.message}\nBitte die App öffnen.`, quiet };
+    if (!s.k.day) return { title: "Essen heute unbekannt", body: "Die Bestellhistorie war nicht lesbar. Bitte die App öffnen.", quiet };
+    return { title: "Heute kein Schulessen", body: s.reason, quiet };
+  }
+  const missing = all.filter((s) => s.missing).map((s) => label(s.k));
+  return {
+    title: missing.length ? `Heute kein Essen bestellt für ${nameList(missing)}` : all.some((s) => s.ordered) ? "Heute gibt's" : "Heute kein Schulessen",
+    body: all.map((s) => `${label(s.k)}: ${s.text}`).join("\n"),
+    quiet,
+  };
+}
+
+/**
  * Meldung aus Bestellstand (checked: geprüfte Tage ohne „kein Schulessen“) und
  * fälligen eigenen Terminen. keys: Zustände für „laut nur bei Neuem“, je mit dem
  * Datum vorn, damit Vergangenes herausfällt; quiet: „alles bestellt“ kommt immer still.
@@ -329,13 +418,13 @@ export function composeAll(kids, today) {
   };
 }
 
-function notify(title, body, { silent = false, url = "./" } = {}) {
+function notify(title, body, { silent = false, url = "./", tag = "hs-check" } = {}) {
   return self.registration.showNotification(title, {
     body,
     icon: "icon-192.png?v=2",
     // Kleines Symbol in Statusleiste und Kopf der Meldung; ohne zeigt Android das Chrome-Logo.
     badge: "badge-96.png?v=2",
-    tag: "hs-check",
+    tag,
     renotify: !silent,
     silent,
     data: { url },
@@ -372,7 +461,7 @@ export async function renewPush(push, subscription, { fetch: f = fetch, weekdays
   const post = await f("/api/subscriptions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ subscription, time: push.time, weekdays, tz: "Europe/Berlin" }),
+    body: JSON.stringify({ subscription, time: push.time, morning_time: push.morning || null, weekdays, tz: "Europe/Berlin" }),
   });
   if (!post.ok) throw new Error(`Server: HTTP ${post.status}`);
   const { id, secret } = await post.json();

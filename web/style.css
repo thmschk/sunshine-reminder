@@ -136,6 +136,9 @@ button:disabled { opacity: .45; cursor: default; }
 }
 .days li + li { border-top: 1px solid var(--surface-variant); }
 .days li:active { background: var(--bg); }
+/* Heute: hellgelb abgehoben, nicht antippbar (nichts mehr zu ändern). */
+.days.today li, .days.today li:active { background: var(--primary-container); cursor: default; }
+.days.today .wd { color: var(--on-primary-container); font-weight: 600; }
 /* Eigene Termine in der Statuszeile: dunkles Gelb, reines Gelb wäre auf Weiß nicht lesbar. */
 .days .sub .ev { color: var(--event-text); font-weight: 600; }
 .days .date { width: 30px; flex: none; text-align: center; line-height: 1.15; }
