@@ -53,7 +53,6 @@ rsync -a --delete --exclude tests/ "$src/web/" /srv/sunshine/web/
 echo "$SHA" > /srv/sunshine/web/version.txt
 cp "$src/server/sunshine.caddy" "$site"
 docker compose up -d --quiet-pull </dev/null 2>&1 | grep -vE "^ *(#|=>)" | tail -3
-install -m 755 "$src/server/update-images.sh" /srv/sunshine/update-images.sh
 install -m 755 "$src/server/backup-data.sh" /srv/sunshine/backup-data.sh
 install -m 644 "$src/server/sunshine.cron" /etc/cron.d/sunshine
 echo "$SHA" > /srv/sunshine/DEPLOYED

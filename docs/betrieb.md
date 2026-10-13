@@ -60,7 +60,7 @@ server/deploy.sh feature/x  # anderer gepushter Branch oder ein voller Commit-Ha
 
 Lädt den Commit auf dem Server von GitHub und prüft zuerst die Caddy-Site mit `caddy validate`
 (besteht sie nicht, bleibt alles beim alten Stand). Dann baut es den Push-Container; erst wenn das klappt,
-kopiert es Web-Dateien, Caddy-Site, `update-images.sh`, `backup-data.sh` und `/etc/cron.d/sunshine`, startet den Container
+kopiert es Web-Dateien, Caddy-Site, `backup-data.sh` und `/etc/cron.d/sunshine`, startet den Container
 neu und lädt Caddy
 neu, bis die geladene Konfiguration (Admin-API `localhost:2019/config/`) der übersetzten Datei
 (`caddy adapt`) entspricht — höchstens dreimal, der erste Reload griff wiederholt nicht. Danach muss
@@ -73,7 +73,7 @@ Auf dem Handy erscheint eine neue Fassung, sobald die App einmal ganz geschlosse
 ```sh
 curl -s https://sunshine.thomschke.info/api/health          # Selbstprüfung
 curl -s https://sunshine.thomschke.info/version.txt         # laufender Commit
-ssh privat 'journalctl -t sunshine-update -n 20'           # letzte Image-Aktualisierung
+ssh privat 'journalctl -t docker-images -n 30'             # letzte Image-Aktualisierung
 ssh privat 'ls -l /srv/sunshine/backup'                    # nächtliche Datenkopien
 ssh privat 'cd /srv/sunshine && docker compose logs --tail 50 push'
 ssh privat "sqlite3 -readonly -header -column /srv/sunshine/data/push.sqlite \
@@ -90,10 +90,11 @@ dann `docker compose up -d`.
 
 ## Container-Images
 
-`/etc/cron.d/sunshine` startet am ersten Sonntag im Monat um 04:15 `/srv/sunshine/update-images.sh`:
-`caddy:2` und `python:3.13-slim` neu holen, Container neu starten, danach müssen Seite und
-`/api/health` antworten. Caddy ist dabei für alle Sites einige Sekunden weg. Von Hand:
-`ssh privat /srv/sunshine/update-images.sh`.
+Nicht Teil dieses Repos: `/etc/cron.d/docker-images` startet sonntags um 05:00
+`/usr/local/sbin/update-docker-images.sh` für alle Stacks auf dem Server (Caddy, sunshine, wechselmodell):
+`caddy:2` neu holen, eigene Images mit frischem `python:3.13-slim` neu bauen, Container neu starten,
+danach müssen Seiten und Health-Checks antworten. Caddy ist dabei für alle Sites einige Sekunden weg.
+Von Hand: `ssh privat update-docker-images.sh`.
 
 ## Datensicherung
 
