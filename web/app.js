@@ -767,7 +767,8 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
     : d.state === OrderState.DEADLINE_PASSED ? "nicht bestellt"
     : d.orderedItems[0] || "—";
   let [sub, subCls] = SUB[d.state];
-  const timeline = strip?.(d.date) || "";
+  // In den Ferien gilt der Stundenplan nicht.
+  const timeline = holiday ? "" : strip?.(d.date) || "";
   let [sym, symCls] = d.state === OrderState.ORDERED ? ["✓", "ok"] : d.isActionable ? ["!", "open"] : ["✕", "bad"];
   // Heute ist nichts mehr zu ändern: ohne Bestellung nur „nicht bestellt“, ohne Aufforderung.
   if (isToday && d.state !== OrderState.ORDERED && d.state !== OrderState.NO_OFFER) {

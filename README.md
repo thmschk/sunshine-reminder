@@ -170,6 +170,7 @@ Mit eingerichtetem Sdui bekommt jeder Tag auf der Startseite eine Zeitleiste:
 eine Zelle je Schulstunde mit dem Fachkürzel, gewählte Fächer dunkel,
 Freistunden als Lücke. Steht am nächsten Schultag ein gewähltes Fach an, kommt
 nach der Essenserinnerung eine zweite Meldung, etwa „Morgen Sport — 1.–2. Stunde“.
+An Ferientagen gibt es weder Zeitleiste noch Fächermeldung.
 
 Anders als IBS5 lässt Sdui keine Zugriffe von fremden Webseiten zu. Anmeldung
 und Abruf laufen deshalb über den Server, der sie nur durchreicht:

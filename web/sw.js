@@ -14,7 +14,7 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v57";
+const VERSION = "v58";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -129,6 +129,8 @@ async function subjectReminder(isTest) {
     if (!plan?.lessons.length) return;
     const today = todayBerlin();
     const day = Sdui.nextSchoolDay(today);
+    // In den Ferien gilt der Stundenplan nicht.
+    if (holidayOn(await loadHolidays(), day)) return;
     const found = Sdui.matches(plan.lessons, day, cfg.subjects);
     if (!found.length) return;
     const key = `${day}:${found.map((m) => m.subject).join(",")}`;
