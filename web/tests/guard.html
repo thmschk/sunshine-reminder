@@ -5,7 +5,7 @@
 <body style="font:16px monospace"><pre id="out">läuft</pre>
 <script type="module">
 import { IbsClient, IbsAuthError, collect } from "../ibs.js";
-import { guardHooks, paused, resume, IbsPausedError } from "../guard.js";
+import { guardHooks, paused, resume, IbsPausedError, IbsBudgetError, budgetFor, unmetered } from "../guard.js";
 import { kvDel, kvGet, kvSet } from "../idb.js";
 
 const lines = [];
@@ -111,7 +111,8 @@ try {
   window.fetch = async () => { calls++; return new Response("{}"); };
   let e4 = null;
   try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch (e) { e4 = e; }
-  check("volles Stundenkontingent bremst", e4 instanceof IbsPausedError && calls === 0);
+  check("volles Stundenkontingent bremst", e4 instanceof IbsBudgetError && calls === 0);
+  check("… und sagt, dass es die App selbst ist", /App hat in der letzten Stunde/.test(e4?.message) && !/sperrt gerade/.test(e4?.message), e4?.message);
   check("… nur bis die älteste Anfrage herausfällt, ohne Dauerpause",
     Math.abs(e4.until - (oldest + 3600 * 1000)) < 1000 && !(await paused()));
 
@@ -125,6 +126,30 @@ try {
   check("Abfrage mit Token braucht zwei Plätze", e4b instanceof IbsPausedError && calls === 0);
   await new IbsClient(undefined, guardHooks).login("1", "x");
   check("Login passt in den letzten Platz", calls === 1 && (await kvGet("ibsBudget")).length === 150);
+
+  // 4c. Vorabprüfung fürs Bestellen: zählt nichts, wirft, wenn es nicht mehr passt.
+  await reset();
+  await kvSet("ibsBudget", Array.from({ length: 140 }, () => Date.now()));
+  let e4c = null;
+  try { await budgetFor(10); } catch (e) { e4c = e; }
+  check("Vorabprüfung: passt genau", e4c === null && (await kvGet("ibsBudget")).length === 140, e4c?.message);
+  try { await budgetFor(11); } catch (e) { e4c = e; }
+  check("Vorabprüfung: passt nicht", e4c instanceof IbsBudgetError, e4c?.message);
+  e4c = null;
+  try { await budgetFor(151); } catch (e) { e4c = e; }
+  check("Vorabprüfung: mehr als eine Stunde fasst", e4c && !(e4c instanceof IbsPausedError) && /kleineren Portionen/.test(e4c.message), e4c?.message);
+
+  // 4d. Eine laufende Bestellung bremst die Stunde nicht, gezählt wird trotzdem.
+  await reset();
+  await kvSet("ibsBudget", Array.from({ length: 150 }, () => Date.now()));
+  window.fetch = async () => { calls++; return new Response("{}"); };
+  const c4d = new IbsClient(undefined, guardHooks); c4d.token = "t";
+  let e4d = null;
+  try { await unmetered(c4d, () => c4d.weekplan(2026, 41)); } catch (e) { e4d = e; }
+  check("ohne Bremse: Anfrage geht raus und zählt", !e4d && calls === 1 && (await kvGet("ibsBudget")).length === 152, e4d?.message);
+  e4d = null;
+  try { await c4d.weekplan(2026, 41); } catch (e) { e4d = e; }
+  check("danach bremst es wieder", e4d instanceof IbsBudgetError && calls === 1);
 
   // 5. Eingeschleustes HTML im Gerichtsnamen landet nur als Text auf der Seite.
   await reset();

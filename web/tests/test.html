@@ -716,6 +716,15 @@ await test("Bestellen: Fremdes im Warenkorb → nichts abgeschickt", async () =>
   eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
   eq(/Nichts abgeschickt/.test(r.reason), true, `Grund: ${r.reason}`);
 });
+await test("Bestellen: scheitert das Zurücksetzen, sagt die Meldung es", async () => {
+  const c = new FakeClient({ extraInCart: 1 });
+  let n = 0;
+  const clear = c.clearCart.bind(c);
+  c.clearCart = async (...a) => { if (n++ > 0) throw new Error("gebremst"); return clear(...a); };
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+  eq(/nicht ganz zurücksetzen/.test(r.reason), true, `Grund: ${r.reason}`);
+});
 await test("Bestellen: Liegengebliebenes am selben Tag (z. B. Abbestellung) wird ersetzt und bestellt", async () => {
   const c = new FakeClient();
   c.items.push({ date: "2026-10-12", cancel: true }); // nicht in previouslyInCart

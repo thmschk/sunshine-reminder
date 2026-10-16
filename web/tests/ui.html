@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -82,6 +82,7 @@ if (!mode) {
   };
   const account = () => saveAccounts([{ customerNo: "1000", password: "a", name: "" }]);
   const homeLoaded = () => $(".hero") && !document.getElementById("refresh");
+  const orderLoaded = () => $("#o-more")?.hidden === true;
   const submitLogin = () => {
     document.getElementById("cn").value = "1000";
     document.getElementById("pw").value = "x";
@@ -222,7 +223,7 @@ if (!mode) {
     await import("../app.js");
     await until(() => $("#b-order-now") && !document.getElementById("refresh"));
     $("#b-order-now").click();
-    await until(() => $('#f-order input[type=radio][value="827"]') && !$("#o-more"));
+    await until(() => $('#f-order input[type=radio][value="827"]') && orderLoaded());
     const radio = $('#f-order input[type=radio][value="827"]');
     radio.checked = true;
     radio.dispatchEvent(new Event("change", { bubbles: true }));
@@ -239,6 +240,51 @@ if (!mode) {
     await until(() => $(".order-result"));
     check(!!$(".order-result"), `Ergebnis sichtbar: ${$(".order-result")?.textContent.slice(0, 70)}`);
     check(!document.getElementById("b-back")?.disabled, "„Zurück“ danach wieder frei");
+  } else if (mode === "orderweeks") {
+    // Erst drei Wochen, weitere auf Knopfdruck bis zur Obergrenze von acht.
+    await account();
+    hooks.status = 0;
+    const asked = new Set();
+    hooks.ibs = (url) => { const d = (/date=([\d-]+)/.exec(url) || [])[1]; if (d) asked.add(d); return null; };
+    await import("../app.js");
+    await until(() => $("#b-order-now") && !document.getElementById("refresh"));
+    $("#b-order-now").click();
+    await until(() => $("fieldset.day-order") && orderLoaded());
+    const weeks = () => new Set([...document.querySelectorAll("fieldset.day-order")].map((f) => {
+      const d = new Date(f.id.slice(4) + "T12:00:00Z");
+      return Math.floor((d - Date.UTC(2026, 0, 5)) / (7 * 86400000));
+    })).size;
+    const more = () => document.getElementById("b-more-weeks");
+    check(weeks() === 3 && more() && !more().hidden, `erst 3 Wochen (${weeks()}), Knopf da`);
+    const latest = [...asked].sort().at(-1);
+    more().click();
+    await until(() => orderLoaded() && weeks() === 6);
+    check(weeks() === 6 && [...asked].sort().at(-1) > latest, `nach Klick 6 Wochen (${weeks()})`);
+    more().click();
+    await until(() => orderLoaded() && weeks() === 8);
+    await ticks(20);
+    check(weeks() === 8 && more().hidden, `dann 8 Wochen, Knopf weg (${weeks()})`);
+  } else if (mode === "orderbudget") {
+    // Passt die Bestellung nicht mehr in die Stunde, geht keine Warenkorb-Anfrage raus.
+    await account();
+    hooks.status = 0;
+    const posts = [];
+    hooks.ibs = (url, init) => { if (init.method === "POST") posts.push(url); return null; };
+    await import("../app.js");
+    await until(() => $("#b-order-now") && !document.getElementById("refresh"));
+    $("#b-order-now").click();
+    await until(() => $('#f-order input[type=radio][value="827"]') && orderLoaded());
+    await kvSet("ibsBudget", Array.from({ length: 145 }, () => Date.now()));
+    const radio = $('#f-order input[type=radio][value="827"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    $("#b-submit").click();
+    await until(() => $('dialog [data-v="1"]'));
+    $('dialog [data-v="1"]').click();
+    await until(() => $(".order-result"));
+    const msg = $(".order-result")?.textContent || "";
+    check(posts.length === 0, `keine Warenkorb-Anfrage (${posts.length})`);
+    check(/Nichts abgeschickt: Die App hat in der letzten Stunde/.test(msg), `Meldung: ${msg.slice(0, 90)}`);
   }
   $out.textContent = summary(lines);
 }

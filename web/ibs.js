@@ -97,7 +97,7 @@ export const De = {
  * Solche Fehler bei angemeldeten Aufrufen tragen deshalb maybeAuth.
  */
 export class IbsClient {
-  /** hooks.before({path, weight}) vor jeder Anfrage, danach hooks.failed({path, status, network}) bzw. beim Login hooks.ok({path}) (siehe guard.js). */
+  /** hooks.before({path, weight, unmetered}) vor jeder Anfrage, danach hooks.failed({path, status, network}) bzw. beim Login hooks.ok({path}) (siehe guard.js). */
   constructor(baseUrl = BASE_URL, hooks = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.token = null;
@@ -205,7 +205,7 @@ export class IbsClient {
     }
     // Mit Token schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
     // nicht, sie zwischenzuspeichern): bei IBS5 kommen zwei Anfragen an.
-    await this.hooks.before?.({ path, weight: auth ? 2 : 1 });
+    await this.hooks.before?.({ path, weight: auth ? 2 : 1, unmetered: !!this.unmetered });
     await pace();
     let resp;
     try {
@@ -780,16 +780,23 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
   if (locked) return { kind: "aborted", reason: `${De.short(locked.date)}: nicht mehr änderbar.` };
 
   const touched = [];
+  /** Warenkorb wie vorher; false, wenn ein Schritt davon scheiterte. */
   const rollback = async () => {
-    for (const e of touched) await client.clearCart(e.customerId, e.date, e.menuGroupId).catch(() => {});
+    let clean = true;
+    const step = (p) => p.catch(() => { clean = false; });
+    for (const e of touched) await step(client.clearCart(e.customerId, e.date, e.menuGroupId));
     for (const old of previouslyInCart.filter((o) => touched.some((t) => t.date === o.date))) {
-      await client.addToCart(old).catch(() => {});
+      await step(client.addToCart(old));
     }
+    return clean;
   };
-  const foreign = (n, want) => ({
+  const aborted = async (reason) => ({
     kind: "aborted",
-    reason: `Im Warenkorb liegen ${n ?? "?"} statt ${want} Einträge — vermutlich noch etwas anderes. Nichts abgeschickt.`,
+    reason: (await rollback()) ? reason
+      : `${reason.replace(/\.?$/, ".")} Der Warenkorb ließ sich nicht ganz zurücksetzen — bitte auf der Bestellseite nachsehen und ihn dort leeren.`,
   });
+  const foreign = (n, want) =>
+    aborted(`Im Warenkorb liegen ${n ?? "?"} statt ${want} Einträge — vermutlich noch etwas anderes. Nichts abgeschickt.`);
 
   try {
     let total = null;
@@ -800,32 +807,22 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
       const cleared = await client.clearCart(anchor.customerId, anchor.date, anchor.menuGroupId);
       const base = cleared.totalItemsInCart ?? (await client.cart()).totalItemsInCart;
       const added = changeKind(c) === "CANCEL" ? await client.cancelInCart(c.current) : await client.addToCart(c.target);
-      if (!added.ok) {
-        await rollback();
-        return { kind: "aborted", reason: `${De.short(c.date)}: ${added.message || "vom Bestellsystem abgelehnt"}` };
-      }
+      if (!added.ok) return aborted(`${De.short(c.date)}: ${added.message || "vom Bestellsystem abgelehnt"}`);
       total = added.totalItemsInCart;
       // Genau die eigenen Einträge kamen dazu: sonst stimmte die Endzahl womöglich
       // nur, weil ein eigener fehlt und dafür etwas Fremdes darin liegt (#4 K11).
       const want = base == null ? null : base + (changeKind(c) === "SWITCH" ? 2 : 1);
-      if (want == null || total !== want) {
-        await rollback();
-        return foreign(total, want ?? "?");
-      }
+      if (want == null || total !== want) return foreign(total, want ?? "?");
     }
     // Am Ende nur die Auswahl: Bekanntes an anderen Tagen ginge sonst mit ab.
     const expected = changes.reduce((n, c) => n + (changeKind(c) === "SWITCH" ? 2 : 1), 0);
-    if (total !== expected) {
-      await rollback();
-      return foreign(total, expected);
-    }
+    if (total !== expected) return foreign(total, expected);
     if (dryRun) {
       await rollback();
       return { kind: "dryrun", changes };
     }
   } catch (e) {
-    await rollback();
-    return { kind: "aborted", reason: e.message };
+    return aborted(e.message);
   }
 
   // Ab hier kann die Bestellung durch sein, auch wenn keine Antwort kommt: dann nie
@@ -833,10 +830,7 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
   let lost = null;
   try {
     const sent = await client.submitCart();
-    if (!sent.ok) {
-      await rollback();
-      return { kind: "aborted", reason: sent.message || "Bestellung abgelehnt." };
-    }
+    if (!sent.ok) return aborted(sent.message || "Bestellung abgelehnt.");
   } catch (e) {
     lost = e;
   }

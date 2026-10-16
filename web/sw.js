@@ -9,12 +9,12 @@ import {
 import { kvGet, kvSet } from "./idb.js";
 import { accountLabel, dayStore, loadAccounts, renameAccount } from "./accounts.js";
 import * as Sdui from "./sdui.js";
-import { IbsPausedError, guardHooks } from "./guard.js";
+import { IbsBudgetError, IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v56";
+const VERSION = "v57";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -151,7 +151,8 @@ async function subjectReminder(isTest) {
 
 /** Überschrift der Meldung, wenn die Prüfung eines Kontos scheitert. */
 function failTitle(e, client) {
-  return e instanceof IbsPausedError ? "Bestellsystem gesperrt oder nicht erreichbar"
+  return e instanceof IbsBudgetError ? "Die App macht eine Pause"
+    : e instanceof IbsPausedError ? "Bestellsystem gesperrt oder nicht erreichbar"
     : e instanceof IbsAuthError && !client.token ? "Anmeldung abgelehnt" : "Bestellstand unbekannt";
 }
 

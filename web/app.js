@@ -7,7 +7,7 @@ import {
   accountKey, accountLabel, dayStore, loadAccounts, loadActive, removeAccount, renameAccount, saveActive, upsertAccount,
 } from "./accounts.js";
 import * as Sdui from "./sdui.js";
-import { IbsPausedError, guardHooks, resume } from "./guard.js";
+import { IbsBudgetError, IbsPausedError, budgetFor, guardHooks, resume, unmetered } from "./guard.js";
 import { login, withSession } from "./session.js";
 import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
 import {
@@ -20,6 +20,10 @@ import {
 // Push-Prüfung lesen kann. Beim Start
 // einmal in den Speicher geladen; vorher genutztes localStorage wird übernommen.
 const ORDER_WEEKS = 8;
+// Die Bestellansicht lädt erst wenige Wochen, weitere auf Knopfdruck: jede Woche kostet
+// auf dem Handy fünf Anfragen, und die zählen gegen das Stundenkontingent (guard.js).
+const FIRST_WEEKS = 3;
+const MORE_WEEKS = 3;
 /** So viele Tage zeigt die Liste auf der Startseite (wie DAY_LIST_LENGTH der App). */
 const DAY_LIST_LENGTH = 5;
 
@@ -433,12 +437,14 @@ async function showHome(fresh = false) {
         : showSetup(`Anmeldung abgelehnt: ${e.message}`, creds);
     }
     const isPause = e instanceof IbsPausedError;
+    const isBudget = e instanceof IbsBudgetError;
     const card = `
-      <div class="card hero ${isPause ? "bad" : "neutral"}">
-        <h2>${isPause ? "Bestellsystem gesperrt oder nicht erreichbar" : usable ? "Aktualisieren fehlgeschlagen" : "Bestellstand unbekannt"}</h2>
+      <div class="card hero ${isPause && !isBudget ? "bad" : "neutral"}">
+        <h2>${isBudget ? "Die App macht eine Pause" : isPause ? "Bestellsystem gesperrt oder nicht erreichbar"
+          : usable ? "Aktualisieren fehlgeschlagen" : "Bestellstand unbekannt"}</h2>
         <p>${esc(e.message)}</p>
-        <p class="small">${usable ? `Unten steht der Stand von ${esc(when(cached.at))}. ` : ""}Ein Netzfehler ist keine Aussage
-          darüber, ob bestellt ist. Über mobile Daten statt WLAN geht es oft trotzdem.</p>
+        <p class="small">${usable ? `Unten steht der Stand von ${esc(when(cached.at))}. ` : ""}${isBudget ? ""
+          : "Ein Netzfehler ist keine Aussage darüber, ob bestellt ist. Über mobile Daten statt WLAN geht es oft trotzdem."}</p>
         <button id="b-retry" class="block">${isPause ? "Trotzdem jetzt versuchen" : "Nochmal versuchen"}</button>
       </div>`;
     document.getElementById("refresh")?.remove();
@@ -788,6 +794,10 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
 
 // ---------------------------------------------------------------- Bestellen
 
+// Anfragen einer Bestellung, CORS-Vorabfragen mitgezählt: je Tag Leeren, Hinzufügen
+// und Nachladen, dazu Abschicken und vielleicht ein Login.
+const orderCost = (changes) => 6 * changes.length + 3;
+
 /**
  * Bestellen, umbestellen, abbestellen — wie OrderScreen der App. Jeder noch
  * änderbare Tag, offene mit „nichts“ vorausgewählt, bestellte mit dem
@@ -856,34 +866,53 @@ async function showOrder(focusDate = null) {
       </fieldset>`;
   };
 
-  /**
-   * Kalenderwoche für Kalenderwoche laden und jede gleich anzeigen. IBS5 stellt
-   * Speisepläne wochenweise ein: Haben nach Tagen mit Speiseplan Montag und
-   * Dienstag einer Woche keinen, ist weiter voraus noch nichts eingestellt.
-   * (Ein einzelner Feiertag hält das nicht auf.) Ferien sind keine solche
-   * Grenze: Eine leere Ferienwoche wird nach Mo/Di übersprungen und zählt
-   * nicht zu den ORDER_WEEKS, Ferienessen wird angezeigt wie jede Woche.
-   */
+  const today = todayBerlin();
+  const monday = addDays(today, 1 - weekdayNo(today));
+  // Ein angetippter Tag weiter voraus bringt seine Woche gleich mit.
+  let wanted = Math.min(ORDER_WEEKS, Math.max(FIRST_WEEKS,
+    focusDate ? Math.floor((Date.parse(focusDate) - Date.parse(monday)) / (7 * 86400000)) + 1 : 0));
+  let cursor = null;
+
+  /** Neu aufbauen, mit so vielen Wochen wie zuletzt gewünscht (auch nach dem Abschicken). */
   async function load() {
+    form.innerHTML = `<div id="o-days"></div><p id="o-more" class="small muted"></p>
+      <button id="b-more-weeks" type="button" class="text" hidden>Weitere Wochen laden</button>
+      <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
+    document.getElementById("b-more-weeks").onclick = () => {
+      wanted = Math.min(ORDER_WEEKS, wanted + MORE_WEEKS);
+      loadWeeks();
+    };
+    days = [];
+    all = [];
+    cursor = { w: 0, n: 0, end: false };
+    await loadWeeks();
+  }
+
+  /**
+   * Kalenderwoche für Kalenderwoche laden, bis wanted erreicht ist, und jede gleich
+   * anzeigen. IBS5 stellt Speisepläne wochenweise ein: Haben nach Tagen mit
+   * Speiseplan Montag und Dienstag einer Woche keinen, ist weiter voraus noch nichts
+   * eingestellt. (Ein einzelner Feiertag hält das nicht auf.) Ferien sind keine
+   * solche Grenze: Eine leere Ferienwoche wird nach Mo/Di übersprungen und zählt
+   * nicht zu den Wochen, Ferienessen wird angezeigt wie jede Woche.
+   */
+  async function loadWeeks() {
     const mine = ++loadSeq;
     const current = () => my === viewSeq && mine === loadSeq;
     working(true);
-    form.innerHTML = `<div id="o-days"></div><p id="o-more" class="small muted"></p>
-      <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
     const $days = document.getElementById("o-days");
     const $more = document.getElementById("o-more");
-    const today = todayBerlin();
-    const monday = addDays(today, 1 - weekdayNo(today));
+    const $moreWeeks = document.getElementById("b-more-weeks");
+    $moreWeeks.hidden = true;
+    $more.hidden = false;
     const get = (dates) => withLogin(creds, (c) => collect(c, dates, { signal }));
     const offered = (ds) => ds.some((d) => d.state !== OrderState.NO_OFFER);
     const anyHoliday = (ds) => ds.some((d) => holidayOn(ferien, d));
-    days = [];
-    all = [];
     let error = null;
     try {
       // Ferienwochen verlängern das Fenster, aber nicht unbegrenzt (Sommerferien: 7 Wochen).
-      for (let w = 0, n = 0; n < ORDER_WEEKS && w < ORDER_WEEKS + 8 && current(); w++) {
-        const mon = addDays(monday, 7 * w);
+      for (; cursor.n < wanted && cursor.w < ORDER_WEEKS + 8 && current(); cursor.w++) {
+        const mon = addDays(monday, 7 * cursor.w);
         const dates = [0, 1, 2, 3, 4].map((i) => addDays(mon, i)).filter((d) => d >= today);
         if (!dates.length) continue;
         $more.textContent = `KW ${isoWeek(mon)[1]} wird geladen …`;
@@ -895,12 +924,16 @@ async function showOrder(focusDate = null) {
           all = all.concat(week);
           continue;
         }
-        n++;
+        cursor.n++;
         if (!stop) week = week.concat(await get(dates.slice(2)));
         if (!current()) return;
         all = all.concat(week);
-        if (stop || (!offered(week) && offered(all) && !anyHoliday(dates))) break;
+        if (stop || (!offered(week) && offered(all) && !anyHoliday(dates))) {
+          cursor.end = true;
+          break;
+        }
         const shown = week.filter(isChangeable);
+        if (shown.length) document.getElementById("o-none")?.remove();
         days = days.concat(shown);
         $days.insertAdjacentHTML("beforeend", shown.map(dayFieldset).join(""));
         refresh();
@@ -913,15 +946,17 @@ async function showOrder(focusDate = null) {
     }
     if (!current()) return;
     working(false);
-    $more.remove();
+    $more.hidden = true;
     // Solange darunter noch Wochen fehlten, konnte der Tag nicht ganz nach oben;
     // jetzt steht die Seite und er wird genau ausgerichtet.
     if (focusDate && !userScrolled) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start" });
     focusDate = null;
     if (error) setResult(error.message, "error");
-    if (!days.length) {
-      $days.innerHTML = error ? "" : `<p>Keine Tage, die sich noch ändern lassen.</p>`;
-      document.getElementById("b-submit")?.remove();
+    const further = !error && !cursor.end && cursor.n < ORDER_WEEKS && cursor.w < ORDER_WEEKS + 8;
+    $moreWeeks.hidden = !further;
+    document.getElementById("b-submit").hidden = !days.length;
+    if (!days.length && !document.getElementById("o-none") && !(error && !further)) {
+      $days.insertAdjacentHTML("afterbegin", `<p id="o-none">Keine Tage, die sich ${further ? "in diesen Wochen " : ""}noch ändern lassen.</p>`);
     }
   }
 
@@ -969,9 +1004,11 @@ async function showOrder(focusDate = null) {
     document.getElementById("b-back").disabled = true;
     working(true);
     const previouslyInCart = all.flatMap((d) => d.entries.filter((e) => e.quantityInCart === "1" && e.selectable));
-    const outcome = await withLogin(creds, (c) =>
-      placeOrders(c, changes, { previouslyInCart, reload: (ds) => collect(c, ds, { fresh: true }) }),
-    ).catch((e) => ({ kind: "aborted", reason: e.message }));
+    // Mit halb gefülltem Warenkorb darf die Stundenbremse nicht greifen: vorher prüfen, ob alles passt.
+    const outcome = await budgetFor(orderCost(changes))
+      .then(() => withLogin(creds, (c) => unmetered(c, () =>
+        placeOrders(c, changes, { previouslyInCart, reload: (ds) => collect(c, ds, { fresh: true }) }))))
+      .catch((e) => ({ kind: "aborted", reason: e.message }));
     working(false);
     const back = document.getElementById("b-back");
     if (back) back.disabled = false;

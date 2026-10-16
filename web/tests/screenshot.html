@@ -80,7 +80,7 @@ const ready = setInterval(() => {
   if (view === "bestellen" && home && document.getElementById("b-all")) document.getElementById("b-all").click();
   if (view === "termin" && home && !document.querySelector(".events-dialog")) document.getElementById("btn-add").click();
   const done = view === "bestellen"
-    ? document.querySelector("fieldset.day-order") && !document.getElementById("o-more")
+    ? document.querySelector("fieldset.day-order") && document.getElementById("o-more")?.hidden !== false
     : view === "termin" ? document.querySelector(".events-dialog[open] .event-list") : home;
   if (done) { clearInterval(ready); document.documentElement.dataset.ready = "1"; }
 }, 50);

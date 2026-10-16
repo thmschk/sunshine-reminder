@@ -206,13 +206,17 @@ Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Übersich
 und Erinnerung holen die bestellten Tage mit einer Anfrage aus der
 Bestellhistorie und laden nur Tage ohne Bestellung einzeln. Die Bestellansicht
 braucht alle Tage einzeln, lädt Woche für Woche, zeigt jede sofort und hört auf,
-wenn Montag und Dienstag einer Woche noch keinen Speiseplan haben. Tage
+wenn Montag und Dienstag einer Woche noch keinen Speiseplan haben; erst drei
+Wochen, weitere drei je Tipp auf „Weitere Wochen laden“, höchstens acht. Tage
 nacheinander mit Pausen und etwas Zufall; geladene Tage bleiben auf dem Gerät
 gespeichert (nach Bestellschluss bis zum Tag selbst, ohne Angebot eine Stunde,
 andere Tage ab nächster Woche sechs Stunden, sonst zehn Minuten; widerspricht
 die Bestellhistorie, wird neu geladen), die Erinnerung prüft höchstens die
 nächsten fünf Schultage, und insgesamt gehen höchstens 150 Anfragen je Stunde
-und Gerät an IBS5 (CORS-Vorabfragen mitgezählt). Kommt beim Anmelden ein 429, ruht die
+und Gerät an IBS5 (CORS-Vorabfragen mitgezählt). Ist das Kontingent voll, sagt die
+App, dass sie selbst bremst, nicht IBS5. Eine Bestellung prüft vorher, ob ihre
+Anfragen noch in die Stunde passen, und läuft dann ohne Bremse durch, damit der
+Warenkorb nie halb gefüllt liegen bleibt. Kommt beim Anmelden ein 429, ruht die
 App drei Stunden und sagt das, statt die Sperre durch Wiederholungen zu
 verlängern. Kommt gar keine Antwort (so sieht die Sperre im Browser aus, aber
 auch ein Aussetzer), ruht sie erst 15 Minuten, beim nächsten Mal binnen sechs
