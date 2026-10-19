@@ -14,7 +14,7 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v58";
+const VERSION = "v59";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -298,7 +298,7 @@ export function composeToday(kids) {
   if (all.length === 1) {
     const [s] = all;
     const forName = s.k.firstName ? ` für ${s.k.firstName}` : "";
-    if (s.ordered) return { title: `Heute: ${s.text}`, body: `Guten Appetit${s.k.firstName ? `, ${s.k.firstName}` : ""}!`, quiet };
+    if (s.ordered) return { title: `Heute gibt's${forName}`, body: s.text, quiet };
     if (s.missing) return { title: `Heute kein Essen bestellt${forName}`, body: "Brot einpacken.", quiet };
     if (s.k.error) return { title: s.k.failTitle, body: `${s.k.error.message}\nBitte die App öffnen.`, quiet };
     if (!s.k.day) return { title: "Essen heute unbekannt", body: "Die Bestellhistorie war nicht lesbar. Bitte die App öffnen.", quiet };

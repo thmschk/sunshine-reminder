@@ -540,9 +540,9 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   const day = (state, names = ["Nudeln"]) => new DayStatus(t, state, state === OrderState.ORDERED ? names.map((name) => ({ isOrdered: true, name })) : []);
   const kid = (no, firstName, d, more = {}) => ({ customerNo: no, firstName, day: d, noMeal: "", holiday: "", skip: false, ...more });
 
-  await test("Morgens: bestellt → Gericht im Titel, laut", () => {
+  await test("Morgens: bestellt → Gericht im Text, laut", () => {
     const m = composeToday([kid("1", "Mia", day(OrderState.ORDERED, ["Nudeln", "Apfel"]))]);
-    eq([m.title, m.body, m.quiet], ["Heute: Nudeln + Apfel", "Guten Appetit, Mia!", false]);
+    eq([m.title, m.body, m.quiet], ["Heute gibt's für Mia", "Nudeln + Apfel", false]);
   });
   await test("Morgens: Schultag ohne Bestellung → Brot einpacken, laut", () => {
     const m = composeToday([kid("1", "Mia", day(OrderState.DEADLINE_PASSED))]);
@@ -558,7 +558,7 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   });
   await test("Morgens: Ferien mit Hort-Essen bestellt → Gericht", () => {
     const m = composeToday([kid("1", "", day(OrderState.ORDERED), { holiday: "Herbstferien" })]);
-    eq([m.title, m.quiet], ["Heute: Nudeln", false]);
+    eq([m.title, m.body, m.quiet], ["Heute gibt's", "Nudeln", false]);
   });
   await test("Morgens: Fehler oder unlesbare Historie → laut, Hinweis", () => {
     const e = composeToday([kid("1", "", undefined, { error: new Error("Netz weg"), failTitle: "Bestellstand unbekannt" })]);
