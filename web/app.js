@@ -841,10 +841,11 @@ async function showOrder(focusDate = null) {
     if (my !== viewSeq) return;
     $cart.innerHTML = !r?.total ? "" : `
       <div class="card cart-note">
-        <p>${r.total === 1 ? "Im Warenkorb liegt noch 1 Eintrag" : `Im Warenkorb liegen noch ${r.total} Einträge`},
-          die nicht abgeschickt sind${r.others?.length ? ":" : "."}</p>
-        ${r.others?.length ? `<ul>${r.others.map((i) => `<li>${esc(cartLine(i))}</li>`).join("")}</ul>` : ""}
-        <p class="small muted">Beim Abschicken fragt die App, ob sie mitbestellt oder verworfen werden.</p>
+        <h3>${r.total === 1 ? "1 Eintrag" : `${r.total} Einträge`} im Warenkorb, nicht abgeschickt</h3>
+        ${r.others?.length ? `<ul>${r.others.map((i) => `
+          <li><span class="chip">${esc(i.date ? De.chip(i.date) : "?")}</span> ${esc(i.kind)}
+            <span class="dish">${esc(i.name)}</span></li>`).join("")}</ul>` : ""}
+        <p>Beim Abschicken fragt die App, ob sie mitbestellt oder verworfen werden.</p>
       </div>`;
   }
 

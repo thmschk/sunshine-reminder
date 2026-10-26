@@ -228,10 +228,17 @@ dialog.dialog::backdrop { background: rgba(0, 0, 0, .32); }
 .dialog-actions .text { color: var(--secondary); }
 .dialog-actions.stacked { flex-direction: column-reverse; align-items: flex-end; gap: 2px; }
 .cart-list { margin: 4px 0 0; padding: 0; list-style: none; font-size: .85rem; }
-.cart-list li, .cart-note li { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 2px 0; }
-.cart-note { margin: 8px 0; padding: 10px 12px; border-left: 3px solid var(--secondary); }
-.cart-note p { margin: 0 0 4px; font-size: .9rem; }
-.cart-note ul { margin: 0 0 6px; padding: 0; list-style: none; font-size: .85rem; }
+.cart-list li { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 2px 0; }
+/* Wie „offen“ in der Übersicht. */
+.cart-note { background: var(--primary-container); color: var(--on-primary-container); }
+.cart-note h3 { font-size: 1rem; font-weight: 600; margin: 0; }
+.cart-note ul { list-style: none; margin: 0; padding: 0; }
+.cart-note li { margin: 8px 0 0; font-size: .9rem; }
+.cart-note .dish {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: .85rem; opacity: .75;
+}
+.cart-note p { margin: 8px 0 0; font-size: .82rem; opacity: .75; }
 pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
 
 .back-head { margin: 8px 0 0 -8px; }

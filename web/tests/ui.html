@@ -304,7 +304,7 @@ if (!mode) {
     $("#b-order-now").click();
     await until(() => $(".cart-note") && orderLoaded());
     const note = $(".cart-note")?.textContent || "";
-    check(/2 Einträge/.test(note) && /Mo 09\.11\. Hörnchennudeln/.test(note), `Hinweis: ${note.replace(/\s+/g, " ").slice(0, 90)}`);
+    check(/2 Einträge/.test(note) && /Mo 09\.11\.\s*Neubestellung\s*Hörnchennudeln/.test(note), `Hinweis: ${note.replace(/\s+/g, " ").slice(0, 90)}`);
     const radio = $('#f-order input[type=radio][value="827"]');
     radio.checked = true;
     radio.dispatchEvent(new Event("change", { bubbles: true }));
