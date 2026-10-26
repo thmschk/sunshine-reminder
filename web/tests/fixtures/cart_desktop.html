@@ -1,0 +1,514 @@
+
+
+
+
+<div class="module-wrapper">
+
+
+
+<div class="shortcuts">
+    <a href="#content" tabindex="1">
+        Direkt zum Inhalt
+    </a>
+</div>
+
+<nav class="main-navigation">
+    <ul class="main-navigation-inner" accesskey="6">
+        <li class="display-main-menu">
+
+    <img class="inline-block logo" src="https://ibs.sunshine-catering.de/ibs5//img/Logos/sunshine-logo.png"
+         height="80px" width="180px" alt="" />
+
+        </li>
+
+
+        <li class="display-main-menu">
+            <hr />
+        </li>
+
+        <li class="display-main-menu" tabindex="1">
+                <div class="navigation-lsk"></div>
+            <div class="navigation-name"></div>
+        </li>
+
+            <li class="display-main-menu hover-shadow" id="accountManagement">
+                <a id="account-mgnt-link" class="ibs4_link onenterclick" tabindex="1">
+                    Accountmanagement
+                </a>
+            </li>
+            <li class="spacer"></li>
+
+            <li class="display-main-menu hover-shadow" id="cart">
+                <a id="shopping-cart-link" tabindex="1" class="ibs4_link onenterclick">
+                    Warenkorb
+                    <span id="cart-icon"></span>
+                    <span id="cart-item-count" class="badge">0</span>
+                </a>
+            </li>
+
+            <li class="display-main-menu hover-shadow" id="weekplan">
+                <a id="menuplan-link" tabindex="1" class="ibs4_link onenterclick">
+                    Speiseplan
+                </a>
+            </li>
+
+
+
+            <li class="display-main-menu hover-shadow" id="invoices">
+                <a id="my-account-link" tabindex="1" class="ibs4_link onenterclick">
+                    Rechnungen
+                </a>
+            </li>
+
+            <li class="display-main-menu hover-shadow" id="accountMovements">
+                <a id="my-account-link" tabindex="1" class="ibs4_link onenterclick">
+                    Kontobewegungen
+                </a>
+            </li>
+
+            <li class="display-main-menu hover-shadow" id="orderHistory">
+                <a id="my-account-link" tabindex="1" class="ibs4_link onenterclick">
+                    Bestellhistorie
+                </a>
+            </li>
+
+            <li class="display-main-menu breakpoint">
+                <hr />
+            </li>
+
+            <li class="display-main-menu hover-shadow custom-link">
+                <a class="bottomLink" href="https://sunshine-catering.de/impressum/" target="_blank" rel="noopener" tabindex="1">Impressum</a>
+            </li>
+
+            <li class="display-main-menu hover-shadow custom-link">
+                <a class="bottomLink" href="https://sunshine-catering.de/datenschutzerklaerung/" target="_blank" rel="noopener" tabindex="1">Datenschutzerkl&#228;rung</a>
+            </li>
+
+
+            <li class="display-main-menu hover-shadow custom-link">
+                <a class="bottomLink" href="https://www.sunshine-catering.de/speiseplaene" target="_blank" rel="noopener" tabindex="1">Download - Speiseplan</a>
+            </li>
+
+
+
+            <li class="display-main-menu">
+                <hr />
+            </li>
+
+        <li class="display-main-menu">
+            <button class="btn logout" tabindex="1">
+                Abmelden
+            </button>
+        </li>
+    </ul>
+</nav>
+
+<script>
+    $('#cart').hover(function () {
+        $('#cart-icon').addClass('active-shopping-cart');
+    }, function () {
+        if (!$('#shopping-cart-link').hasClass('main-menu-link-active')) {
+            $('#cart-icon').removeClass('active-shopping-cart');
+        }
+    })
+
+    $('.onenterclick').on('keypress', function (e) {
+        if (e.key == 'Enter')
+            this.click()
+    })
+
+    $('#cart').on('click', function () {
+        infrastructure.navigate('cart')
+    })
+
+    $('#menuplan-link').on('click', function () {
+        infrastructure.navigate('weekplan', '2026', '44')
+    })
+
+    $('#bulkorder').on('click', function () {
+        infrastructure.navigate('bulkorder')
+    })
+
+    $('#artikel-link').on('click', function () {
+        infrastructure.navigate('artikelbestellung')
+    })
+
+    $('#invoices a').on('click', function () {
+        infrastructure.navigate('invoices')
+    })
+
+    $('#accountMovements a').on('click', function () {
+        infrastructure.navigate('accountMovements')
+    })
+
+    $('#orderHistory a').on('click', function () {
+        infrastructure.navigate('orderHistory')
+    })
+
+    $('#accountManagement a').on('click', function () {
+        infrastructure.navigate('accountManagement')
+    })
+
+    $(document).ready(function () {
+        var name = sessionStorage.getItem('name')
+        if (name == 'null' || name == null)
+            name = ''
+        $('.navigation-name').text(name)
+
+        var mail = sessionStorage.getItem('mail')
+        if (mail == 'null' || mail == null)
+            mail = ''
+        $('.navigation-mail').text(mail)
+
+        var lsk = sessionStorage.getItem('lsk')
+        if (lsk == 'null' || lsk == null)
+            lsk = ''
+        $('.navigation-lsk').text(lsk)
+    })
+
+    $('.logout').on('click', logout)
+    function logout() {
+        sessionStorage.removeItem('token')
+        sessionStorage.removeItem('name')
+        sessionStorage.removeItem('mail')
+        sessionStorage.removeItem('lsk');
+        location.reload();
+    }
+</script>
+
+
+    <div class="container-fluid cart-container">
+        <div class="content-header">
+            <h1 class="cart-title">Warenkorb</h1>
+        </div>
+
+        <div class="cart-placeholder-header"></div>
+
+        <div id="shopping-cart" class="">
+                <div class="shopping-cart-controls">
+                    <div class="shopping-cart-btn-clear">
+                        <button class="shopping-cart-clear-button pointy" id="clearCartButton" tabindex="3">
+                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                                 alt="alle &#196;nderungen verwerfen?" />
+                            Alle &#196;nderungen verwerfen
+                        </button>
+                    </div>
+                </div>
+                <table class="table animate-container" id="content">
+                    <thead class="shopping-cart-table-header">
+                        <tr>
+                            <th class="date-row">Datum</th>
+                            <th class="name-row">Name</th>
+                            <th class="type-row">Bestellart</th>
+                            <th class="amount-row centered-column">&#196;nderung</th>
+                            <th class="effective-amount-row centered-column">Bestellmenge</th>
+                                                    </tr>
+                    </thead>
+                    <tbody class="shopping-cart-table-body">
+    <tr class="animate-repeat">
+        <td>
+            <div class="date-field standard-entry">
+                <span tabindex="3">Mo 09.11.2026</span>
+            </div>
+        </td>
+        <td>
+            <div class="name-field standard-entry" tabindex="3">
+                H&#246;rnchennudeln(BIO), Gem&#252;se-Bolognese (Zwiebeln, Aubergine, Zucchini, Tomate, Paprika), Reibek&#228;se(BIO), Gurke, Kohlrabi, Gouda-K&#228;sew&#252;rfel(BIO), Orange(BIO)
+            </div>
+        </td>
+        
+    <td>
+        <div class="shopping-cart-increase standard-entry" tabindex="3">Neubestellung</div>
+    </td>
+
+
+
+        <td class="centered-column">
+            <span class="quantity-field" tabindex="3">
+                1
+            </span>
+        </td>
+        <td class="centered-column">
+            <span class="quantity-field">
+                <span tabindex="3">1</span>
+            </span>
+        </td>
+
+
+    </tr>
+
+                    </tbody>
+                </table>
+        </div>
+
+        <div class="cart-placeholder-footer"></div>
+
+        <div class="content-footer">
+
+
+             
+            <div class="continous-order-note">
+                
+            </div>
+
+
+
+    <div class="order-button-field shopping-cart-btn-order">
+        <button class="shopping-cart-order-button pointy" id="cartSendOrder" tabindex="3" accesskey="5">
+            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                 alt="ausgew&#228;hlte Men&#252;s bestellen" />
+            Best&#228;tigen
+        </button>
+    </div>
+
+
+        </div>
+    </div>
+
+<div class="modal fade" id="OrderErrorDialog" tabindex="-1" role="dialog"
+     aria-modal="true" aria-labelledby="orderErrorTitle" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content overlay-content">
+            <div class="modal-dialog-header">
+                <div class="modal-warn-sign cart-error-overlay-img"></div>
+                <h4 class="modal-title add-tabindex" id="orderErrorTitle">
+                    Es ist ein Fehler aufgetreten. 
+                </h4>
+            </div>
+            <div class="modal-body">
+                <span id="error-modal-body"></span>
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-default add-tabindex cart-dialog-button"
+                        data-dismiss="modal" data-dialogname="OrderErrorDialog">
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="OrderNotPossibleDialog" tabindex="-1" role="dialog"
+     aria-modal="true" aria-labelledby="orderNotPossibleTitle" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content overlay-content">
+            <div class="modal-dialog-header">
+                <div class="modal-warn-sign cart-error-overlay-img"></div>
+                <h4 class="modal-title add-tabindex" id="orderNotPossibleTitle">
+                    Bestellung nicht m&#246;glich
+                </h4>
+            </div>
+            <div class="modal-body">
+                <span id="error-modal-body"></span>
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-default add-tabindex cart-dialog-button" 
+                        data-dismiss="modal"  data-dialogname="OrderNotPossibleDialog">
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="OrderSuccessDialog" tabindex="-1" role="dialog"
+     aria-modal="true" aria-labelledby="orderSuccessfullTitle" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content overlay-content">
+            <div class="modal-dialog-header">
+                <div class="modal-warn-sign cart-success-overlay-img"></div>
+                <h4 class="modal-title add-tabindex" id="orderSuccessfullTitle">
+                    Bestellung erfolgreich
+                </h4>
+            </div>
+            <div class="modal-body">
+                Wir haben Ihre Bestellung angenommen. 
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-default add-tabindex cart-dialog-button"
+                        data-dismiss="modal" data-dialogname="OrderSuccessDialog">
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="ClearCartDialog" tabindex="-1" role="dialog"
+     aria-modal="true" aria-labelledby="clearCartTitle" aria-hidden="true">
+    <div class="modal-dialog cart-dialog">
+        <div class="modal-content">
+            <div class="modal-dialog-header">
+                <div class="cart-clear-overlay-img"></div>
+                <h4 class="modal-header-text add-tabindex" id="clearCartTitle">
+                    Warenkorb verwerfen
+                </h4>
+            </div>
+            <div class="modal-body">
+                M&#246;chten Sie alle &#196;nderungen verwerfen?
+            </div>
+            <div class="modal-dialog-footer">
+                <button type="button" class="btn btn-default add-tabindex"
+                        data-dismiss="modal" id="cartRemoveAll">
+                    OK
+                </button>
+                <button type="button" class="btn btn-default add-tabindex"
+                        data-dismiss="modal" id="cartCancelRemoveAll">
+                    ABBRECHEN
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    $('.cart-dialog-button').click(function () {
+        var dialogName = $(this).data('dialogname');
+        cartdialog.ok(dialogName)
+    })
+
+    $('#OrderSuccessDialog').click(function () {
+        cartdialog.ok(this.id)
+    })
+
+    $('#cartRemoveAll').click(function () {
+        cartdialog.clearCart.submit()
+    })
+
+    $('#cartCancelRemoveAll').click(function () {
+        cartdialog.clearCart.cancel()
+    })
+
+    $('#OrderErrorDialog').click(function () {
+        cartdialog.ok('OrderErrorDialog')
+    })
+
+    cartdialog = {
+        ok: function (dialogId) {
+            $('#' + dialogId).bPopup().close()
+            $('#' + dialogId).modal('hide')
+            $('.modal-backdrop').remove()
+            infrastructure.navigate('cart')
+        },
+        showDialogById: function (dialogId) {
+            IbsUtils.openModalById(dialogId)
+        },
+        resize: function () {
+            var resizeMessageUrl = $('#resizeMessageURL');
+            IbsUtils.sendHeight(resizeMessageUrl);
+        },
+        clearCart: {
+            cancel: function () {
+                $('#ClearCartDialog').bPopup().close();
+                $('#ClearCartDialog').modal('hide')
+            },
+            submit: function () {
+                var rootpath = 'https://ibs.sunshine-catering.de/IBS5';
+                $('#ClearCartDialog').bPopup().close();
+                $('#ClearCartDialog').modal('hide')
+                infrastructure.doAjaxCall(null, function (data, status) {
+                    infrastructure.navigate('cart');
+                }, rootpath + '/Cart/Clear', null, null)
+            }
+        }
+    }
+</script>
+
+
+</div>
+
+<script>
+    var confirmClearCartText = 'M&#246;chten Sie<br />alle &#196;nderungen verwerfen??';
+    var rejectCartContent = 'M&#246;chten Sie alle &#196;nderungen verwerfen?';
+    var token = '<ENTFERNT>';
+    $(document).ready(function () {
+        IbsUtils.updateBalanceAndCart('https://ibs.sunshine-catering.de/IBS5');
+    });
+
+    $('#clearCartButton').click(function () {
+        cart.clearCart();
+    })
+</script>
+
+<script>
+    $('.delete-cart-entry-button').click(function () {
+        var menulinId = $(this).data('menulinid')
+        var servedate = $(this).data('servedate')
+        cart.deleteSingle({ 'menulinId': menulinId, 'serveDate': servedate })
+    })
+
+    $('#cartSendOrder').click(function () {
+        cart.orderMeals();
+    })
+
+    $('#cartRemoveInvalidOrders').click(function () {
+        cart.removeMealList();
+    })
+
+    var cart = {
+        orderInProgress: false,
+        clearCart: function () {
+            cartdialog.showDialogById("ClearCartDialog");
+        },
+        setOrderButtonsEnabled: function (enabled) {
+            $('#cartSendOrder, #submitOrders').prop('disabled', !enabled);
+        },
+        resetOrderSubmit: function () {
+            cart.orderInProgress = false;
+            cart.setOrderButtonsEnabled(true);
+        },
+        orderMeals: function (mobile) {
+            if (cart.orderInProgress) {
+                return;
+            }
+
+            cart.orderInProgress = true;
+            cart.setOrderButtonsEnabled(false);
+
+            var rootpath = 'https://ibs.sunshine-catering.de/IBS5';
+            infrastructure.doAjaxCall(null, function (data, status) {
+                if (status != 'success') {
+                    cart.resetOrderSubmit();
+                    cartdialog.showDialogById("OrderErrorDialog");
+                } else {
+                    if (data.MessageStatus == "ERROR") {
+                        cart.resetOrderSubmit();
+                        cartdialog.showDialogById("OrderErrorDialog");
+                        $('#error-modal-body').append(data.Message);
+                    }
+                    else {
+                        cartdialog.showDialogById("OrderSuccessDialog");
+                    }
+                }
+            }, rootpath + '/Cart/Order', null, 'POST', function () {
+                cart.resetOrderSubmit();
+                cartdialog.showDialogById("OrderErrorDialog");
+            });
+        },
+        deleteSingle: function (data) {
+            infrastructure.doAjaxCall(data, function () {
+                infrastructure.navigate('cart');
+            }, globalRootPath + '/Cart/DeleteSingleEntry', null, 'POST', function (error) {
+                console.log(error)
+                cartdialog.showDialogById("OrderErrorDialog");
+            })
+        },
+        removeMealList: function (mobile) {
+            var rootpath = 'https://ibs.sunshine-catering.de/IBS5';
+            if (!mobile) {
+                $('a.shopping-cart-delete-invalid-button').click(function (e) {
+                    e.preventDefault();
+                });
+            }
+
+            infrastructure.doAjaxCall(null, function (data, status) {
+                if (status != 'success') {
+                    cartdialog.showDialogById("OrderErrorDialog");
+                } else {
+                    infrastructure.navigate('cart');
+                }
+            }, rootpath + '/Cart/InvalidEntries');
+        }
+    }
+</script>
+

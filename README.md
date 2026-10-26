@@ -307,7 +307,16 @@ POST /ibs5/Mealplan/SaveOrder   {"mealOrderQuantity": {CustomerId, ServeDate,
        Typ "D" mit Menge −1 = abbestellen
 POST /ibs5/Mealplan/ClearCart   {"mealOrderQuantity": {CustomerId, ServeDate, MenuGroupId}}
 POST /ibs5/Cart/Order           null
+GET  /ibs5/Mealplan/UpdateBalanceAndCart   -> {"totalItemsInCart": …}
+GET  /ibs5/cart/shoppingcart    Warenkorbseite: Datum, Gericht, Bestellart je Eintrag
+POST /ibs5/Cart/Clear           null   („Alle Änderungen verwerfen“)
 ```
+
+Weil `Cart/Order` immer den ganzen Warenkorb abschickt, liest die App vor der
+Rückfrage dessen Inhalt. Liegt dort etwas an anderen Tagen (etwa auf der Webseite
+hineingelegt und vergessen), steht es in der Rückfrage: verwerfen oder mitbestellen.
+Desktop bekommt die Warenkorbseite als Tabelle, Handy-Browser als Karten
+(`class="menu-mobile"`).
 
 Sdui (`api.sdui.app/v1`, ebenfalls JSON mit Bearer-Token, nur lesend):
 

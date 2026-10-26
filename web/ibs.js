@@ -178,6 +178,20 @@ export class IbsClient {
   /** Schickt den GESAMTEN Warenkorb ab — OrderPlacer prüft vorher dessen Inhalt. */
   submitCart() { return this.#postJson("/Cart/Order", null); }
 
+  /** Warenkorbseite: die einzige Stelle, die den Inhalt nennt (parseCart). */
+  cartPage() {
+    return this.#send("/cart/shoppingcart", { method: "GET" });
+  }
+
+  /** „Alle Änderungen verwerfen“ der Webseite. Was die Antwort enthält, ist offen; danach wird gezählt. */
+  async discardCart() {
+    await this.#send("/Cart/Clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: "null",
+    });
+  }
+
   async #postJson(path, payload) {
     const text = await this.#send(path, {
       method: "POST",
@@ -493,6 +507,53 @@ export function parseOrderHistory(html) {
   return out;
 }
 
+// ---------------------------------------------------------------- Warenkorb
+
+/**
+ * Warenkorbseite → Einträge {date, name, kind}; kind ist der Text der Seite
+ * („Neubestellung“, „Abbestellung“ …), date ISO oder null. Desktop liefert eine
+ * Tabelle (Datum, Name, Bestellart, Änderung, Bestellmenge), Handy-Browser Karten
+ * (class="menu-mobile") mit span.date, span.title und dem Gericht im <p>.
+ */
+export function parseCart(html) {
+  if (!/\bid\s*=\s*["']shopping-cart["']/.test(html)) {
+    throw new ParserError("Antwort enthält keinen Warenkorb — vermutlich eine Fehler- oder Login-Seite.");
+  }
+  const body = html.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  const item = (when, name, kind) => {
+    const d = /(\d{2})\.(\d{2})\.(\d{4})/.exec(when);
+    return { date: d ? `${d[3]}-${d[2]}-${d[1]}` : null, name, kind };
+  };
+  const items = [];
+  for (const tr of body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const c = [...tr[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => cellText(m[1]));
+    if (c.length >= 3) items.push(item(c[0], c[1], c[2]));
+  }
+  for (const card of body.split(/class\s*=\s*["']menu-mobile["']/).slice(1)) {
+    const span = (cls) => cellText(new RegExp(`<span\\b[^>]*class\\s*=\\s*["']${cls}["'][^>]*>([\\s\\S]*?)</span>`, "i").exec(card)?.[1] ?? "");
+    items.push(item(span("date"), cellText(/<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(card)?.[1] ?? ""), span("title")));
+  }
+  return items;
+}
+
+/**
+ * Was außer den Tagen in dates im Warenkorb liegt; die eigenen Tage leert
+ * placeOrders ohnehin. total = Zahl laut IBS5, others = Einträge an anderen Tagen,
+ * null, wenn Seite und Zahl nicht zusammenpassen (dann bleibt nur Verwerfen).
+ */
+export async function cartOthers(client, dates) {
+  const total = (await client.cart()).totalItemsInCart;
+  if (total === 0) return { total, others: [] };
+  let items = null;
+  try {
+    items = parseCart(await client.cartPage());
+  } catch (e) {
+    if (!(e instanceof ParserError)) throw e;
+  }
+  const others = total != null && items?.length === total ? items.filter((i) => !dates.includes(i.date)) : null;
+  return { total, others };
+}
+
 /** "Dinkel-Makkaroni(BIO), Tomatensoße, …" → "Dinkel-Makkaroni", wie data-name im Wochenplan. */
 const shortDish = (name) => name.split(/[(,]/)[0].trim() || name;
 
@@ -768,9 +829,13 @@ export function changeKind(c) {
  * nur neue Linie Typ I, die Abbestellung der alten legt der Server selbst dazu
  * (zwei Einträge).
  *
+ * Was an anderen Tagen im Warenkorb liegt (cartOthers), hat der Nutzer vorher
+ * gesehen: discard = erst den ganzen Warenkorb verwerfen, sonst gehen genau
+ * othersInCart Einträge mit ab.
+ *
  * @returns {Promise<{kind:"done"|"dryrun"|"aborted"|"unconfirmed", reason?:string, missing?:string[], changes?:object[]}>}
  */
-export async function placeOrders(client, requested, { dryRun = false, previouslyInCart = [], reload }) {
+export async function placeOrders(client, requested, { dryRun = false, previouslyInCart = [], othersInCart = 0, discard = false, reload }) {
   const changes = requested.filter((c) => changeKind(c) !== "NONE");
   if (!changes.length) return { kind: "aborted", reason: "Nichts geändert." };
   if (new Set(changes.map((c) => c.date)).size !== changes.length) {
@@ -796,9 +861,15 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
       : `${reason.replace(/\.?$/, ".")} Der Warenkorb ließ sich nicht ganz zurücksetzen — bitte auf der Bestellseite nachsehen und ihn dort leeren.`,
   });
   const foreign = (n, want) =>
-    aborted(`Im Warenkorb liegen ${n ?? "?"} statt ${want} Einträge — vermutlich noch etwas anderes. Nichts abgeschickt.`);
+    aborted(`Im Warenkorb liegen ${n ?? "?"} statt ${want} Einträge — er hat sich wohl unterdessen geändert `
+      + "(z. B. auf der Webseite). Nichts abgeschickt. Bitte noch einmal abschicken, die App zeigt dann, was darin liegt.");
 
   try {
+    if (discard) {
+      await client.discardCart();
+      const left = (await client.cart()).totalItemsInCart;
+      if (left !== 0) return foreign(left, 0);
+    }
     let total = null;
     for (const c of changes) {
       const anchor = c.target ?? c.current;
@@ -814,8 +885,8 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
       const want = base == null ? null : base + (changeKind(c) === "SWITCH" ? 2 : 1);
       if (want == null || total !== want) return foreign(total, want ?? "?");
     }
-    // Am Ende nur die Auswahl: Bekanntes an anderen Tagen ginge sonst mit ab.
-    const expected = changes.reduce((n, c) => n + (changeKind(c) === "SWITCH" ? 2 : 1), 0);
+    // Am Ende nur die Auswahl und was der Nutzer gesehen hat: alles andere ginge ungefragt mit ab.
+    const expected = changes.reduce((n, c) => n + (changeKind(c) === "SWITCH" ? 2 : 1), othersInCart);
     if (total !== expected) return foreign(total, expected);
     if (dryRun) {
       await rollback();

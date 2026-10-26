@@ -6,7 +6,7 @@
 <script type="module">
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
-  parseOrderHistory, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
+  parseOrderHistory, parseCart, cartOthers, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
 } from "../ibs.js";
 
 const results = [];
@@ -684,6 +684,29 @@ await test("Sdui: Kürzel, Stunden, Schule, nächster Schultag", () => {
   eq([Sdui.nextSchoolDay("2026-10-09"), Sdui.nextSchoolDay("2026-10-05")], ["2026-10-12", "2026-10-06"], "Fr → Mo");
 });
 
+// Echte Warenkorbseiten vom 26.10.2026 (Token entfernt): ein Eintrag am 09.11.
+const cartDesktop = await res("cart_desktop.html");
+const cartMobile = await res("cart_mobile.html");
+await test("Warenkorb: Desktop und Handy liefern dieselben Einträge", () => {
+  for (const [what, html] of [["Desktop", cartDesktop], ["Handy", cartMobile]]) {
+    const items = parseCart(html);
+    eq(items.length, 1, `${what}: Anzahl`);
+    eq([items[0].date, items[0].kind], ["2026-11-09", "Neubestellung"], what);
+    eq(items[0].name.startsWith("Hörnchennudeln(BIO), Gemüse-Bolognese"), true, `${what}: Name ${items[0].name}`);
+  }
+});
+await test("Warenkorb: Fehlerseite wirft", () => {
+  throws(() => parseCart("<html><body>Object moved</body></html>"), "Fehlerseite");
+});
+await test("Warenkorb: andere Tage, leerer Warenkorb, Zahl passt nicht", async () => {
+  const fake = (total, html) => ({ cart: async () => new CartResponse(true, null, total), cartPage: async () => html });
+  eq(await cartOthers(fake(0, ""), []), { total: 0, others: [] }, "leer, ohne Seite");
+  eq((await cartOthers(fake(1, cartMobile), ["2026-11-09"])).others, [], "eigener Tag zählt nicht");
+  eq((await cartOthers(fake(1, cartDesktop), ["2026-11-10"])).others.map((i) => i.date), ["2026-11-09"], "anderer Tag");
+  eq((await cartOthers(fake(19, cartDesktop), [])).others, null, "19 laut IBS, 1 auf der Seite");
+  eq((await cartOthers(fake(1, "<p>Login</p>"), [])).others, null, "Seite unlesbar");
+});
+
 // Bestellen gegen einen Schein-Client.
 class FakeClient {
   constructor({ extraInCart = 0, failSubmit = false } = {}) {
@@ -700,6 +723,7 @@ class FakeClient {
   }
   async cancelInCart(e) { this.calls.push(`cancel ${e.date}`); this.items.push(e); return new CartResponse(true, null, this.total()); }
   async submitCart() { this.calls.push("submit"); this.submitted = !this.failSubmit; return new CartResponse(!this.failSubmit, this.failSubmit ? "nein" : null, 0); }
+  async discardCart() { this.calls.push("discard"); this.items = []; this.extraInCart = 0; }
 }
 const p42 = parseWeekplan(kw42);
 const line = (date, id) => p42.days.get(date).entries.find((e) => e.menuLineId === id);
@@ -773,6 +797,32 @@ await test("Bestellen: Bekanntes an einem anderen Tag im Warenkorb → nichts ab
   eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
   eq(c.items.map((e) => e.date), ["2026-10-13"], "zurückgerollt, Bekanntes bleibt");
 });
+await test("Bestellen: gesehene Einträge an anderen Tagen gehen mit ab", async () => {
+  const c = new FakeClient({ extraInCart: 2 });
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }],
+    { othersInCart: 2, reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "done", r.reason); eq(c.submitted, true);
+});
+await test("Bestellen: mehr im Warenkorb als gesehen → nichts abgeschickt", async () => {
+  const c = new FakeClient({ extraInCart: 3 });
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }],
+    { othersInCart: 2, reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+});
+await test("Bestellen: Verwerfen leert erst den Warenkorb, dann nur die Auswahl", async () => {
+  const c = new FakeClient({ extraInCart: 18 });
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }],
+    { discard: true, reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "done", r.reason); eq(c.calls[0], "discard", "zuerst verworfen"); eq(c.submitted, true);
+});
+await test("Bestellen: Verwerfen greift nicht → nichts abgeschickt", async () => {
+  const c = new FakeClient({ extraInCart: 18 });
+  c.discardCart = async () => { c.calls.push("discard"); };
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }],
+    { discard: true, reload: orderedAfter("2026-10-12", "827") });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+});
+
 await test("Bestellen: Probelauf schickt nichts ab", async () => {
   const c = new FakeClient();
   const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { dryRun: true, reload: orderedAfter("2026-10-12", "827") });
