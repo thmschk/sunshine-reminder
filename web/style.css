@@ -204,11 +204,12 @@ dialog.result-dialog { width: min(360px, calc(100vw - 48px)); }
 .dialog .order-result h3 { color: var(--error); }
 .dialog .order-result.done h3 { color: var(--ok); }
 .dialog .order-result p { display: block; overflow: visible; color: var(--text); }
-.order-result.done ul { list-style: none; margin: 0; padding: 0; }
-.order-result.done li { margin: 8px 0 0; font-size: .9rem; }
-.order-result.done .dish {
+/* Einträge in Warenkorb-Karte, Rückfragen und Ergebnis: Tag fett, was geschieht, darunter das Gericht. */
+.entries { list-style: none; margin: 0; padding: 0; }
+.entries li { margin: 8px 0 0; font-size: .9rem; }
+.entries .dish {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  font-size: .85rem; color: var(--on-surface-variant);
+  font-size: .85rem; opacity: .75;
 }
 fieldset.day-order { border: 0; margin: 8px 0; padding: 10px 12px; }
 .day-order legend { float: left; width: 100%; font-weight: 500; font-size: .9rem; padding: 0 0 2px; }
@@ -227,18 +228,10 @@ dialog.dialog::backdrop { background: rgba(0, 0, 0, .32); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .dialog-actions .text { color: var(--secondary); }
 .dialog-actions.stacked { flex-direction: column-reverse; align-items: flex-end; gap: 2px; }
-.cart-list { margin: 4px 0 0; padding: 0; list-style: none; font-size: .85rem; }
-.cart-list li { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 2px 0; }
 /* Wie „offen“ in der Übersicht. */
 .cart-note { background: var(--primary-container); color: var(--on-primary-container); }
 .cart-note h3 { font-size: 1rem; font-weight: 600; margin: 0; }
-.cart-note ul { list-style: none; margin: 0; padding: 0; }
-.cart-note li { margin: 8px 0 0; font-size: .9rem; }
-.cart-note .dish {
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  font-size: .85rem; opacity: .75;
-}
-.cart-note p { margin: 8px 0 0; font-size: .82rem; opacity: .75; }
+.cart-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 8px -10px -6px 0; }
 pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
 
 .back-head { margin: 8px 0 0 -8px; }

@@ -6,7 +6,7 @@
 <script type="module">
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
-  parseOrderHistory, parseCart, cartOthers, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
+  parseOrderHistory, parseCart, cartOthers, submitCartAsSeen, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
 } from "../ibs.js";
 
 const results = [];
@@ -821,6 +821,31 @@ await test("Bestellen: Verwerfen greift nicht → nichts abgeschickt", async () 
   const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }],
     { discard: true, reload: orderedAfter("2026-10-12", "827") });
   eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+});
+
+// Nur den Warenkorb abschicken, ohne Auswahl.
+const seen = [{ date: "2026-11-09", name: "Hörnchennudeln", kind: "Neubestellung" }, { date: "2026-11-10", name: "Linsen", kind: "Abbestellung" }];
+const dayAfter = (ordered) => async (ds) => ds.map((d) => ({ date: d, entries: ordered.includes(d) ? [{ isOrdered: true }] : [] }));
+await test("Nur Warenkorb: wie gesehen → abgeschickt und nachgeprüft", async () => {
+  const c = new FakeClient({ extraInCart: 2 });
+  const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09"]) });
+  eq(r.kind, "done", r.reason); eq(c.submitted, true);
+});
+await test("Nur Warenkorb: Zahl weicht ab → nichts abgeschickt", async () => {
+  const c = new FakeClient({ extraInCart: 3 });
+  const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09"]) });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+});
+await test("Nur Warenkorb: Abbestellung steht danach noch als bestellt → unbestätigt", async () => {
+  const c = new FakeClient({ extraInCart: 2 });
+  const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09", "2026-11-10"]) });
+  eq(r.kind, "unconfirmed"); eq(r.missing, ["2026-11-10"]);
+});
+await test("Nur Warenkorb: Antwort fehlt, Stand passt → erledigt", async () => {
+  const c = new FakeClient({ extraInCart: 2 });
+  c.submitCart = async () => { throw new Error("Netz weg"); };
+  const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09"]) });
+  eq(r.kind, "done");
 });
 
 await test("Bestellen: Probelauf schickt nichts ab", async () => {

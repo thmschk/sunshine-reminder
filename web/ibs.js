@@ -554,6 +554,45 @@ export async function cartOthers(client, dates) {
   return { total, others };
 }
 
+/**
+ * Nur den Warenkorb abschicken, ohne eigene Auswahl: genau die Einträge, die der
+ * Nutzer gesehen hat (cartOthers). Weicht die Zahl ab, kam unterdessen etwas dazu
+ * oder weg, dann wird nicht abgeschickt. Nachgeprüft wird je Tag: mit Neubestellung
+ * bestellt, mit nur Abbestellungen nicht mehr bestellt.
+ * @returns {Promise<{kind:"done"|"aborted"|"unconfirmed", reason?:string, missing?:string[]}>}
+ */
+export async function submitCartAsSeen(client, seen, { reload }) {
+  const total = (await client.cart()).totalItemsInCart;
+  if (total !== seen.length) {
+    return { kind: "aborted", reason: `Im Warenkorb liegen ${total ?? "?"} statt ${seen.length} Einträge — er hat sich unterdessen geändert. Nichts abgeschickt.` };
+  }
+  // Ab hier kann die Bestellung durch sein, auch wenn keine Antwort kommt (wie placeOrders).
+  let lost = null;
+  try {
+    const sent = await client.submitCart();
+    if (!sent.ok) return { kind: "aborted", reason: sent.message || "Bestellung abgelehnt." };
+  } catch (e) {
+    lost = e;
+  }
+  const dates = [...new Set(seen.map((i) => i.date).filter(Boolean))];
+  const why = lost ? `Antwort auf das Abschicken fehlt (${lost.message})` : null;
+  let after;
+  try {
+    after = await reload(dates);
+  } catch (e) {
+    return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates };
+  }
+  const asSeen = (date) => {
+    const kinds = seen.filter((i) => i.date === date).map((i) => i.kind);
+    const ordered = (after.find((d) => d.date === date)?.entries || []).some((e) => e.isOrdered);
+    return kinds.some((k) => /^neu/i.test(k)) ? ordered : kinds.every((k) => /^ab/i.test(k)) ? !ordered : true;
+  };
+  const missing = dates.filter((d) => !asSeen(d));
+  return missing.length
+    ? { kind: "unconfirmed", reason: why || "Nicht alle Tage stehen so im Wochenplan wie im Warenkorb.", missing }
+    : { kind: "done" };
+}
+
 /** "Dinkel-Makkaroni(BIO), Tomatensoße, …" → "Dinkel-Makkaroni", wie data-name im Wochenplan. */
 const shortDish = (name) => name.split(/[(,]/)[0].trim() || name;
 

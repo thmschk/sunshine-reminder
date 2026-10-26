@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "cartsend", "cartdiscard"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -310,7 +310,7 @@ if (!mode) {
     radio.dispatchEvent(new Event("change", { bubbles: true }));
     $("#b-submit").click();
     await until(() => $('dialog [data-v="discard"]'));
-    check(document.querySelectorAll("dialog .cart-list li").length === 2, "Rückfrage listet beide Einträge");
+    check(document.querySelectorAll("dialog .entries li").length === 2, "Rückfrage listet beide Einträge");
     check(!!$('dialog [data-v="all"]') && !$('dialog [data-v="mine"]'), "Knöpfe: Verwerfen, Alles abschicken");
     $('dialog [data-v=""]').click();
     await until(() => !$("dialog") && !$("#b-submit").disabled);
@@ -347,7 +347,36 @@ if (!mode) {
     const done = $(".order-result.done");
     check(!!done, `Ergebnis: ${$(".order-result")?.textContent.replace(/\s+/g, " ").slice(0, 90)}`);
     check(done?.querySelectorAll("li").length === 1 && /bestellt/.test(done.textContent) && /Nudeln/.test(done.textContent),
-      "eine Zeile: Tag, „bestellt“, Gericht");
+      "eine Zeile: Tag, „bestellt“, Gericht");  } else if (mode === "cartsend" || mode === "cartdiscard") {
+    // Nur der Warenkorb, ohne Auswahl unten: Knöpfe in der Karte, Rückfrage, Ergebnis.
+    await account();
+    hooks.status = 0;
+    hooks.cart = [["Mo 09.11.2026", "Hörnchennudeln(BIO), Gemüse-Bolognese"], ["Di 10.11.2026", "Linseneintopf"]];
+    const posts = [];
+    hooks.ibs = (url, init) => {
+      if (init.method !== "POST" || url.includes("/Login/")) return null;
+      posts.push(url.replace(/^.*\/ibs5/, ""));
+      if (url.includes("/Cart/Order")) { hooks.cart = []; hooks.status = 2; return new Response(JSON.stringify({ MessageStatus: "OK" })); }
+      return null;
+    };
+    await import("../app.js");
+    await until(() => $("#b-order-now") && !document.getElementById("refresh"));
+    $("#b-order-now").click();
+    await until(() => $(".cart-note #b-cart-send") && orderLoaded());
+    check($("#b-submit").disabled, "unten nichts gewählt, Abschicken unten aus");
+    const send = mode === "cartsend";
+    $(send ? "#b-cart-send" : "#b-cart-discard").click();
+    await until(() => $('dialog [data-v="1"]'));
+    check(send ? document.querySelectorAll("dialog .entries li").length === 2 : /2 Einträge werden/.test($("dialog").textContent),
+      send ? "Rückfrage listet beide Einträge" : "Rückfrage nennt die Zahl");
+    $('dialog [data-v="1"]').click();
+    await until(() => $(".order-result"));
+    const res = $(".order-result")?.textContent.replace(/\s+/g, " ") || "";
+    check(send ? /✓ Abgeschickt/.test(res) : /✓ Warenkorb verworfen/.test(res), `Ergebnis: ${res.slice(0, 80)}`);
+    check(JSON.stringify(posts) === JSON.stringify([send ? "/Cart/Order" : "/Cart/Clear"]), `nur eine Anfrage, die richtige: ${posts.join(", ")}`);
+    $(".dialog-actions button").click();
+    await until(() => !$("dialog") && orderLoaded() && !$(".cart-note"));
+    check(!$(".cart-note"), "danach keine Karte mehr");
   }
   $out.textContent = summary(lines);
 }

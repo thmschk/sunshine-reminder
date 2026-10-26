@@ -1,6 +1,6 @@
 import {
   DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, clampDaysAhead,
-  addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, targetDates, todayBerlin, weekdayNo,
+  addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, submitCartAsSeen, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { freezeWrites, kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
 import {
@@ -842,11 +842,54 @@ async function showOrder(focusDate = null) {
     $cart.innerHTML = !r?.total ? "" : `
       <div class="card cart-note">
         <h3>${r.total === 1 ? "1 Eintrag" : `${r.total} Einträge`} im Warenkorb, nicht abgeschickt</h3>
-        ${r.others?.length ? `<ul>${r.others.map((i) => `
-          <li><span class="chip">${esc(i.date ? De.chip(i.date) : "?")}</span> ${esc(i.kind)}
-            <span class="dish">${esc(i.name)}</span></li>`).join("")}</ul>` : ""}
-        <p>Beim Abschicken fragt die App, ob sie mitbestellt oder verworfen werden.</p>
+        ${r.others?.length ? `<ul class="entries">${cartRows(r.others)}</ul>` : ""}
+        <div class="cart-actions">
+          <button type="button" class="text" id="b-cart-discard">Verwerfen</button>
+          ${r.others?.length ? `<button type="button" class="text" id="b-cart-send">Abschicken</button>` : ""}
+        </div>
       </div>`;
+    if (!r?.total) return;
+    document.getElementById("b-cart-discard").onclick = () => cartAction(false, r);
+    const $send = document.getElementById("b-cart-send");
+    if ($send) $send.onclick = () => cartAction(true, r);
+    for (const b of $cart.querySelectorAll("button")) b.disabled = submitting;
+  }
+
+  /** Den Warenkorb von IBS5 so, wie die Karte ihn zeigt, abschicken oder verwerfen, ohne Auswahl unten. */
+  async function cartAction(send, seen) {
+    if (submitting) return;
+    const n = seen.total === 1 ? "Der Eintrag wird" : `Alle ${seen.total} Einträge werden`;
+    const ok = await askDialog(send ? "Warenkorb verbindlich abschicken?" : "Warenkorb verwerfen?",
+      send ? `<ul class="entries">${cartRows(seen.others)}</ul>` : `<p>${n} aus dem Warenkorb entfernt, bestellt wird nichts.</p>`,
+      send ? "Abschicken" : "Verwerfen");
+    if (!ok || submitting) return;
+    submitting = true;
+    lock(true);
+    working(true);
+    const discard = async (c) => {
+      await c.discardCart();
+      const left = (await c.cart()).totalItemsInCart;
+      return left === 0 ? { kind: "done" }
+        : { kind: "aborted", reason: `Danach liegen noch ${left ?? "?"} Einträge im Warenkorb — bitte auf der Bestellseite nachsehen.` };
+    };
+    const outcome = await budgetFor(send ? 4 + 2 * seen.others.length : 4)
+      .then(() => withLogin(creds, (c) => unmetered(c, () => (send
+        ? submitCartAsSeen(c, seen.others, { reload: (ds) => collect(c, ds, { fresh: true }) })
+        : discard(c)))))
+      .catch((e) => ({ kind: "aborted", reason: e.message }));
+    working(false);
+    if (outcome.kind === "done") {
+      resultDialog("done", send ? "✓ Abgeschickt" : "✓ Warenkorb verworfen",
+        send ? `<ul class="entries">${cartRows(seen.others)}</ul>` : "<p>Bestellt wurde nichts.</p>");
+    } else if (outcome.kind === "aborted") {
+      resultDialog("error", send ? "Nichts abgeschickt" : "Nicht verworfen", `<p>${esc(outcome.reason)}</p>`);
+    } else {
+      resultDialog("error", "Abgeschickt, aber nicht bestätigt", `<p>${esc(outcome.reason)}</p>
+        <p>Bitte auf der Bestellseite nachsehen: ${esc((outcome.missing || []).map(De.short).join(", "))}</p>`);
+    }
+    release();
+    if (outcome.kind === "aborted") await showCart();
+    else await load();
   }
 
   let days = [];
@@ -855,6 +898,19 @@ async function showOrder(focusDate = null) {
   // gestartet) bricht ab, statt weiter Tage in die neue Liste zu hängen.
   let loadSeq = 0;
   let submitting = false;
+  // Bis zum Neuladen bleiben die Knöpfe aus: zwei Bestellungen auf einem Warenkorb zählen sich gegenseitig.
+  // „Zurück“ ebenso: die Ergebnismeldung, auch „nicht bestätigt“, steht nur in dieser Ansicht.
+  const lock = (on) => {
+    for (const id of ["b-submit", "b-back", "b-cart-send", "b-cart-discard"]) {
+      const b = document.getElementById(id);
+      if (b) b.disabled = on;
+    }
+  };
+  const release = () => {
+    submitting = false;
+    lock(false);
+    refresh();
+  };
   const ferien = await loadHolidays();
   // Die bestellte Linie, falls sie sich noch ändern lässt (DayStatus.ordered() der App).
   const orderedOf = (d) => d.entries.find((e) => e.isOrdered && e.selectable) ?? null;
@@ -1013,21 +1069,8 @@ async function showOrder(focusDate = null) {
     const changes = pending();
     if (!changes.length) return;
 
-    // Bis zum Neuladen bleibt der Knopf aus: zwei Bestellungen auf einem Warenkorb zählen sich gegenseitig.
-    // „Zurück“ ebenso: die Ergebnismeldung, auch „nicht bestätigt“, steht nur in dieser Ansicht.
     submitting = true;
-    const lock = (on) => {
-      for (const id of ["b-submit", "b-back"]) {
-        const b = document.getElementById(id);
-        if (b) b.disabled = on;
-      }
-    };
     lock(true);
-    const release = () => {
-      submitting = false;
-      lock(false);
-      refresh();
-    };
     // Abgeschickt wird immer der ganze Warenkorb: erst nachsehen, was sonst darin liegt.
     working(true);
     const cart = await withLogin(creds, (c) => cartOthers(c, changes.map((c) => c.date))).catch((e) => ({ error: e }));
@@ -1054,13 +1097,11 @@ async function showOrder(focusDate = null) {
 
     if (outcome.kind === "done") {
       const verb = { ORDER: "bestellt", SWITCH: "umbestellt auf", CANCEL: "abbestellt" };
-      const rows = outcome.changes.map((c) => `
-        <li><span class="chip">${esc(De.chip(c.date))}</span> ${verb[changeKind(c)]}
-          <span class="dish">${esc((c.target ?? c.current)?.name)}</span></li>`);
+      const rows = outcome.changes.map((c) => entryRow(c.date, verb[changeKind(c)], (c.target ?? c.current)?.name));
       if (othersInCart) {
         rows.push(`<li>und ${othersInCart === 1 ? "1 weiterer Eintrag" : `${othersInCart} weitere Einträge`} aus dem Warenkorb</li>`);
       }
-      resultDialog("done", "✓ Erledigt", `<ul>${rows.join("")}</ul>`);
+      resultDialog("done", "✓ Erledigt", `<ul class="entries">${rows.join("")}</ul>`);
     } else if (outcome.kind === "aborted") {
       resultDialog("error", "Nichts abgeschickt", `<p>${esc(outcome.reason)}</p>`);
     } else {
@@ -1115,8 +1156,31 @@ function resultDialog(cls, title, body) {
   dlg.showModal();
 }
 
-/** Eintrag aus dem Warenkorb von IBS5, für Hinweis und Rückfrage. */
-const cartLine = (i) => `${i.date ? De.chip(i.date) : "?"} ${i.name}${i.kind ? ` (${i.kind})` : ""}`;
+/** Zeile einer Liste class="entries": Tag fett, was geschieht, darunter das Gericht. */
+const entryRow = (date, what, name) => `
+  <li><span class="chip">${esc(date ? De.chip(date) : "?")}</span> ${esc(what)}<span class="dish">${esc(name)}</span></li>`;
+/** Einträge aus dem Warenkorb von IBS5 (cartOthers). */
+const cartRows = (items) => items.map((i) => entryRow(i.date, i.kind, i.name)).join("");
+
+/** Rückfrage mit fertigem HTML; true = okLabel. */
+function askDialog(title, body, okLabel) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement("dialog");
+    dlg.className = "dialog result-dialog";
+    dlg.innerHTML = `
+      <h3>${esc(title)}</h3>
+      ${body}
+      <div class="dialog-actions">
+        <button type="button" class="text" data-v="">Abbrechen</button>
+        <button type="button" class="text" data-v="1">${esc(okLabel)}</button>
+      </div>`;
+    document.body.append(dlg);
+    const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
+    dlg.addEventListener("cancel", () => done(false));
+    dlg.querySelectorAll("button").forEach((b) => { b.onclick = () => done(b.dataset.v === "1"); });
+    dlg.showModal();
+  });
+}
 
 /**
  * Rückfrage wie AlertDialog der App. Liegt im Warenkorb noch anderes (cartOthers),
@@ -1131,7 +1195,7 @@ function orderDialog(lines, { total, others }) {
         Abgeschickt wird immer der ganze Warenkorb.</p>` : `
       <p class="cart-extra">Im Warenkorb liegen außerdem ${what}, die nicht abgeschickt sind.
         Abgeschickt wird immer der ganze Warenkorb:</p>
-      <ul class="cart-list">${others.map((i) => `<li>${esc(cartLine(i))}</li>`).join("")}</ul>`;
+      <ul class="entries">${cartRows(others)}</ul>`;
   const buttons = !rest ? [["mine", "Abschicken"]]
     : others == null ? [["discard", "Verwerfen, nur meine Auswahl"]]
     : [["discard", "Verwerfen, nur meine Auswahl"], ["all", "Alles abschicken"]];
