@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -291,7 +291,7 @@ if (!mode) {
     await until(() => $(".order-result"));
     const msg = $(".order-result")?.textContent || "";
     check(posts.length === 0, `keine Warenkorb-Anfrage (${posts.length})`);
-    check(/Nichts abgeschickt: Die App hat in der letzten Stunde/.test(msg), `Meldung: ${msg.slice(0, 90)}`);
+    check(/Nichts abgeschickt\s*Die App hat in der letzten Stunde/.test(msg), `Meldung: ${msg.slice(0, 90)}`);
   } else if (mode === "ordercart") {
     // Anderes im Warenkorb: Hinweis in der Ansicht, Liste in der Rückfrage, Verwerfen vor dem ersten Schritt.
     await account();
@@ -321,6 +321,33 @@ if (!mode) {
     await until(() => $(".order-result"));
     check(posts[0] === "/Cart/Clear", `zuerst verworfen: ${posts.join(", ")}`);
     check(!posts.includes("/Cart/Order"), "nicht abgeschickt, weil der Schein-IBS beim Bestellen kein JSON liefert");
+  } else if (mode === "orderdone") {
+    // Geglückte Bestellung: Ergebnis als Karte mit einer Zeile je Tag.
+    await account();
+    hooks.status = 0;
+    let inCart = 0;
+    const json = (o) => new Response(JSON.stringify(o));
+    hooks.ibs = (url) => {
+      if (url.includes("/Mealplan/ClearCart")) { inCart = 0; return json({ totalItemsInCart: 0, messageStatus: "OK" }); }
+      if (url.includes("/Mealplan/SaveOrder")) return json({ totalItemsInCart: ++inCart, messageStatus: "OK" });
+      if (url.includes("/Cart/Order")) { inCart = 0; hooks.status = 2; return json({ MessageStatus: "OK" }); }
+      return null;
+    };
+    await import("../app.js");
+    await until(() => $("#b-order-now") && !document.getElementById("refresh"));
+    $("#b-order-now").click();
+    await until(() => $('#f-order input[type=radio][value="827"]') && orderLoaded());
+    const radio = $('#f-order input[type=radio][value="827"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    $("#b-submit").click();
+    await until(() => $('dialog [data-v="mine"]'));
+    $('dialog [data-v="mine"]').click();
+    await until(() => $(".order-result"));
+    const done = $(".order-result.done");
+    check(!!done, `Ergebnis: ${$(".order-result")?.textContent.replace(/\s+/g, " ").slice(0, 90)}`);
+    check(done?.querySelectorAll("li").length === 1 && /bestellt/.test(done.textContent) && /Nudeln/.test(done.textContent),
+      "eine Zeile: Tag, „bestellt“, Gericht");
   }
   $out.textContent = summary(lines);
 }

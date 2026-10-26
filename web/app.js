@@ -1032,7 +1032,7 @@ async function showOrder(focusDate = null) {
     const cart = await withLogin(creds, (c) => cartOthers(c, changes.map((c) => c.date))).catch((e) => ({ error: e }));
     working(false);
     if (cart.error) {
-      setResult(`Nichts abgeschickt: ${cart.error.message}`, "error");
+      resultDialog("error", "Nichts abgeschickt", `<p>${esc(cart.error.message)}</p>`);
       return release();
     }
     const choice = await orderDialog(changes.map(describe), cart);
@@ -1052,14 +1052,20 @@ async function showOrder(focusDate = null) {
     if (back) back.disabled = false;
 
     if (outcome.kind === "done") {
-      setResult(`Erledigt:\n${outcome.changes.map(describe).join("\n")}`
-        + (othersInCart ? `\nund ${othersInCart === 1 ? "1 weiterer Eintrag" : `${othersInCart} weitere Einträge`} aus dem Warenkorb` : ""), "ok");
-    } else if (outcome.kind === "aborted") setResult(`Nichts abgeschickt: ${outcome.reason}`, "error");
-    else {
-      setResult(`Abgeschickt, aber nicht bestätigt (${outcome.reason}) — bitte auf der Bestellseite nachsehen: `
-        + (outcome.missing || []).map(De.short).join(", "), "error");
+      const verb = { ORDER: "bestellt", SWITCH: "umbestellt auf", CANCEL: "abbestellt" };
+      const rows = outcome.changes.map((c) => `
+        <li><span class="chip">${esc(De.chip(c.date))}</span> ${verb[changeKind(c)]}
+          <span class="dish">${esc((c.target ?? c.current)?.name)}</span></li>`);
+      if (othersInCart) {
+        rows.push(`<li>und ${othersInCart === 1 ? "1 weiterer Eintrag" : `${othersInCart} weitere Einträge`} aus dem Warenkorb</li>`);
+      }
+      resultDialog("done", "✓ Erledigt", `<ul>${rows.join("")}</ul>`);
+    } else if (outcome.kind === "aborted") {
+      resultDialog("error", "Nichts abgeschickt", `<p>${esc(outcome.reason)}</p>`);
+    } else {
+      resultDialog("error", "Abgeschickt, aber nicht bestätigt", `<p>${esc(outcome.reason)}</p>
+        <p>Bitte auf der Bestellseite nachsehen: ${esc((outcome.missing || []).map(De.short).join(", "))}</p>`);
     }
-    window.scrollTo({ top: 0, behavior: "smooth" });
     // Die geänderten Tage hat placeOrders frisch geladen, der Rest kommt aus dem Zwischenspeicher.
     submitting = false;
     if (outcome.kind === "done" || outcome.kind === "unconfirmed") await load();
@@ -1091,6 +1097,20 @@ function showAbout() {
   dlg.addEventListener("cancel", close);
   dlg.querySelector("button").onclick = close;
   dlg.querySelectorAll("a").forEach((a) => a.addEventListener("click", close));
+  dlg.showModal();
+}
+
+/** Ergebnis des Abschickens als Dialog: oben in der Ansicht übersieht man es leicht. body ist fertiges HTML. */
+function resultDialog(cls, title, body) {
+  const dlg = document.createElement("dialog");
+  dlg.className = "dialog result-dialog";
+  dlg.innerHTML = `
+    <div class="order-result ${cls}"><h3>${esc(title)}</h3>${body}</div>
+    <div class="dialog-actions"><button type="button" class="text">OK</button></div>`;
+  document.body.append(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener("cancel", close);
+  dlg.querySelector("button").onclick = close;
   dlg.showModal();
 }
 

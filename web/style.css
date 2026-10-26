@@ -199,7 +199,17 @@ input[type=radio], input[type=checkbox] { accent-color: var(--secondary); }
 }
 @keyframes slide { from { left: -40%; } to { left: 100%; } }
 .order-result { margin: 8px 0 4px; font-size: 1rem; }
+dialog.result-dialog { width: min(360px, calc(100vw - 48px)); }
 .order-result.error { color: var(--error); }
+.dialog .order-result h3 { color: var(--error); }
+.dialog .order-result.done h3 { color: var(--ok); }
+.dialog .order-result p { display: block; overflow: visible; color: var(--text); }
+.order-result.done ul { list-style: none; margin: 0; padding: 0; }
+.order-result.done li { margin: 8px 0 0; font-size: .9rem; }
+.order-result.done .dish {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: .85rem; color: var(--on-surface-variant);
+}
 fieldset.day-order { border: 0; margin: 8px 0; padding: 10px 12px; }
 .day-order legend { float: left; width: 100%; font-weight: 500; font-size: .9rem; padding: 0 0 2px; }
 .option { display: flex; align-items: center; gap: 10px; margin: 0; padding: 6px 2px; font-weight: normal; font-size: .88rem; cursor: pointer; }
