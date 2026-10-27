@@ -6,7 +6,7 @@ import {
   AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, OrderState, addDays, collect, evaluate, nextWeekday, targetDates,
   todayBerlin,
 } from "./ibs.js";
-import { kvGet, kvSet } from "./idb.js";
+import { KeyUnreadableError, kvGet, kvSet } from "./idb.js";
 import { accountLabel, dayStore, loadAccounts, renameAccount } from "./accounts.js";
 import * as Sdui from "./sdui.js";
 import { IbsBudgetError, IbsPausedError, guardHooks } from "./guard.js";
@@ -14,7 +14,7 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v63";
+const VERSION = "v64";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -108,8 +108,26 @@ async function withDeadline(fn, tag) {
     });
     await Promise.race([fn(), deadline]).finally(() => clearTimeout(timer));
   } catch (e) {
-    await notify("Prüfung fehlgeschlagen", `${e?.message || e}\nBitte die App öffnen.`, { url: "./", tag }).catch(() => {});
+    const n = failNotice(e);
+    await notify(n.title, n.body, { silent: n.silent, url: "./", tag }).catch(() => {});
   }
+}
+
+/** Ersatzmeldung, wenn ein Weckruf scheitert; still, wenn iOS nur gerade den Schlüssel nicht herausgibt. */
+export function failNotice(e) {
+  if (e instanceof KeyUnreadableError) {
+    return {
+      title: "Bestellstand gerade nicht prüfbar",
+      body: "Das Gerät gab die gespeicherte Anmeldung gerade nicht heraus. Die nächste Prüfung läuft wie gewohnt; im Zweifel die App öffnen.",
+      silent: true,
+    };
+  }
+  return { title: "Prüfung fehlgeschlagen", body: `${e?.message || e}\nBitte die App öffnen.`, silent: false };
+}
+
+/** Lesefehler der Konten: kein „nicht angemeldet“, sondern ein Fehler für die Ersatzmeldung. */
+function storageError(e) {
+  return e instanceof KeyUnreadableError ? e : new Error(`Gerätespeicher nicht lesbar (${e?.message || e}).`);
 }
 
 /** „Jetzt testen“ in den Einstellungen wartet auf diese Bestätigung. */
@@ -204,9 +222,7 @@ export function pushCheckDates(today, daysAhead, pushDays) {
 // Meldung: eine zweite kurz danach dämpft Android.
 async function checkAndNotify(isTest) {
   // Ein Lesefehler ist nicht „nicht angemeldet“: er landet in der Fehlermeldung des Weckrufs.
-  const accounts = await loadAccounts().catch((e) => {
-    throw new Error(`Gerätespeicher nicht lesbar (${e?.message || e}).`);
-  });
+  const accounts = await loadAccounts().catch((e) => { throw storageError(e); });
   if (!accounts.length) {
     return notify("Nicht angemeldet", "Bitte die Seite öffnen und anmelden.", { url: "./" });
   }
@@ -246,9 +262,7 @@ async function checkAndNotify(isTest) {
  * damit eine kaputte Abendprüfung weiter als „Erinnerung schweigt“ auffällt.
  */
 async function todayAndNotify() {
-  const accounts = await loadAccounts().catch((e) => {
-    throw new Error(`Gerätespeicher nicht lesbar (${e?.message || e}).`);
-  });
+  const accounts = await loadAccounts().catch((e) => { throw storageError(e); });
   if (!accounts.length) return notify("Nicht angemeldet", "Bitte die Seite öffnen und anmelden.", { url: "./", tag: TODAY_TAG });
   const today = todayBerlin();
   const events = await loadEvents(today).catch(() => []);

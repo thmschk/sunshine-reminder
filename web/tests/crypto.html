@@ -24,6 +24,12 @@ try {
   const legacy = await secretGet("t.creds");
   check("alter Klartext wird gelesen", legacy?.password === "alt");
   check("und dabei verschlüsselt", (await kvGet("t.creds")).enc === 1);
+  const kept = await kvGet("cryptoKey");
+  await kvDel("cryptoKey");
+  check("ohne Schlüssel: Seite liest „nicht angemeldet“", (await secretGet("t.creds")) === undefined);
+  check("und legt dabei keinen neuen Schlüssel an", (await kvGet("cryptoKey")) === undefined);
+  await kvSet("cryptoKey", kept);
+  check("mit Schlüssel wieder lesbar", (await secretGet("t.creds"))?.password === "alt");
   await kvDel("t.creds");
 } catch (e) {
   lines.push("FAIL Ausnahme: " + e);

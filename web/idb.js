@@ -126,6 +126,20 @@ export const closeConnection = async () => (await opening?.catch(() => null))?.c
 const KEY = "cryptoKey";
 
 /**
+ * Der Service Worker bekommt den Schlüssel gerade nicht: iOS liefert ihn dort
+ * gelegentlich leer, und ein neuer lässt sich dann auch nicht ablegen
+ * („The object can not be cloned.“). Kein Grund, neu anzumelden.
+ */
+export class KeyUnreadableError extends Error {
+  constructor() {
+    super("Gespeicherte Anmeldung gerade nicht lesbar");
+    this.name = "KeyUnreadableError";
+  }
+}
+
+const inServiceWorker = typeof ServiceWorkerGlobalScope !== "undefined" && self instanceof ServiceWorkerGlobalScope;
+
+/**
  * Schlüssel lesen oder einmalig anlegen. Seite und Service Worker können das
  * gleichzeitig tun: add() statt put(), der Verlierer nimmt den Schlüssel des
  * Gewinners — sonst wäre, was der andere damit verschlüsselt hat, verloren.
@@ -156,6 +170,9 @@ export async function secretSet(name, value) {
 /**
  * Liest einen verschlüsselten Eintrag; ein älterer Klartext-Eintrag wird dabei
  * verschlüsselt. Ein Fehler des Speichers wird geworfen, nicht als „leer“ gemeldet.
+ * Fehlt der Schlüssel, legt das Lesen keinen neuen an (der könnte ohnehin nichts
+ * entschlüsseln): die Seite meldet „nicht angemeldet“, der Service Worker wirft
+ * KeyUnreadableError.
  */
 export async function secretGet(name) {
   const rec = await kvRead(name);
@@ -164,7 +181,11 @@ export async function secretGet(name) {
     await secretSet(name, rec);
     return rec;
   }
-  const k = await key();
+  const k = await run("readonly", (s) => s.get(KEY));
+  if (!k) {
+    if (inServiceWorker) throw new KeyUnreadableError();
+    return undefined;
+  }
   try {
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: rec.iv }, k, rec.ct);
     return JSON.parse(new TextDecoder().decode(pt));

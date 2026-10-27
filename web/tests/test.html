@@ -573,6 +573,20 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   });
 }
 
+// Ersatzmeldung, wenn ein Weckruf scheitert.
+{
+  const { failNotice } = await import("../sw.js");
+  const { KeyUnreadableError } = await import("../idb.js");
+  await test("Weckruf: Schlüssel gerade nicht lesbar (iOS) → still, kein „fehlgeschlagen“", () => {
+    const n = failNotice(new KeyUnreadableError());
+    eq([n.title, n.silent], ["Bestellstand gerade nicht prüfbar", true]);
+  });
+  await test("Weckruf: anderer Fehler → laut mit Text", () => {
+    const n = failNotice(new Error("Gerätespeicher nicht lesbar (x)."));
+    eq([n.title, n.silent, n.body.includes("(x)")], ["Prüfung fehlgeschlagen", false, true]);
+  });
+}
+
 // Berliner Ferien aus ferien.json.
 {
   const Fe = await import("../holidays.js");
