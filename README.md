@@ -179,7 +179,7 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 |---|---|
 | Was durchläuft | beim Einrichten einmal E-Mail und Passwort, danach bei jedem Abruf der Zugangsschlüssel (Token) und der Stundenplan |
 | Was der Server speichert | nichts. Für die Begrenzung hält er die IP-Adresse bis zu zehn Minuten im Arbeitsspeicher. |
-| Was auf dem Gerät bleibt | nur der Token, verschlüsselt — er gilt ein Jahr, danach einmal neu verbinden. Das Passwort wird nirgends gespeichert. |
+| Was auf dem Gerät bleibt | der Token (verschlüsselt, gilt ein Jahr, danach einmal neu verbinden) sowie der Stundenplan der nächsten zwei Wochen und die Fächerliste (unverschlüsselt, wie Bestellstand und Termine). Das Passwort wird nirgends gespeichert. „Abmelden und alles löschen“ entfernt alles. |
 | Was durchgelassen wird | nur Anmeldung, eigenes Konto, Kind und Stundenplan, höchstens 20 Aufrufe in 10 Minuten je Absender |
 | Wie oft abgerufen wird | höchstens alle sechs Stunden, der Plan liegt dazwischen auf dem Gerät |
 

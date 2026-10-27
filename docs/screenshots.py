@@ -1,8 +1,7 @@
-"""Screenshots der Web-App für README und Flyer: echte App, erfundene Daten.
+"""Screenshots der Web-App: echte App, erfundene Daten.
 
 Nutzt web/tests/screenshot.html (IBS5 wird dabei nicht gefragt), ein
-Headless-Chrome und das DevTools-Protokoll (pip: websockets). Danach
-`python3 docs/flugblatt.py` für den Flyer.
+Headless-Chrome und das DevTools-Protokoll (pip: websockets).
 """
 import asyncio
 import base64

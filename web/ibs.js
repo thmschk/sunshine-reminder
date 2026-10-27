@@ -351,6 +351,8 @@ const ONCLICK = [
  * $('#<id>').click(function () { …changeItemQuantity(…) }), mit denselben Argumenten.
  */
 const CLICK_BINDING = /\$\(\s*['"]#([\w-]+)['"]\s*\)\s*\.click\(\s*function\s*\(\)\s*\{([\s\S]*?)\}\s*\)/g;
+/** Merkmale eines Bestellknopfs: daran zeigt sich ein Angebot, auch wenn der Parser es nicht lesen kann. */
+const OFFER_TAG = /\bid\s*=\s*["']?menu_quantity_|menuplan-checkbox|data-order-status/i;
 /** Die Regel aus dem Seiten-JS von IBS5 (M5/KV-SPERRLOGIK). */
 const KV_NAME = /M5|KALTVERPFLEGUNG|\bKV\b/i;
 
@@ -420,7 +422,9 @@ export function parseWeekplan(html) {
   for (const m of html.matchAll(CLICK_BINDING)) bound.set(m[1], m[2]);
 
   const byDate = new Map();
+  let offers = 0;
   for (const m of html.matchAll(TAG)) {
+    if (OFFER_TAG.test(m[2])) offers++;
     if (!/data-order-status/i.test(m[2])) continue;
     const a = attributes(m[2]);
     if (!a.has("data-order-status")) continue;
@@ -451,6 +455,10 @@ export function parseWeekplan(html) {
     byDate.get(date).push(entry);
   }
 
+  // Bestellknöpfe da, aber kein Eintrag lesbar: neues Markup, kein „kein Angebot“.
+  if (offers && !byDate.size) {
+    throw new ParserError("Der Speiseplan enthält Gerichte, die die App nicht lesen kann — vermutlich hat IBS5 das Seitenformat geändert. Bestellstand bitte selbst prüfen.");
+  }
   const days = new Map();
   for (const [date, entries] of byDate) days.set(date, new DayStatus(date, dayState(entries), entries));
   return { days, displayedWeek: view === "week" && kw ? parseInt(kw[1], 10) : null, view };
@@ -469,7 +477,8 @@ const isoFromDe = (s) => {
  * dort als eigene Zeilen mit Menge −1 (auch „Bestellungen übertragen“ des
  * Caterers), deshalb wird je Liefertag und Menülinie saldiert. Desktop liefert
  * eine Tabelle, Handy-Browser Karten (class="rechnung") mit denselben Feldern.
- * @returns {Map<string, {line: string, name: string, quantity: number}[]>} nur Linien mit Saldo > 0
+ * @returns {Map<string, {line: string, name: string, quantity: number}[]>} nur Linien mit Saldo > 0;
+ *   dazu .touched: alle Liefertage mit Zeilen im Zeitraum, auch ganz abbestellte
  */
 export function parseOrderHistory(html) {
   if (!/id\s*=\s*["']order-history-table["']|id\s*=\s*["']account-subpage["'][^>]*value\s*=\s*["']order_history["']/.test(html)) {
@@ -499,6 +508,7 @@ export function parseOrderHistory(html) {
     net.set(key, { date, line, name: prev?.name || (sep < 0 ? r.text : r.text.slice(sep + 3)), quantity: (prev?.quantity || 0) + quantity });
   }
   const out = new Map();
+  out.touched = new Set([...net.values()].map((n) => n.date));
   for (const { date, line, name, quantity } of net.values()) {
     if (quantity <= 0) continue;
     if (!out.has(date)) out.set(date, []);
@@ -661,9 +671,9 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
  * Mit history holt sich die Tagesansicht die bestellten Tage vorab gesammelt aus
  * der Bestellhistorie; nur für die Übersicht, denn solche Tage tragen keine
  * Bestell-IDs.
- * peek: Tage nur zum Anzeigen (heute), nie mit eigener Tagesansicht: bestellt aus
- * der Historie, sonst „nicht bestellt“ (DEADLINE_PASSED). Ohne lesbare Historie
- * fehlen sie im Ergebnis; im Wochenplan kommen sie mit ihrem echten Zustand.
+ * peek: Tage nur zum Anzeigen (heute): bestellt aus der Historie, sonst aus der
+ * Tagesansicht (Feiertag, kein Angebot, nicht oder vor dem Zeitfenster der
+ * Historie bestellt); im Wochenplan kommen sie aus derselben Woche.
  */
 export async function collect(client, dates, { fresh = false, onProgress, history = false, signal, peek = [] } = {}) {
   const byDay = () => (history ? collectByHistory(client, dates, fresh, onProgress, signal, peek)
@@ -768,13 +778,13 @@ async function collectByDay(client, dates, fresh, onProgress, signal) {
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// Bestellt wird höchstens wenige Wochen im Voraus; die Historie filtert nach Bestelldatum.
+// Die Historie filtert nach Bestelldatum: früher bestellte Tage fehlen darin.
 const HISTORY_DAYS = 90;
 
 /**
  * Eine Anfrage für alle bestellten Tage, die Tagesansicht nur noch für die übrigen
  * (offen, zu spät, kein Angebot unterscheidet nur sie). Ist die Historie nicht
- * lesbar, wird wie bisher je Tag geladen.
+ * lesbar, wird je Tag geladen.
  */
 async function collectByHistory(client, dates, fresh, onProgress, signal, peek = []) {
   peek = peek.filter((d) => !dates.includes(d));
@@ -786,21 +796,26 @@ async function collectByHistory(client, dates, fresh, onProgress, signal, peek =
     ordered = parseOrderHistory(await client.orderHistory(addDays(today, -HISTORY_DAYS), addDays(today, 1)));
   } catch (e) {
     if (!(e instanceof ParserError)) throw e;
-    return collectByDay(client, dates, fresh, onProgress, signal);
+    const all = await collectByDay(client, dates, fresh, onProgress, signal);
+    return [...all, ...(await collectByDay(client, peek, fresh, null, signal))].sort((a, b) => a.date.localeCompare(b.date));
   }
   // Zwischengespeicherte Tage, die der Historie widersprechen (anderswo bestellt
-  // oder abbestellt), sind veraltet.
+  // oder abbestellt), sind veraltet. Bestellt ohne jede Zeile im Zeitraum heißt
+  // nur: vor dem Zeitfenster bestellt und seitdem nicht geändert.
   const cache = await dayCache(client);
   let dropped = 0;
   for (const [d, hit] of cache) {
-    if (ordered.has(d) !== (hit.day.state === OrderState.ORDERED)) dropped += cache.delete(d);
+    const cachedOrdered = hit.day.state === OrderState.ORDERED;
+    if (cachedOrdered && !ordered.touched.has(d)) continue;
+    if (ordered.has(d) !== cachedOrdered) dropped += cache.delete(d);
   }
   if (dropped) await saveDayCache(client);
-  const known = dates.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
-  const peeked = peek.map((d) => (ordered.has(d) ? historyDay(d, ordered.get(d)) : new DayStatus(d, OrderState.DEADLINE_PASSED)));
+  const fromHistory = (ds) => ds.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
+  const known = fromHistory(dates);
   const progress = onProgress && ((done) => onProgress(known.length + done, dates.length));
   const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, progress, signal);
-  return [...known, ...peeked, ...rest].sort((a, b) => a.date.localeCompare(b.date));
+  const peeked = await collectByDay(client, peek.filter((d) => !ordered.has(d)), fresh, null, signal);
+  return [...known, ...rest, ...fromHistory(peek), ...peeked].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /** Tage für den Speicher des Geräts, damit die Übersicht beim Öffnen sofort den letzten Stand zeigt. */
@@ -850,6 +865,17 @@ export const AlarmText = {
 
 // ---------------------------------------------------------------- Bestellen
 
+/**
+ * Steht am Tag genau line einmal bestellt (line null: nichts bestellt)? Eine Linie
+ * mit liegengebliebener Abbestellung (Status 3) gilt weiter als bestellt.
+ */
+function orderedAs(day, line) {
+  const ordered = (day?.entries || []).filter((e) => e.isOrdered);
+  if (!line) return ordered.length === 0;
+  return ordered.length === 1 && ordered[0].menuLineId === line.menuLineId
+    && parseFloat(String(ordered[0].quantityOrdered ?? "").replace(",", ".")) === 1;
+}
+
 /** current = bestellte Linie oder null, target = gewünschte Linie oder null ("nichts"). */
 export function changeKind(c) {
   if (!c.current && c.target) return "ORDER";
@@ -872,7 +898,11 @@ export function changeKind(c) {
  * gesehen: discard = erst den ganzen Warenkorb verwerfen, sonst gehen genau
  * othersInCart Einträge mit ab.
  *
- * @returns {Promise<{kind:"done"|"dryrun"|"aborted"|"unconfirmed", reason?:string, missing?:string[], changes?:object[]}>}
+ * Die Auswahl beruht auf einem zwischengespeicherten Stand: vor dem ersten Eingriff
+ * in den Warenkorb lädt reload die Tage frisch, weicht einer ab (anderswo bestellt
+ * oder geändert), wird nichts angefasst (stale).
+ *
+ * @returns {Promise<{kind:"done"|"dryrun"|"aborted"|"unconfirmed", reason?:string, missing?:string[], changes?:object[], stale?:boolean}>}
  */
 export async function placeOrders(client, requested, { dryRun = false, previouslyInCart = [], othersInCart = 0, discard = false, reload }) {
   const changes = requested.filter((c) => changeKind(c) !== "NONE");
@@ -882,6 +912,21 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
   }
   const locked = changes.find((c) => [c.current, c.target].some((e) => e && !e.selectable));
   if (locked) return { kind: "aborted", reason: `${De.short(locked.date)}: nicht mehr änderbar.` };
+
+  let before;
+  try {
+    before = await reload(changes.map((c) => c.date));
+  } catch (e) {
+    return { kind: "aborted", reason: `Aktueller Bestellstand nicht ladbar (${e.message}). Nichts abgeschickt.` };
+  }
+  const dayOf = (days, date) => days.find((d) => d.date === date);
+  const moved = changes.filter((c) => !orderedAs(dayOf(before, c.date), c.current)).map((c) => c.date);
+  if (moved.length) {
+    return { kind: "aborted", stale: true, reason: `${moved.map(De.short).join(", ")}: inzwischen anderswo geändert. `
+      + "Nichts abgeschickt. Bitte die Bestellansicht neu laden und noch einmal auswählen." };
+  }
+  const gone = changes.find((c) => c.target && !dayOf(before, c.date)?.entries.some((e) => e.menuLineId === c.target.menuLineId && e.selectable));
+  if (gone) return { kind: "aborted", stale: true, reason: `${De.short(gone.date)}: nicht mehr änderbar. Nichts abgeschickt.` };
 
   const touched = [];
   /** Warenkorb wie vorher; false, wenn ein Schritt davon scheiterte. */
@@ -953,12 +998,7 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
   } catch (e) {
     return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates };
   }
-  const asRequested = (c) => {
-    // Eine Linie mit liegengebliebener Abbestellung (Status 3) gilt weiter als bestellt.
-    const ordered = (after.find((d) => d.date === c.date)?.entries || []).filter((e) => e.isOrdered);
-    return c.target ? ordered.length === 1 && ordered[0].menuLineId === c.target.menuLineId : ordered.length === 0;
-  };
-  const missing = changes.filter((c) => !asRequested(c)).map((c) => c.date);
+  const missing = changes.filter((c) => !orderedAs(dayOf(after, c.date), c.target)).map((c) => c.date);
   return missing.length
     ? { kind: "unconfirmed", reason: why || "Nicht alle Tage stehen so im Wochenplan wie gewünscht.", missing }
     : { kind: "done", changes };

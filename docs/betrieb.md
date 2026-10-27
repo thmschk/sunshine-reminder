@@ -58,6 +58,9 @@ server/deploy.sh            # Stand von main auf GitHub
 server/deploy.sh feature/x  # anderer gepushter Branch oder ein voller Commit-Hash
 ```
 
+Deployt wird nur, wenn der lokal ausgecheckte HEAD genau dem Stand auf GitHub entspricht (also erst
+pushen bzw. pullen); `server/deploy.sh --abweichend <ref>` übergeht das ausdrücklich.
+
 Lädt den Commit auf dem Server von GitHub und prüft zuerst die Caddy-Site mit `caddy validate`
 (besteht sie nicht, bleibt alles beim alten Stand). Dann baut es den Push-Container; erst wenn das klappt,
 kopiert es Web-Dateien, Caddy-Site, `backup-data.sh` und `/etc/cron.d/sunshine`, startet den Container
@@ -113,6 +116,24 @@ ssh privat 'cd /srv/sunshine && docker compose stop push \
 
 Danach muss `/api/vapid` denselben Schlüssel zeigen wie vorher; Abos und Uhrzeiten bleiben dann gültig.
 
+## VAPID-Schlüssel
+
+`data/vapid_private.pem` ist der Absenderschlüssel aller Push-Abos. **Nie neu erzeugen, nie löschen.**
+Fehlt die Datei beim Start, erzeugt der Dienst still einen neuen Schlüssel und warnt im Log, wenn schon Abos
+bestehen (`docker compose logs push | grep VAPID`). Die Push-Dienste lehnen dann alle alten Abos ab
+(`auth_rejected` in `/api/health`); nach 7 Tagen durchgehender Ablehnung löscht der Dienst sie.
+
+Vorgehen: `docker compose stop push`, Schlüssel aus dem jüngsten Backup zurückholen (siehe oben), starten,
+prüfen, dass `/api/vapid` den alten Schlüssel zeigt. Ohne Backup müssen alle Geräte die Erinnerung neu
+einschalten; die App gleicht dabei den Schlüssel ab und abonniert neu. `auth_rejected > 0` ohne
+Schlüsselwechsel deutet auf ein eigenes VAPID-/JWT-Problem hin (Uhrzeit, `VAPID_SUBJECT`).
+
+## Python-Abhängigkeiten
+
+`server/push/requirements.txt` ist mit Hashes gepinnt und wird aus `server/push/requirements.in` erzeugt
+(Befehl steht dort, mit `--upgrade` für neue Versionen); danach Tests und `server/deploy.sh`. Das
+wöchentliche Image-Update erneuert nur das Python-Basis-Image, nicht diese Pakete.
+
 ## Ferientermine
 
 `web/ferien.json` (Berliner Schulferien) erzeugt `python3 tools/ferien.py` aus der OpenHolidaysAPI, bis
@@ -123,5 +144,5 @@ das; dann das Skript laufen lassen, Diff ansehen, committen und `server/deploy.s
 
 | | |
 |---|---|
-| Server | `ssh privat 'cd /srv/sunshine && docker compose run --rm -T -v /srv/sunshine/push:/app push python -m unittest test_app'` oder lokal in einem venv mit `server/push/requirements.txt`: `cd server/push && python -m unittest test_app` |
+| Server | `ssh privat 'cd /srv/sunshine && docker compose run --rm -T -v /srv/sunshine/push:/app push python -m unittest test_app'` oder lokal in einem venv mit Python 3.13 und `pip install --require-hashes -r server/push/requirements.txt`: `cd server/push && python -m unittest test_app` |
 | Web | `python3 -m http.server` im Repo, dann `web/tests/test.html`, `web/tests/guard.html`, `web/tests/xss.html`, `web/tests/kinder.html`, `web/tests/ferien.html`, `web/tests/anmelden.html?mode=granted|denied|off`, `web/tests/ui.html` und `web/tests/crypto.html` im Browser |

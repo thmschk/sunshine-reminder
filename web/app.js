@@ -206,14 +206,18 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false } 
       </form>
     </div>` : `
     ${wantInstall ? installTip() : ""}
-    <div class="card hero open intro">
+    <div class="card intro">
       <h2>Nie wieder Schulessen vergessen</h2>
       <p>Zeigt, für welche Tage im Bestellsystem IBS5 noch nichts bestellt ist, und bestellt, bestellt um
-        oder bestellt ab. Wer mag, wird werktags zur gewählten Zeit erinnert.</p>
-      <p class="small">Deine Zugangsdaten bleiben verschlüsselt auf diesem Gerät und gehen nur an das
-        Bestellsystem. Für die Erinnerung weckt unser Server das Gerät nur. Er sieht weder deine IBS5-Zugangsdaten noch
-        deine Bestellungen. Nimmst du den Stundenplan aus Sdui dazu, laufen dessen Anmeldung und Abruf durch ihn.</p>
-      <p class="small muted">Kein Angebot von Sunshine Catering oder dem Hersteller von IBS5.</p>
+        oder bestellt ab. Wer mag, wird werktags zur gewählten Zeit erinnert, auf Wunsch auch morgens mit dem
+        Essen des Tages.</p>
+      <h3>Deine Daten</h3>
+      <p class="small">Zugangsdaten und Bestellungen bleiben verschlüsselt auf diesem Gerät und gehen nur an das
+        Bestellsystem. Unser Server weckt das Gerät nur zur Erinnerung und sieht weder Zugangsdaten noch
+        Bestellungen. Nimmst du freiwillig den Stundenplan aus Sdui dazu, laufen dessen Anmeldung und Abruf durch
+        ihn, weil Sdui direkte Zugriffe sperrt. Gespeichert wird dabei nichts.</p>
+      <p class="small muted">Kein Angebot von Sunshine Catering, IBS5 oder Sdui ·
+        <a href="datenschutz.html">Datenschutz</a></p>
     </div>
     ${wantInstall ? "" : installTip()}
     <div class="card">
@@ -318,7 +322,8 @@ function installTip() {
   const steps = (name, list) => `
     <div class="tip-device">${name}</div>
     <ol class="tip-steps">${list.map((x) => `<li><span>${x}</span></li>`).join("")}</ol>`;
-  const ios = steps("iPhone", ["In Safari unten auf <b>Teilen</b> tippen", "<b>Zum Home-Bildschirm</b> wählen", "Von dort öffnen"])
+  const ios = steps("iPhone", ["In Safari auf <b>Teilen</b> tippen (ggf. hinter „⋯“)", "<b>Zum Home-Bildschirm</b> wählen",
+    "Über das neue Symbol öffnen und Benachrichtigungen erlauben (ab iOS 16.4)"])
     + `<p class="small muted">Fehlt „Zum Home-Bildschirm“, ist die Seite in einer anderen App geöffnet (etwa aus WhatsApp): erst „In Safari öffnen“.</p>`;
   const and = steps("Android", ["In Chrome oben rechts auf <b>⋮</b> tippen", "<b>App installieren</b> wählen, nicht „Verknüpfung“", "Von dort öffnen"]);
   const body = inAppBrowser
@@ -414,7 +419,7 @@ async function showHome(fresh = false) {
   // nur so steht fest, ob dort noch abbestellt werden muss.
   const events = eventsFor(await loadEvents(today).catch(() => []), creds.customerNo);
   const dates = [...new Set([...targetDates(today, cfg), ...dueEvents(events, today).filter((e) => e.noMeal).map((e) => e.date)])].sort();
-  // Heute nur zum Anzeigen: kommt aus der ohnehin geladenen Bestellhistorie, ohne eigene Anfrage.
+  // Heute nur zum Anzeigen: kommt aus der ohnehin geladenen Bestellhistorie, ohne Treffer dort aus einer Tagesansicht.
   const peek = cfg.weekdays.includes(weekdayNo(today)) ? [today] : [];
   const client = clientFor(creds.customerNo);
   // Ob IBS5 diesem Gerät nur Tagesansichten liefert, ist gemerkt: spart die Probe-Anfrage.
@@ -529,7 +534,7 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   wireInstallTip();
   if (!staleAt) pushNotice = "";
   for (const li of $app.querySelectorAll(".days:not(.today) li")) {
-    li.onclick = () => {
+    li.querySelector(".day-btn").onclick = () => {
       const d = days.find((x) => x.date === li.dataset.date);
       if (d.isActionable || d.state === OrderState.ORDERED) showOrder(d.date);
       else li.classList.toggle("expanded");
@@ -666,7 +671,7 @@ function stripMaker(lessons, selected) {
       const label = main.short + (new Set(ls.map((l) => l.short)).size > 1 ? "+" : "") + (ls.some((l) => l.note) ? "*" : "");
       cells.push(`<span class="cell${hl ? " hl" : ""}" title="${esc(ls.map((l) => l.subject).join(" / "))}">${esc(label)}</span>`);
     }
-    return `<div class="strip">${cells.join("")}</div>`;
+    return `<span class="strip">${cells.join("")}</span>`;
   };
 }
 
@@ -758,6 +763,9 @@ async function showFerien(creds, h, onDone, { fromSettings = false } = {}) {
   dlg.showModal();
 }
 
+// Statussymbol der Tageszeile als Text für Screenreader.
+const SYM_TEXT = { ok: "Status: in Ordnung", open: "Status: offen", bad: "Status: Achtung" };
+
 /**
  * Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts;
  * eigene Termine und Ferien im Status. skip: Ferientag eines Kindes ohne Ferienessen.
@@ -783,21 +791,22 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
   } else if (holiday) sub = `${holiday} · ${sub}`;
   // Eigene Termine vorn in der Statuszeile, farblich abgehoben.
   const subHtml = [titles && `<span class="ev">${esc(titles)}</span>`, sub && esc(sub)].filter(Boolean).join(" · ");
-  return `
-    <li data-date="${d.date}">
-      <div class="date"><div class="wd">${isToday ? "heute" : esc(De.chip(d.date).slice(0, 2))}</div><div class="dom">${Number(d.date.slice(8, 10))}</div></div>
-      <div class="text"><div class="dish">${esc(dish)}</div>${
+  // Nur spans: außer heute steckt alles in einem Knopf. Das Symbol liest der Screenreader als Text.
+  const inner = `
+      <span class="date"><span class="wd">${isToday ? "heute" : esc(De.chip(d.date).slice(0, 2))}</span><span class="dom">${Number(d.date.slice(8, 10))}</span></span>
+      <span class="text"><span class="dish">${esc(dish)}</span>${
         // Mit Zeitleiste sagt der Haken rechts schon „bestellt“, wie in der App.
-        timeline && d.state === OrderState.ORDERED && !titles ? "" : `<div class="sub ${subCls}">${subHtml}</div>`}${timeline}</div>
-      <div class="sym ${symCls}">${sym}</div>
-    </li>`;
+        timeline && d.state === OrderState.ORDERED && !titles ? "" : `<span class="sub ${subCls}">${subHtml}</span>`}${timeline}</span>
+      <span class="sym ${symCls}" aria-hidden="true">${sym}</span><span class="sr-only">${SYM_TEXT[symCls]}</span>`;
+  return isToday ? `<li data-date="${d.date}">${inner}</li>`
+    : `<li data-date="${d.date}"><button type="button" class="day-btn">${inner}</button></li>`;
 }
 
 // ---------------------------------------------------------------- Bestellen
 
-// Anfragen einer Bestellung, CORS-Vorabfragen mitgezählt: je Tag Leeren, Hinzufügen
-// und Nachladen, dazu Abschicken und vielleicht ein Login.
-const orderCost = (changes) => 6 * changes.length + 3;
+// Anfragen einer Bestellung, CORS-Vorabfragen mitgezählt: je Tag Vorab-Laden, Leeren,
+// Hinzufügen und Nachladen, dazu Abschicken und vielleicht ein Login.
+const orderCost = (changes) => 8 * changes.length + 3;
 
 /**
  * Bestellen, umbestellen, abbestellen — wie OrderScreen der App. Jeder noch
@@ -1110,7 +1119,7 @@ async function showOrder(focusDate = null) {
     }
     // Die geänderten Tage hat placeOrders frisch geladen, der Rest kommt aus dem Zwischenspeicher.
     submitting = false;
-    if (outcome.kind === "done" || outcome.kind === "unconfirmed") await load();
+    if (outcome.kind === "done" || outcome.kind === "unconfirmed" || outcome.stale) await load();
     else refresh();
   });
 
@@ -1204,7 +1213,7 @@ function orderDialog(lines, { total, others }) {
     dlg.className = "dialog";
     dlg.innerHTML = `
       <h3>Verbindlich abschicken?</h3>
-      ${lines.map((l) => `<p>${esc(l)}</p>`).join("")}
+      ${lines.map((l) => `<p class="clamp">${esc(l)}</p>`).join("")}
       ${extra}
       <div class="dialog-actions${buttons.length > 1 ? " stacked" : ""}">
         <button type="button" class="text" data-v="">Abbrechen</button>
@@ -1358,7 +1367,7 @@ function showSettings(message = "") {
       ${srow("logout", "Abmelden und alles löschen", { tag: "button", id: "b-logout", cls: "danger-row" })}
     </div>
 
-    <p class="foot-note">Testversion · <a href="https://github.com/thmschk/sunshine-reminder#architektur" target="_blank" rel="noopener">So funktioniert's</a>
+    <p class="foot-note">Testversion · <a href="https://github.com/thmschk/sunshine-reminder#architektur" target="_blank" rel="noopener">So funktioniert's</a> · <a href="datenschutz.html">Datenschutz</a>
       · <button id="b-about" class="linklike">Über die App</button></p>`;
   document.getElementById("b-back").onclick = () => showHome();
   document.getElementById("b-about").onclick = showAbout;
@@ -1457,8 +1466,8 @@ async function wireFerienBox() {
 // ---------------------------------------------------------------- Sdui
 
 const SDUI_NOTE = `Sdui lässt Webseiten nicht direkt zu, deshalb laufen Anmeldung und Abruf über unseren Server. Er reicht
-  sie nur durch und speichert nichts. Dein Sdui-Passwort geht dabei einmal hindurch. Auf dem Gerät bleibt nur ein
-  Zugangsschlüssel, der ein Jahr gilt.`;
+  sie nur durch und speichert nichts. Dein Sdui-Passwort geht dabei einmal hindurch. Auf dem Gerät bleiben ein
+  verschlüsselter Zugangsschlüssel, der ein Jahr gilt, und der Stundenplan der nächsten zwei Wochen.`;
 
 async function wireSduiBox(message = "") {
   const box = document.getElementById("sdui-box");
@@ -1580,6 +1589,12 @@ function weekdaysText(days) {
 
 const toggle = (id, on, label) =>
   `<button type="button" id="${id}" class="switch${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="${label}"></button>`;
+// Die ganze Zeile eines Schalters schaltet; andere Bedienelemente darin bleiben für sich.
+document.addEventListener("click", (ev) => {
+  const row = ev.target.closest?.(".srow, .ferien-week");
+  if (!row || ev.target.closest("button, a, input, select, summary, label")) return;
+  row.querySelector(".switch:not(:disabled)")?.click();
+});
 
 function pushBoxHtml(message = "") {
   const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
@@ -1687,6 +1702,13 @@ async function api(method, path, body, secret, extra = {}) {
   return r.json().catch(() => ({}));
 }
 
+/** Gleiche Bytes? a: ArrayBuffer oder null (dann ungleich). */
+function sameBytes(a, b) {
+  if (!a) return false;
+  const x = new Uint8Array(a);
+  return x.length === b.length && x.every((v, i) => v === b[i]);
+}
+
 async function pushEnable(time) {
   if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
   const perm = await Notification.requestPermission();
@@ -1701,8 +1723,14 @@ async function pushEnable(time) {
   if (!(await swReady)) throw new Error("Dieser Browser kann den Hintergrunddienst für Erinnerungen nicht starten.");
   const reg = await navigator.serviceWorker.ready;
   const { publicKey } = await api("GET", "/vapid");
-  const sub = (await reg.pushManager.getSubscription())
-    ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+  const key = b64ToBytes(publicKey);
+  let sub = await reg.pushManager.getSubscription();
+  // Ein Abo zu einem anderen Server-Schlüssel (nach Schlüsselwechsel) kommt nie an: neu abonnieren.
+  if (sub && !sameBytes(sub.options?.applicationServerKey, key)) {
+    await sub.unsubscribe().catch(() => {});
+    sub = null;
+  }
+  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
   const { id, secret } = await api("POST", "/subscriptions", {
     subscription: sub.toJSON(), time, weekdays: store.pushWeekdays, tz: "Europe/Berlin",
   });

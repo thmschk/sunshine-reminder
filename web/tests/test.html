@@ -7,6 +7,7 @@
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
   parseOrderHistory, parseCart, cartOthers, submitCartAsSeen, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
+  ParserError, MenuEntry,
 } from "../ibs.js";
 
 const results = [];
@@ -51,6 +52,23 @@ await test("unbekannter Status geht nie durch", () => {
 });
 await test("leere Ferienwoche ist kein Fehler", () => {
   eq(parseWeekplan('<div id="weekplan"><div>KW 30</div></div>').days.size, 0);
+});
+// Geändertes Markup: Bestellknöpfe da, aber nichts lesbar → Fehler statt „kein Angebot“.
+const parserError = (html, what) => {
+  try { parseWeekplan(html); } catch (e) { if (e instanceof ParserError) return; throw new Error(`${what}: ${e.message}`); }
+  throw new Error(`${what}: kein ParserError`);
+};
+await test("Umbenanntes Status-Attribut wirft statt „kein Angebot“", () => {
+  parserError(kw35.replaceAll("data-order-status", "data-orderstatus"), "Wochenplan KW 35");
+  parserError(kw42.replaceAll("data-order-status", "data-state"), "Wochenplan KW 42");
+});
+await test("Datum nicht lesbar (ID und data-date geändert) wirft", () => {
+  parserError(kw35.replace(/menu_quantity_(\d{4})-(\d{2})-(\d{2})/g, "mq$3$2$1").replaceAll("data-date=", "data-day="), "Wochenplan");
+});
+await test("Ferienwoche ohne Knöpfe und echte Pläne bleiben ohne Fehler", () => {
+  eq(parseWeekplan('<div id="weekplan"><h2>KW 43</h2><p>Für diese Woche ist kein Speiseplan hinterlegt.</p></div>').days.size, 0, "Ferien");
+  eq(parseWeekplan('<li class="plan" id="dayplan"><p>Kein Angebot</p></li>').days.size, 0, "Tagesansicht leer");
+  eq([parseWeekplan(kw35).days.size, parseWeekplan(kw42).days.size], [5, 4], "Fixtures");
 });
 await test("Fehlerseite wirft", () => {
   throws(() => parseWeekplan("<html><body><p>Sitzung abgelaufen</p></body></html>"), "Fehlerseite");
@@ -186,24 +204,71 @@ await test("collect mit history: Fortschritt zählt alle Tage und endet voll", a
   await collect(fake, ["2026-10-05", "2026-10-06", "2026-10-07"], { history: true, onProgress: (d, t) => seen.push(`${d}/${t}`) });
   eq(seen[0], "2/3", "nach der Historie"); eq(seen.at(-1), "3/3", "am Ende");
 });
-await test("collect mit peek: heute nur aus der Historie, nie als Tagesansicht", async () => {
+await test("collect mit peek: heute aus der Historie, ohne Treffer aus der Tagesansicht", async () => {
   const asked = [];
   const fake = { dayView: true, async orderHistory() { return histMobile; }, async dayplan(d) { asked.push(d); return '<li class="plan" id="dayplan"></li>'; } };
   const days = await collect(fake, ["2026-10-07"], { history: true, peek: ["2026-10-05", "2026-10-08"] });
-  eq(asked, ["2026-10-07"], "nur der echte Tag");
+  eq(asked, ["2026-10-07", "2026-10-08"], "Tagesansicht nur ohne Historientreffer");
   eq(days.map((d) => [d.date, d.state]), [["2026-10-05", OrderState.ORDERED], ["2026-10-07", OrderState.NO_OFFER],
-    ["2026-10-08", OrderState.DEADLINE_PASSED]], "Zustände");
+    ["2026-10-08", OrderState.NO_OFFER]], "Zustände");
   eq(days[0].orderedItems, ["Spiralnudeln"], "Gericht");
   asked.length = 0;
   eq((await collect(fake, [], { history: true, peek: ["2026-10-06"] })).map((d) => d.state), [OrderState.ORDERED], "nur heute");
   eq(asked, [], "ohne Tagesansicht");
 });
+{
+  // Heute (12.10.) steht nicht in der Historie: Feiertag, vor über 90 Tagen bestellt oder vergessen.
+  const today = (dayplan, history = histMobile) => {
+    const asked = [];
+    const fake = { dayView: true, async orderHistory() { return history; }, async dayplan(d) { asked.push(d); return dayplan; } };
+    return collect(fake, [], { history: true, peek: ["2026-10-12"] }).then((days) => ({ days, asked }));
+  };
+  const closed = dayOpen.replaceAll('data-readonly="false"', 'data-readonly="true"').replaceAll('data-order-status="2"', 'data-order-status="0"').replaceAll('data-quantity-ordered="1"', 'data-quantity-ordered=""');
+  const { composeToday } = await import("../sw.js");
+  const morning = (day) => composeToday([{ customerNo: "1", firstName: "Mia", day, noMeal: "", holiday: "", skip: false }]);
+  await test("Heute ohne Historientreffer: Feiertag/kein Angebot → kein Angebot, still", async () => {
+    const { days, asked } = await today('<li class="plan" id="dayplan"></li>');
+    eq([asked, days.map((d) => d.state)], [["2026-10-12"], [OrderState.NO_OFFER]], "eine Tagesansicht");
+    const m = morning(days[0]);
+    eq([m.title, m.body, m.quiet], ["Heute kein Schulessen", "kein Angebot", true]);
+  });
+  await test("Heute ohne Historientreffer, aber bestellt (vor über 90 Tagen) → Gericht", async () => {
+    const { days } = await today(dayOpen);
+    eq([days[0].state, days[0].orderedItems], [OrderState.ORDERED, ["Dinkel-Makkaroni mit Gemüsesoße"]]);
+    eq(morning(days[0]).title, "Heute gibt's für Mia");
+  });
+  await test("Heute ohne Historientreffer und nicht bestellt → Brot einpacken", async () => {
+    const { days } = await today(closed);
+    eq(days[0].state, OrderState.DEADLINE_PASSED);
+    eq(morning(days[0]).title, "Heute kein Essen bestellt für Mia");
+  });
+  await test("Heute bei unlesbarer Historie aus der Tagesansicht", async () => {
+    const { days, asked } = await today(dayOpen, "<html>Fehler</html>");
+    eq([asked, days.map((d) => d.state)], [["2026-10-12"], [OrderState.ORDERED]]);
+  });
+  await test("Morgens: unklarer Status → nicht „Brot einpacken“, laut", () => {
+    const m = morning(new DayStatus("2026-10-12", OrderState.UNKNOWN));
+    eq([m.title, m.quiet], ["Essen heute unklar für Mia", false]);
+  });
+}
 await test("collect mit peek im Wochenplan: Tag kommt aus derselben Woche", async () => {
   const asked = [];
   const fake = { async weekplan(y, w) { asked.push(w); return kw42; } };
   const days = await collect(fake, ["2026-10-13"], { peek: ["2026-10-12"] });
   eq(asked, [42], "eine Woche");
   eq(days.map((d) => d.date), ["2026-10-12", "2026-10-13"]);
+});
+await test("collect im Wochenplan: geändertes Markup ist ein Fehler, kein „kein Angebot“", async () => {
+  const fake = { async weekplan() { return kw42.replaceAll("data-order-status", "data-status"); } };
+  let err = null;
+  try { await collect(fake, ["2026-10-12", "2026-10-13"]); } catch (e) { err = e; }
+  eq(err instanceof ParserError, true, `Fehler: ${err?.message}`);
+});
+await test("collect je Tag: geändertes Markup ist ein Fehler", async () => {
+  const fake = { dayView: true, async dayplan() { return dayOpen.replaceAll("data-order-status", "data-status"); } };
+  let err = null;
+  try { await collect(fake, ["2026-10-12"], { fresh: true }); } catch (e) { err = e; }
+  eq(err instanceof ParserError, true, `Fehler: ${err?.message}`);
 });
 
 // Zwischenspeicher über client.dayStore, mit Tagen in der Zukunft (Vergangenes wird verworfen).
@@ -253,8 +318,30 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
   });
   await test("Zwischenspeicher: Widerspruch zur Historie verwirft den Tag", async () => {
     const asked = [];
-    const store = memStore([row(d1, OrderState.ORDERED, 1)]); // laut Historie nicht (mehr) bestellt
-    const fake = { customerNo: "1000", dayView: true, dayStore: store, async orderHistory() { return '<table id="order-history-table"></table>'; },
+    const store = memStore([row(d1, OrderState.DEADLINE_PASSED, 1)]); // laut Historie anderswo bestellt
+    const de = `${d1.slice(8, 10)}.${d1.slice(5, 7)}.${d1.slice(0, 4)}`;
+    const fake = { customerNo: "1000", dayView: true, dayStore: store,
+      async orderHistory() { return `<table id="order-history-table"><tr><td>01.10.2026</td><td>${de}</td><td>1</td><td>M1 - Nudeln</td></tr></table>`; },
+      async dayplan(d) { asked.push(d); return emptyDay; } };
+    const days = await collect(fake, [d1], { history: true });
+    eq([asked, days.map((d) => d.state)], [[], [OrderState.ORDERED]], "aus der Historie");
+    eq(store.rows.some((r) => r.date === d1), false, "aus dem Speicher entfernt");
+  });
+  const histRows = (...rows) => `<table id="order-history-table">${rows.map(([d, q, t]) =>
+    `<tr><td>01.10.2026</td><td>${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}</td><td>${q}</td><td>${t}</td></tr>`).join("")}</table>`;
+  await test("Zwischenspeicher: bestellt ohne Zeile in der Historie (vor dem Zeitfenster) bleibt", async () => {
+    const asked = [];
+    const store = memStore([row(d1, OrderState.ORDERED, 1)]);
+    const fake = { customerNo: "1000", dayView: true, dayStore: store, async orderHistory() { return histRows(); },
+      async dayplan(d) { asked.push(d); return emptyDay; } };
+    const days = await collect(fake, [d1], { history: true });
+    eq([asked, days.map((d) => d.state)], [[], [OrderState.ORDERED]], "aus dem Speicher");
+  });
+  await test("Zwischenspeicher: bestellt, in der Historie abbestellt → neu geladen", async () => {
+    const asked = [];
+    const store = memStore([row(d1, OrderState.ORDERED, 1)]);
+    const fake = { customerNo: "1000", dayView: true, dayStore: store,
+      async orderHistory() { return histRows([d1, "-1", "M1 - Nudeln"]); },
       async dayplan(d) { asked.push(d); return emptyDay; } };
     await collect(fake, [d1], { history: true });
     eq(asked, [d1], "neu geladen");
@@ -741,7 +828,20 @@ class FakeClient {
 }
 const p42 = parseWeekplan(kw42);
 const line = (date, id) => p42.days.get(date).entries.find((e) => e.menuLineId === id);
-const orderedAfter = (date, id) => async () => [{ date, entries: [{ isOrdered: true, menuLineId: id }] }];
+/** Tag aus KW 42 mit genau den Linien aus ordered (id → Menge) bestellt; closed: Bestellschluss vorbei. */
+const freshDay = (date, ordered = {}, closed = false) => new DayStatus(date, Object.keys(ordered).length ? OrderState.ORDERED : OrderState.NOT_ORDERED, p42.days.get(date).entries.map((e) => new MenuEntry({
+  ...e, status: ordered[e.menuLineId] ? "2" : "0", quantityOrdered: ordered[e.menuLineId] ? String(ordered[e.menuLineId]) : "",
+  quantityInCart: "", orderable: !closed && e.orderable,
+})));
+/** reload, der beim ersten Aufruf (vor dem Warenkorb) before und danach after liefert; je {Datum: {Linie: Menge}}. */
+const states = (before, after) => {
+  let calls = 0;
+  return async (ds) => {
+    const s = calls++ === 0 ? before : after;
+    return ds.map((d) => freshDay(d, s[d]));
+  };
+};
+const orderedAfter = (date, id, was = null) => states(was ? { [date]: { [was]: 1 } } : {}, { [date]: { [id]: 1 } });
 
 await test("Bestellen: abschicken und nachprüfen", async () => {
   const c = new FakeClient();
@@ -791,7 +891,7 @@ await test("Bestellen: Eintrag nicht angekommen, Fremdes dazugekommen → nichts
     c.extraInCart++;
     return realAdd.call(c, e);
   };
-  const r = await placeOrders(c, changes, { reload: async () => [] });
+  const r = await placeOrders(c, changes, { reload: states({}, {}) });
   eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
 });
 await test("Bestellen: Bekanntes vom selben Tag im Warenkorb wird ersetzt und bestellt", async () => {
@@ -870,7 +970,7 @@ await test("Bestellen: Probelauf schickt nichts ab", async () => {
 await test("Umbestellen erwartet zwei Einträge", async () => {
   const c = new FakeClient();
   c.switchFrom = { "2026-10-12": true };
-  const r = await placeOrders(c, [{ date: "2026-10-12", current: line("2026-10-12", "828"), target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827") });
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: line("2026-10-12", "828"), target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "827", "828") });
   eq(r.kind, "done");
 });
 await test("Kaltverpflegung lässt sich nicht bestellen", async () => {
@@ -883,6 +983,58 @@ await test("Nachprüfung findet falsche Linie", async () => {
   const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: orderedAfter("2026-10-12", "828") });
   eq(r.kind, "unconfirmed");
 });
+await test("Nachprüfung: richtige Linie, aber doppelt bestellt → unbestätigt", async () => {
+  const c = new FakeClient();
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }],
+    { reload: states({}, { "2026-10-12": { 827: 2 } }) });
+  eq([r.kind, r.missing], ["unconfirmed", ["2026-10-12"]]);
+});
+
+// Die Bestellansicht arbeitet auf zwischengespeichertem Stand: vorher frisch laden, bei Abweichung nichts anfassen.
+{
+  const order12 = [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }];
+  await test("Bestellen: inzwischen anderswo bestellt → nichts angefasst, Hinweis neu laden", async () => {
+    const c = new FakeClient();
+    const r = await placeOrders(c, order12, { reload: states({ "2026-10-12": { 828: 1 } }, {}) });
+    eq([r.kind, r.stale, c.calls], ["aborted", true, []], "kein Warenkorb-Aufruf");
+    eq(/anderswo geändert/.test(r.reason) && /neu laden/.test(r.reason), true, `Grund: ${r.reason}`);
+  });
+  await test("Bestellen: dasselbe Gericht schon bestellt (Doppelbestellung) → nichts angefasst", async () => {
+    const c = new FakeClient();
+    const r = await placeOrders(c, order12, { reload: states({ "2026-10-12": { 827: 1 } }, {}) });
+    eq([r.kind, c.calls], ["aborted", []]);
+  });
+  await test("Umbestellen: anderswo schon umbestellt oder doppelt → nichts angefasst", async () => {
+    const sw = [{ date: "2026-10-12", current: line("2026-10-12", "828"), target: line("2026-10-12", "827") }];
+    for (const before of [{ 829: 1 }, { 828: 2 }, {}]) {
+      const c = new FakeClient();
+      const r = await placeOrders(c, sw, { reload: states({ "2026-10-12": before }, {}) });
+      eq([r.kind, c.calls], ["aborted", []], JSON.stringify(before));
+    }
+  });
+  await test("Bestellen: Gericht inzwischen gesperrt → nichts angefasst", async () => {
+    const c = new FakeClient();
+    let calls = 0;
+    const reload = async (ds) => (calls++ ? [] : ds.map((d) => freshDay(d, {}, true)));
+    const r = await placeOrders(c, order12, { reload });
+    eq([r.kind, c.calls], ["aborted", []]);
+    eq(/nicht mehr änderbar/.test(r.reason), true, `Grund: ${r.reason}`);
+  });
+  await test("Bestellen: frischer Stand nicht ladbar → nichts angefasst", async () => {
+    const c = new FakeClient();
+    const r = await placeOrders(c, order12, { reload: async () => { throw new Error("Netz weg"); } });
+    eq([r.kind, c.calls], ["aborted", []]);
+    eq(/Netz weg/.test(r.reason) && /Nichts abgeschickt/.test(r.reason), true, `Grund: ${r.reason}`);
+  });
+  await test("Bestellen: frisch geladen vor dem ersten Warenkorb-Eingriff, Tage wie gewählt", async () => {
+    const c = new FakeClient();
+    const seenAt = [];
+    const inner = orderedAfter("2026-10-12", "827");
+    const r = await placeOrders(c, order12, { reload: async (ds) => { seenAt.push([c.calls.length, ds]); return inner(ds); } });
+    eq(r.kind, "done", r.reason);
+    eq(seenAt[0], [0, ["2026-10-12"]], "vor clear/add");
+  });
+}
 
 await test("Bestellen: Antwort aufs Abschicken fehlt, Bestellung aber da → erledigt, kein Zurückrollen", async () => {
   const c = new FakeClient();
@@ -894,7 +1046,7 @@ await test("Bestellen: Antwort aufs Abschicken fehlt, Bestellung aber da → erl
 await test("Bestellen: Antwort aufs Abschicken fehlt, Bestellung nicht da → unbestätigt statt „nichts abgeschickt“", async () => {
   const c = new FakeClient();
   c.submitCart = async () => { throw new Error("Netz weg"); };
-  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: async () => [] });
+  const r = await placeOrders(c, [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }], { reload: states({}, {}) });
   eq(r.kind, "unconfirmed");
   eq(r.reason.includes("Antwort auf das Abschicken fehlt"), true, `Grund: ${r.reason}`);
   eq(r.missing, ["2026-10-12"]);

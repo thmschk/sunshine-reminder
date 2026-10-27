@@ -1,22 +1,61 @@
-/* Farben der früheren Android-App (die kannte nur hell). */
+/* Farben der früheren Android-App (hell), dazu ein dunkler Satz. Gelb (--primary) trägt nie
+   allein eine Grenze oder einen Zustand auf hellem Grund (1,4:1 zu Weiß), dafür --secondary. */
 :root {
   --primary: #F8D800;
   --on-primary: #2A2100;
   --primary-container: #FFF3B0;
   --on-primary-container: #241C00;
   --secondary: #A01850;
+  --on-secondary: #FFFFFF;
   --bg: #FFFCF0;
+  --surface: #FFFFFF;
   --text: #1E1B13;
   --surface-variant: #EAE3C8;
   --on-surface-variant: #4A4632;
+  --outline: #7B7761;
   --error: #B3261E;
   --error-container: #F9DEDC;
   --on-error-container: #410E0B;
-  --ok: #2E7D32;
+  --ok: #2A6B2E;
   --ok-container: #DDF0DC;
   --open-text: #7A5D00;
-  --event-text: #A67C00;
-  color-scheme: light;
+  --event-text: #7A5D00;
+  --heart: #B4527A;
+  --strip-bg: #EEF1F5;
+  --strip-text: #4D5968;
+  --strip-hl: #14304F;
+  --strip-hl-text: #FFFFFF;
+  --scrim: rgba(0, 0, 0, .32);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #F8D800;
+    --on-primary: #2A2100;
+    --primary-container: #4A3F00;
+    --on-primary-container: #FFF0A8;
+    --secondary: #FFB0CB;
+    --on-secondary: #5E0A2E;
+    --bg: #15130C;
+    --surface: #221F17;
+    --text: #ECE6D6;
+    --surface-variant: #3B3729;
+    --on-surface-variant: #CEC7AF;
+    --outline: #979179;
+    --error: #FFB4AB;
+    --error-container: #8C1D18;
+    --on-error-container: #FFDAD6;
+    --ok: #8FD694;
+    --ok-container: #1F3A21;
+    --open-text: #EBC54D;
+    --event-text: #EBC54D;
+    --heart: #E79BB8;
+    --strip-bg: #2B323C;
+    --strip-text: #B9C3CF;
+    --strip-hl: #9EC2EC;
+    --strip-hl-text: #0D2236;
+    --scrim: rgba(0, 0, 0, .6);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -45,10 +84,15 @@ header {
   padding: 8px 8px 0 16px;
 }
 header h1 { font-size: 1.85rem; font-weight: 400; margin: 0; flex: 1; letter-spacing: -.01em; }
+/* 44 px Tippfläche, das Symbol selbst bleibt 22 px. */
 .icon {
   background: transparent;
   border: 0;
   padding: 6px;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-grid;
+  place-items: center;
   border-radius: 50%;
   color: var(--text);
   cursor: pointer;
@@ -76,6 +120,7 @@ button, .button {
   border: 0;
   border-radius: 6px;
   padding: 7px 14px;
+  min-height: 44px;
   background: var(--primary);
   color: var(--on-primary);
   cursor: pointer;
@@ -83,6 +128,9 @@ button, .button {
   display: inline-block;
   text-align: center;
 }
+:focus-visible { outline: 2px solid var(--secondary); outline-offset: 2px; }
+/* Nur für Screenreader. */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 button.block { display: block; width: 100%; }
 button.text, .button.text { background: transparent; color: var(--secondary); padding: 7px 10px; }
 button.danger { background: transparent; color: var(--error); padding: 7px 10px; }
@@ -91,7 +139,7 @@ button:disabled { opacity: .45; cursor: default; }
 .center { display: flex; justify-content: center; margin-top: 4px; }
 
 .card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   padding: 12px 14px;
   margin: 8px 0;
@@ -111,9 +159,14 @@ button:disabled { opacity: .45; cursor: default; }
 .hero.open { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px; }
 .hero.open h2 { font-size: 1rem; margin: 0; }
 .hero.open p { display: none; }
-.hero.open button.block { grid-column: 2; grid-row: 1 / span 2; margin: 0; }
-.intro p { margin: 8px 0; }
+/* Gelber Knopf auf hellgelber Karte hebt sich nicht ab (1,3:1): hier in --secondary. */
+.hero.open button.block { grid-column: 2; grid-row: 1 / span 2; margin: 0; background: var(--secondary); color: var(--on-secondary); }
+/* Einleitung beim ersten Start: keine Alarmkarte, alle Absätze sichtbar. */
+.intro { border-left: 4px solid var(--primary); }
+.intro h2 { font-size: 1.15rem; font-weight: 600; margin: 0 0 2px; line-height: 1.25; }
+.intro p { margin: 8px 0; font-size: .92rem; }
 .intro p.small { font-size: .85rem; }
+.intro p:last-child { margin-bottom: 0; }
 
 .section {
   font-size: .7rem;
@@ -126,18 +179,25 @@ button:disabled { opacity: .45; cursor: default; }
 .small { font-size: .88rem; }
 .error { color: var(--error); }
 
-.days { list-style: none; margin: 0; padding: 0; background: #fff; border-radius: 8px; overflow: hidden; }
-.days li {
+.days { list-style: none; margin: 0; padding: 0; background: var(--surface); border-radius: 8px; overflow: hidden; }
+/* Zeile heute: das li selbst; übrige Tage: ein Knopf über die ganze Zeile. */
+.days li { display: flex; align-items: center; }
+.days.today li, .day-btn {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 7px 12px;
-  cursor: pointer;
 }
+.day-btn {
+  flex: 1; min-width: 0; min-height: 52px; background: transparent; color: inherit; font-weight: normal;
+  border-radius: 0; text-align: left; cursor: pointer;
+}
+.day-btn:focus-visible { outline-offset: -3px; }
+.days .wd, .days .dom, .days .dish, .days .sub { display: block; }
 .days li + li { border-top: 1px solid var(--surface-variant); }
-.days li:active { background: var(--bg); }
+.day-btn:active { background: var(--bg); }
 /* Heute: hellgelb abgehoben, nicht antippbar (nichts mehr zu ändern). */
-.days.today li, .days.today li:active { background: var(--primary-container); cursor: default; }
+.days.today li { background: var(--primary-container); }
 .days.today .wd { color: var(--on-primary-container); font-weight: 600; }
 /* Eigene Termine in der Statuszeile: dunkles Gelb, reines Gelb wäre auf Weiß nicht lesbar. */
 .days .sub .ev { color: var(--event-text); font-weight: 600; }
@@ -150,6 +210,7 @@ button:disabled { opacity: .45; cursor: default; }
 .days .sub { font-size: .75rem; color: var(--on-surface-variant); }
 .days .sub.open { color: var(--open-text); }
 .days .sub.bad { color: var(--error); }
+/* Ring in Zeichenfarbe: die hellen Kreise allein heben sich vom Weiß nicht ab. */
 .sym {
   flex: none;
   width: 20px;
@@ -159,6 +220,7 @@ button:disabled { opacity: .45; cursor: default; }
   place-items: center;
   font-size: .72rem;
   font-weight: 700;
+  box-shadow: inset 0 0 0 1.5px currentColor;
 }
 .sym.ok { background: var(--ok-container); color: var(--ok); }
 .sym.open { background: var(--primary); color: var(--on-primary); }
@@ -179,15 +241,15 @@ label { display: block; margin: 12px 0 4px; font-weight: 500; }
 input[type=text], input[type=password], input[type=date], select {
   width: 100%;
   font: inherit;
-  padding: 8px 10px;
+  padding: 11px 10px;
   border-radius: 6px;
-  border: 1px solid #7B7761;
-  background: #fff;
+  border: 1px solid var(--outline);
+  background: var(--surface);
   color: var(--text);
 }
 input[type=range] { width: 100%; accent-color: var(--primary); }
 input[type=radio], input[type=checkbox] { accent-color: var(--secondary); }
-.check { display: flex; gap: 8px; align-items: center; font-weight: normal; }
+.check { display: flex; gap: 8px; align-items: center; min-height: 44px; margin: 4px 0 0; font-weight: normal; }
 
 /* Bestellansicht wie OrderScreen der App */
 .order-head { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 4px; }
@@ -203,7 +265,7 @@ dialog.result-dialog { width: min(360px, calc(100vw - 48px)); }
 .order-result.error { color: var(--error); }
 .dialog .order-result h3 { color: var(--error); }
 .dialog .order-result.done h3 { color: var(--ok); }
-.dialog .order-result p { display: block; overflow: visible; color: var(--text); }
+.dialog .order-result p { color: var(--text); }
 /* Einträge in Warenkorb-Karte, Rückfragen und Ergebnis: Tag fett, was geschieht, darunter das Gericht. */
 .entries { list-style: none; margin: 0; padding: 0; }
 .entries li { margin: 8px 0 0; font-size: .9rem; }
@@ -213,18 +275,20 @@ dialog.result-dialog { width: min(360px, calc(100vw - 48px)); }
 }
 fieldset.day-order { border: 0; margin: 8px 0; padding: 10px 12px; }
 .day-order legend { float: left; width: 100%; font-weight: 500; font-size: .9rem; padding: 0 0 2px; }
-.option { display: flex; align-items: center; gap: 10px; margin: 0; padding: 6px 2px; font-weight: normal; font-size: .88rem; cursor: pointer; }
+.option { display: flex; align-items: center; gap: 10px; margin: 0; padding: 6px 2px; min-height: 44px; font-weight: normal; font-size: .88rem; cursor: pointer; }
 .option span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.option input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
-.changed { outline: 2px solid var(--primary); outline-offset: -2px; }
+.option input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--secondary); }
+.changed { outline: 2px solid var(--secondary); outline-offset: -2px; }
 #f-order > button { margin-top: 4px; }
 dialog.dialog {
   border: 0; border-radius: 10px; padding: 18px; max-width: min(560px, calc(100vw - 48px));
-  background: #fff; color: var(--text);
+  background: var(--surface); color: var(--text);
 }
-dialog.dialog::backdrop { background: rgba(0, 0, 0, .32); }
+dialog.dialog::backdrop { background: var(--scrim); }
 .dialog h3 { font-size: 1.15rem; font-weight: 600; margin: 0 0 10px; }
-.dialog p { margin: 6px 0; font-size: .9rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.dialog p { margin: 6px 0; font-size: .9rem; }
+/* Nur Zeilen mit Gerichtsnamen kürzen, Hinweise stehen immer ganz da. */
+.dialog p.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .dialog-actions .text { color: var(--secondary); }
 .dialog-actions.stacked { flex-direction: column-reverse; align-items: flex-end; gap: 2px; }
@@ -235,11 +299,11 @@ dialog.dialog::backdrop { background: rgba(0, 0, 0, .32); }
 pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
 
 .back-head { margin: 8px 0 0 -8px; }
-.icon.heart { color: #CA7A98; padding: 6px; }
+.icon.heart { color: var(--heart); padding: 6px; }
 .icon.heart svg { width: 18px; height: 18px; }
 .about { text-align: center; }
-.about-heart { width: 22px; height: 22px; fill: #CA7A98; display: block; margin: 0 auto 12px; }
-.about p { display: block; -webkit-line-clamp: unset; text-align: left; line-height: 1.5; }
+.about-heart { width: 22px; height: 22px; fill: var(--heart); display: block; margin: 0 auto 12px; }
+.about p { text-align: left; line-height: 1.5; }
 .about a { color: var(--secondary); text-decoration: underline; }
 .about .dialog-actions { justify-content: flex-end; }
 
@@ -258,20 +322,20 @@ pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
 /* Zeitleiste wie TimetableStrip der App */
 .strip { display: flex; gap: 2px; margin-top: 4px; }
 .strip .cell {
-  flex: 1 1 0; min-width: 0; height: 18px; border-radius: 4px; background: #EEF1F5; color: #4D5968;
+  flex: 1 1 0; min-width: 0; height: 18px; border-radius: 4px; background: var(--strip-bg); color: var(--strip-text);
   font-size: 9px; line-height: 18px; text-align: center; overflow: hidden; white-space: nowrap;
 }
-.strip .cell.hl { background: #14304F; color: #fff; font-weight: 700; }
+.strip .cell.hl { background: var(--strip-hl); color: var(--strip-hl-text); font-weight: 700; }
 .strip .cell.gap { background: transparent; }
 .subjects { display: grid; gap: 2px; margin: 0 0 6px; }
-.subjects .check { margin: 0; padding: 4px 0; font-size: .92rem; }
+.subjects .check { margin: 0; padding: 0; font-size: .92rem; }
 
 .days + .days { margin-top: 6px; }
 .pw-field { position: relative; }
 .pw-field input { padding-right: 48px; }
 .pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); color: var(--on-surface-variant); }
 .pw-eye svg { width: 22px; height: 22px; }
-details.dropdown { border: 1px solid #7B7761; border-radius: 6px; margin: 4px 0 8px; background: #fff; }
+details.dropdown { border: 1px solid var(--outline); border-radius: 6px; margin: 4px 0 8px; background: var(--surface); }
 details.dropdown summary {
   list-style: none; cursor: pointer; padding: 8px 40px 8px 12px; position: relative; display: flex; flex-direction: column;
 }
@@ -300,7 +364,7 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .stepper { display: flex; align-items: center; gap: 8px; }
 .stepper span { flex: 1; }
 .stepper .step {
-  width: 32px; height: 32px; padding: 0; border-radius: 6px; font-size: 1.1rem; line-height: 1;
+  width: 44px; height: 44px; padding: 0; border-radius: 6px; font-size: 1.1rem; line-height: 1;
   background: var(--primary-container); color: var(--on-primary-container);
 }
 
@@ -309,7 +373,7 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .s-head h2 { font-size: 1.2rem; font-weight: 400; margin: 0; }
 .group-title { font-size: .7rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
   color: var(--secondary); margin: 18px 6px 6px; }
-.group { background: #fff; border-radius: 16px; overflow: hidden; }
+.group { background: var(--surface); border-radius: 16px; overflow: hidden; }
 .group-pad { padding: 4px 16px 12px 52px; }
 .srow { display: flex; align-items: center; gap: 14px; padding: 12px 16px; min-height: 56px; width: 100%;
   text-align: left; background: transparent; color: var(--text); border-radius: 0; font-weight: normal; }
@@ -324,10 +388,16 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .small-row { min-height: 44px; padding-left: 52px; }
 .small-row .srow-t { font-size: .9rem; }
 .chev { color: var(--on-surface-variant); font-size: 1.4rem; }
-.switch { width: 40px; height: 24px; flex: none; padding: 0; border-radius: 14px; background: #cfc9b4; position: relative; }
-.switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
-.switch.on { background: var(--primary); }
-.switch.on::after { left: 19px; }
+/* Schalter wie Material 3: aus = Rand und dunkler Knopf, an = gefüllt in --secondary.
+   ::before vergrößert die Tippfläche, die ganze Zeile schaltet ohnehin mit (app.js). */
+.switch { width: 44px; height: 26px; min-height: 0; flex: none; padding: 0; border-radius: 14px; position: relative;
+  background: var(--surface-variant); border: 2px solid var(--outline); }
+.switch::before { content: ""; position: absolute; inset: -11px -4px; }
+.switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--outline); transition: left .15s; }
+.switch.on { background: var(--secondary); border-color: var(--secondary); }
+.switch.on::after { left: 21px; background: var(--on-secondary); }
+.srow:has(.switch), .ferien-week:has(.switch) { cursor: pointer; }
 .time-pill { width: auto; flex: none; font: inherit; font-weight: 600; padding: 6px 10px; border: 0; border-radius: 99px;
   background: var(--primary-container); color: var(--on-primary-container); }
 .srow .stepper { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -335,6 +405,10 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .srow .stepper b { min-width: 1.4em; text-align: center; }
 .foot-note { text-align: center; font-size: .82rem; color: var(--on-surface-variant); margin: 20px 0 8px; }
 .foot-note a, .linklike { color: inherit; text-decoration: underline; background: none; padding: 0; font: inherit; font-weight: normal; border-radius: 0; }
+.foot-note a, .foot-note .linklike { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; vertical-align: middle; }
+/* Im Fließtext: Tippfläche über ::after vergrößern, die Zeilenhöhe bleibt. */
+.linklike { min-height: 0; position: relative; }
+.linklike::after { content: ""; position: absolute; inset: -12px -4px; }
 
 /* Einzeilige Zeilen, Erklärungen hinter ⓘ */
 .srow { min-height: 52px; padding: 10px 16px; }
@@ -364,12 +438,12 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .srow-v { color: var(--on-surface-variant); font-size: .88rem; white-space: nowrap; }
 .srow-hint { font-size: .78rem; color: var(--on-surface-variant); padding: 0 16px 6px 52px; margin-top: -8px; }
 .srow-edit { display: flex; align-items: center; gap: 10px; padding: 0 16px 10px 52px; }
-.srow-edit .step { width: 32px; height: 32px; padding: 0; border-radius: 6px; font-size: 1.1rem;
+.srow-edit .step { width: 44px; height: 44px; padding: 0; border-radius: 6px; font-size: 1.1rem;
   background: var(--primary-container); color: var(--on-primary-container); flex: none; }
 .srow-edit .srow-hint { padding: 0; margin: 0 0 0 4px; }
 .srow-details .subjects { padding: 0 16px 8px 52px; }
 .time-value { width: auto; flex: none; font: inherit; font-size: .88rem; color: var(--on-surface-variant);
-  padding: 0; border: 0; background: transparent; text-align: right; }
+  padding: 0; min-height: 44px; border: 0; background: transparent; text-align: right; }
 .time-value::-webkit-calendar-picker-indicator { display: none; }
 .danger-row .s-ico { fill: var(--error); }
 .foot-note { margin-top: 18px; }
@@ -407,7 +481,6 @@ header { justify-content: flex-end; min-height: 44px; }
 .event-list { list-style: none; margin: 0; padding: 0; }
 .event-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .88rem; padding: 4px 0; }
 .event-list li + li { border-top: 1px solid var(--surface-variant); }
-.events-dialog p { display: block; -webkit-line-clamp: unset; }
 
 /* Reiter je Kind (nur bei mehreren IBS5-Konten). */
 .kids { display: flex; gap: 6px; margin: 0 0 10px; overflow-x: auto; }
@@ -415,7 +488,7 @@ header { justify-content: flex-end; min-height: 44px; }
   flex: 0 0 auto; background: transparent; color: var(--on-surface-variant);
   border: 1px solid var(--surface-variant); border-radius: 999px; padding: 6px 14px; font-weight: 500;
 }
-.kid-tab.on { background: var(--secondary); border-color: var(--secondary); color: #fff; }
+.kid-tab.on { background: var(--secondary); border-color: var(--secondary); color: var(--on-secondary); }
 .srow-x { margin-left: 6px; padding: 4px 6px; font-size: .85rem; }
 
 /* Wochentage der Erinnerung. */
@@ -425,13 +498,20 @@ header { justify-content: flex-end; min-height: 44px; }
   flex: 1; max-width: 56px; padding: 7px 0; font-size: .85rem; font-weight: 500; border-radius: 8px;
   background: transparent; color: var(--on-surface-variant); border: 1px solid var(--surface-variant);
 }
-.wd-btn.on { background: var(--secondary); border-color: var(--secondary); color: #fff; }
+.wd-btn.on { background: var(--secondary); border-color: var(--secondary); color: var(--on-secondary); }
 
 /* Ferien: Frage je Woche als Dialog, nach „Später“ nur eine Zeile auf der Startseite. */
 .ferien-dialog { width: min(420px, calc(100vw - 48px)); }
-.ferien-dialog p { display: block; -webkit-line-clamp: unset; }
 .ferien-weeks { margin: 10px 0 4px; }
 .ferien-week { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; font-size: .9rem; }
 .ferien-week + .ferien-week { border-top: 1px solid var(--surface-variant); }
 .ferien-hint { margin: 0 0 10px; color: var(--on-surface-variant); }
 .ferien-hint .linklike { color: var(--secondary); }
+
+/* Datenschutzseite */
+.legal { padding-top: 16px; }
+.legal h1 { font-size: 1.4rem; margin: 0 0 8px; }
+.legal h2 { font-size: 1rem; margin: 18px 0 4px; }
+.legal ul { padding-left: 20px; }
+.legal li { margin: 6px 0; }
+.legal a { color: var(--secondary); }

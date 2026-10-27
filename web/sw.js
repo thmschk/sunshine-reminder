@@ -14,7 +14,7 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v64";
+const VERSION = "v65";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -257,8 +257,8 @@ async function checkAndNotify(isTest) {
 }
 
 /**
- * Morgenmeldung „heute gibt's …“: je Kind nur die Bestellhistorie (eine Anfrage),
- * nacheinander wie bei der Erinnerung. Zählt nicht als Erinnerung (lastPushOk),
+ * Morgenmeldung „heute gibt's …“: je Kind die Bestellhistorie, ohne Treffer dort
+ * zusätzlich die Tagesansicht von heute, nacheinander wie bei der Erinnerung. Zählt nicht als Erinnerung (lastPushOk),
  * damit eine kaputte Abendprüfung weiter als „Erinnerung schweigt“ auffällt.
  */
 async function todayAndNotify() {
@@ -305,6 +305,7 @@ export function composeToday(kids) {
     if (k.noMeal) return { text: `kein Schulessen (${k.noMeal})`, reason: k.noMeal };
     if (k.holiday && (k.skip || k.day.state === OrderState.NO_OFFER)) return { text: `kein Essen (${k.holiday})`, reason: k.holiday };
     if (k.day.state === OrderState.NO_OFFER) return { text: "kein Angebot", reason: "kein Angebot" };
+    if (k.day.state === OrderState.UNKNOWN) return { text: "Bestellstand unklar", unclear: true, loud: true };
     return { text: "nichts bestellt", missing: true, loud: true };
   };
   const all = kids.map((k) => ({ k, ...status(k) }));
@@ -314,13 +315,17 @@ export function composeToday(kids) {
     const forName = s.k.firstName ? ` für ${s.k.firstName}` : "";
     if (s.ordered) return { title: `Heute gibt's${forName}`, body: s.text, quiet };
     if (s.missing) return { title: `Heute kein Essen bestellt${forName}`, body: "Brot einpacken.", quiet };
+    if (s.unclear) return { title: `Essen heute unklar${forName}`, body: "Bitte selbst auf der Bestellseite nachsehen.", quiet };
     if (s.k.error) return { title: s.k.failTitle, body: `${s.k.error.message}\nBitte die App öffnen.`, quiet };
-    if (!s.k.day) return { title: "Essen heute unbekannt", body: "Die Bestellhistorie war nicht lesbar. Bitte die App öffnen.", quiet };
+    if (!s.k.day) return { title: "Essen heute unbekannt", body: "Der Bestellstand von heute war nicht lesbar. Bitte die App öffnen.", quiet };
     return { title: "Heute kein Schulessen", body: s.reason, quiet };
   }
   const missing = all.filter((s) => s.missing).map((s) => label(s.k));
+  const unclear = all.filter((s) => s.unclear).map((s) => label(s.k));
   return {
-    title: missing.length ? `Heute kein Essen bestellt für ${nameList(missing)}` : all.some((s) => s.ordered) ? "Heute gibt's" : "Heute kein Schulessen",
+    title: missing.length ? `Heute kein Essen bestellt für ${nameList(missing)}`
+      : unclear.length ? `Essen heute unklar für ${nameList(unclear)}`
+      : all.some((s) => s.ordered) ? "Heute gibt's" : "Heute kein Schulessen",
     body: all.map((s) => `${label(s.k)}: ${s.text}`).join("\n"),
     quiet,
   };
