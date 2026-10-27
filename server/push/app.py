@@ -52,6 +52,11 @@ MAX_SUBSCRIPTIONS = 5000
 PUSH_TTL = 3 * 3600
 PUSH_TIMEOUT = 10
 SEND_TRIES = 5
+# So viele Tage darf ein Push-Dienst ein Abo mit 401/403 ablehnen, bevor es gelöscht wird.
+# 401/403 heißt meist: Abo gehört zu einem anderen VAPID-Schlüssel. Es kann aber auch an
+# uns liegen (JWT, Uhr) und träfe dann alle Abos zugleich; die Frist lässt Zeit, den
+# Fehler zu beheben oder den Schlüssel aus dem Backup zurückzuholen.
+AUTH_FAIL_DAYS = 7
 MAX_ENDPOINT_LEN = 1024
 # Jedes Abo wird um eine feste Verschiebung später geweckt, gleichmäßig über eine
 # halbe Stunde verteilt: Handys hinter derselben Mobilfunk-IP (CGNAT) sollen IBS5
@@ -165,7 +170,8 @@ CONN: sqlite3.Connection
 def init() -> Vapid:
     global CONN
     os.makedirs(DATA_DIR, exist_ok=True)
-    if not os.path.exists(KEY_PATH):
+    new_key = not os.path.exists(KEY_PATH)
+    if new_key:
         v = Vapid()
         v.generate_keys()
         v.save_key(KEY_PATH)
@@ -194,11 +200,19 @@ def init() -> Vapid:
         if "morning_time" not in cols:
             CONN.execute("ALTER TABLE subs ADD COLUMN morning_time TEXT")
             CONN.execute("ALTER TABLE subs ADD COLUMN morning_last_sent TEXT")
+        if "auth_failed_since" not in cols:
+            CONN.execute("ALTER TABLE subs ADD COLUMN auth_failed_since TEXT")
         # Übergang: früher standen Betreiber-Abos als Liste in ADMIN_SUBS.
         for legacy in [x for x in os.environ.get("ADMIN_SUBS", "").split(",") if x]:
             CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (legacy,))
         CONN.execute(f"UPDATE subs SET offset_min = abs(random()) % {MAX_OFFSET_MIN + 1} WHERE offset_min IS NULL")
         CONN.commit()
+        subs = CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
+    if new_key and subs:
+        # Alle vorhandenen Abos gehören zum alten Schlüssel und werden ab jetzt mit 401/403 abgelehnt.
+        log.warning("VAPID-Schlüssel fehlte und wurde NEU erzeugt, obwohl %d Abos bestehen: "
+                    "Container stoppen und vapid_private.pem aus dem Backup zurückholen (docs/betrieb.md), "
+                    "sonst löscht der Versand diese Abos nach %d Tagen", subs, AUTH_FAIL_DAYS)
     return Vapid.from_file(KEY_PATH)
 
 
@@ -326,15 +340,30 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
             timeout=PUSH_TIMEOUT,
             requests_session=session,
         )
+        with db_lock:
+            CONN.execute("UPDATE subs SET auth_failed_since = NULL WHERE id = ? AND auth_failed_since IS NOT NULL", (row["id"],))
+            CONN.commit()
         return True
     except WebPushException as exc:
         status = exc.response.status_code if exc.response is not None else None
+        # Immer nur dieses Abo samt Endpoint: wurde es inzwischen erneuert, bleibt es.
         if status in (404, 410):
-            # Nur dieses Abo samt Endpoint: wurde es inzwischen erneuert, bleibt es.
             with db_lock:
                 CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ?", (row["id"], row["endpoint"]))
                 CONN.commit()
             log.info("Abo abgelaufen und gelöscht")
+        elif status in (401, 403):
+            today = dt.date.today()
+            with db_lock:
+                CONN.execute("UPDATE subs SET auth_failed_since = ? WHERE id = ? AND endpoint = ? AND auth_failed_since IS NULL",
+                             (today.isoformat(), row["id"], row["endpoint"]))
+                gone = CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ? AND auth_failed_since <= ?",
+                                    (row["id"], row["endpoint"], (today - dt.timedelta(days=AUTH_FAIL_DAYS)).isoformat())).rowcount
+                CONN.commit()
+            if gone:
+                log.warning("Abo seit %d Tagen mit HTTP %s abgelehnt (anderer VAPID-Schlüssel?), gelöscht", AUTH_FAIL_DAYS, status)
+            else:
+                log.warning("Push abgelehnt: HTTP %s (anderer VAPID-Schlüssel?)", status)
         else:
             log.warning("Push fehlgeschlagen: HTTP %s", status)
         return False
@@ -603,7 +632,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/sdui/"):
             return self.sdui("GET")
         if self.path.split("?")[0] == "/api/health":
-            return self.reply(200, {"selfcheck": selfcheck_state})
+            with db_lock:
+                rejected = CONN.execute("SELECT COUNT(*) FROM subs WHERE auth_failed_since IS NOT NULL").fetchone()[0]
+            # auth_rejected > 0: Push-Dienste lehnen Abos mit 401/403 ab, siehe AUTH_FAIL_DAYS.
+            return self.reply(200, {"selfcheck": selfcheck_state, "auth_rejected": rejected})
         if self.path.split("?")[0] == "/api/vapid":
             return self.reply(200, {"publicKey": public_key_b64(self.vapid)})
         self.reply(404)
@@ -673,6 +705,8 @@ class Handler(BaseHTTPRequestHandler):
                     s["last_sent"] = None
                 if "morning_time" in s and s["morning_time"] != row["morning_time"]:
                     s["morning_last_sent"] = None
+            if "endpoint" in s:
+                s["auth_failed_since"] = None
             cols = ", ".join(f"{k} = ?" for k in s)
             with db_lock:
                 if "endpoint" in s:

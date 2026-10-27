@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Spielt einen gepushten Stand von GitHub auf den Server (SSH-Alias "privat") und lädt Caddy neu.
-# ./server/deploy.sh [branch|commit], Standard main. Der Server lädt den Commit selbst als
-# Tarball von GitHub; was nur lokal liegt (uncommittet, ungepusht), geht so nicht live.
+# ./server/deploy.sh [--abweichend] [branch|commit], Standard main. Der Server lädt den Commit
+# selbst als Tarball von GitHub; was nur lokal liegt (uncommittet, ungepusht), geht so nicht live.
+# Live geht nur, was auch lokal als HEAD ausgecheckt ist; --abweichend erlaubt einen anderen Stand.
 # Caddy läuft als gemeinsamer Proxy in /srv/caddy; diese App liefert nur ihre
 # statischen Dateien nach /srv/sunshine/web und ihre Site-Datei.
 set -euo pipefail
 HOST="${HOST:-privat}"
+ABWEICHEND=
+if [[ ${1:-} == --abweichend ]]; then ABWEICHEND=1; shift; fi
 REF="${1:-main}"
 REPO="https://github.com/thmschk/sunshine-reminder"
 
@@ -15,8 +18,16 @@ else
   SHA=$(git ls-remote "$REPO" "refs/heads/$REF" | cut -f1)
   [[ -n $SHA ]] || { echo "FEHLER: Branch $REF gibt es auf GitHub nicht" >&2; exit 1; }
 fi
+# Der SHA landet ungeprüft in URLs und Befehlen auf dem Server.
+[[ $SHA =~ ^[0-9a-f]{40}$ ]] || { echo "FEHLER: $REF ergibt keinen eindeutigen Commit: ${SHA:-leer}" >&2; exit 1; }
 LOCAL=$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || true)
-[[ $LOCAL == "$SHA" ]] || echo "Hinweis: lokal ist ${LOCAL:0:7} ausgecheckt, live geht ${SHA:0:7} ($REF)."
+if [[ $LOCAL != "$SHA" ]]; then
+  if [[ -z $ABWEICHEND ]]; then
+    echo "FEHLER: lokal ist ${LOCAL:0:7} ausgecheckt, $REF auf GitHub ist ${SHA:0:7}. Erst pushen/pullen oder --abweichend." >&2
+    exit 1
+  fi
+  echo "Hinweis: lokal ist ${LOCAL:0:7} ausgecheckt, live geht ${SHA:0:7} ($REF)."
+fi
 
 # Die Server-Blöcke kommen per stdin (bash -s): jeder docker-Aufruf bekommt
 # </dev/null, sonst liest er womöglich den Rest des Skripts weg und bash endet still mit 0.
@@ -48,11 +59,14 @@ cp "$src/server/compose.yaml" /srv/sunshine/compose.yaml
 mkdir -p /srv/sunshine/data && chown 1000:1000 /srv/sunshine/data && chmod 700 /srv/sunshine/data
 cd /srv/sunshine
 docker compose build --quiet </dev/null
-rsync -a --delete --exclude tests/ "$src/web/" /srv/sunshine/web/
+# Caddy liefert direkt aus diesem Ordner: neue Dateien erst am Ende alle zusammen
+# einsetzen und dann löschen, das hält den Mischstand kurz. version.txt bleibt bis zum Überschreiben.
+rsync -a --delete-after --delay-updates --exclude tests/ --exclude /version.txt "$src/web/" /srv/sunshine/web/
 # Welcher Commit läuft, ist so auch unter /version.txt zu sehen (#3).
 echo "$SHA" > /srv/sunshine/web/version.txt
 cp "$src/server/sunshine.caddy" "$site"
-docker compose up -d --quiet-pull </dev/null 2>&1 | grep -vE "^ *(#|=>)" | tail -3
+# grep ohne Treffer endet mit 1; ein Fehler von docker compose schlägt über pipefail trotzdem durch.
+docker compose up -d --quiet-pull </dev/null 2>&1 | { grep -vE "^ *(#|=>)" || true; } | tail -3
 install -m 755 "$src/server/backup-data.sh" /srv/sunshine/backup-data.sh
 install -m 644 "$src/server/sunshine.cron" /etc/cron.d/sunshine
 echo "$SHA" > /srv/sunshine/DEPLOYED

@@ -1,0 +1,4 @@
+# Direkte Abhängigkeiten; requirements.txt (alle Pakete mit Hashes) daraus erzeugen:
+#   uv pip compile --universal --python-version 3.13 --generate-hashes --no-header requirements.in -o requirements.txt
+# Zum Aktualisieren zusätzlich --upgrade; danach Tests laufen lassen und deployen.
+pywebpush==2.0.3

@@ -335,11 +335,12 @@ class VersandUndAenderung(unittest.TestCase):
         app.CONN = sqlite3.connect(":memory:", check_same_thread=False)
         app.CONN.row_factory = sqlite3.Row
         app.CONN.execute("CREATE TABLE subs (id TEXT, endpoint TEXT, keys TEXT, time TEXT, last_sent TEXT, "
-                         "morning_time TEXT, morning_last_sent TEXT)")
-        app.CONN.execute("INSERT INTO subs VALUES ('a', 'https://fcm.googleapis.com/alt', '{}', '12:00', NULL, '07:00', NULL)")
+                         "morning_time TEXT, morning_last_sent TEXT, auth_failed_since TEXT)")
+        app.CONN.execute("INSERT INTO subs VALUES ('a', 'https://fcm.googleapis.com/alt', '{}', '12:00', NULL, '07:00', NULL, NULL)")
         self.snap = app.CONN.execute("SELECT * FROM subs").fetchone()
 
     def tearDown(self):
+        self.app.CONN.close()
         self.app.CONN = self.old
 
     def get(self):
@@ -375,3 +376,87 @@ class VersandUndAenderung(unittest.TestCase):
         with mock.patch.object(self.app, "webpush", side_effect=gone):
             self.app.send(self.get(), None)
         self.assertIsNone(self.get())
+
+
+class AbgelehntesAbo(unittest.TestCase):
+    """401/403: anderer VAPID-Schlüssel oder eigener JWT-Fehler, gelöscht wird erst nach AUTH_FAIL_DAYS."""
+
+    setUp, tearDown, get = VersandUndAenderung.setUp, VersandUndAenderung.tearDown, VersandUndAenderung.get
+
+    def send(self, status, day, row=None):
+        from unittest import mock
+        from pywebpush import WebPushException
+        exc = WebPushException("abgelehnt", response=mock.Mock(status_code=status))
+        with mock.patch.object(self.app, "webpush", side_effect=exc), \
+                mock.patch.object(self.app.dt, "date", mock.Mock(today=lambda: day)):
+            return self.app.send(row or self.get(), None)
+
+    def test_erst_vormerken_dann_loeschen(self):
+        start = dt.date(2026, 10, 5)
+        self.assertFalse(self.send(403, start))
+        self.assertEqual(self.get()["auth_failed_since"], "2026-10-05")
+        self.send(401, start + dt.timedelta(days=self.app.AUTH_FAIL_DAYS - 1))
+        self.assertEqual(self.get()["auth_failed_since"], "2026-10-05")
+        self.send(403, start + dt.timedelta(days=self.app.AUTH_FAIL_DAYS))
+        self.assertIsNone(self.get())
+
+    def test_zustellung_hebt_vormerkung_auf(self):
+        from unittest import mock
+        self.send(403, dt.date(2026, 10, 5))
+        with mock.patch.object(self.app, "webpush"):
+            self.assertTrue(self.app.send(self.get(), None))
+        self.assertIsNone(self.get()["auth_failed_since"])
+
+    def test_erneuertes_abo_bleibt(self):
+        self.app.CONN.execute("UPDATE subs SET auth_failed_since = '2026-09-01'")
+        self.app.CONN.execute("UPDATE subs SET endpoint = 'https://fcm.googleapis.com/neu'")
+        self.send(403, dt.date(2026, 10, 5), self.snap)
+        self.assertIsNotNone(self.get())
+
+    def test_andere_fehler_merken_nichts_vor(self):
+        self.assertFalse(self.send(500, dt.date(2026, 10, 5)))
+        self.assertIsNone(self.get()["auth_failed_since"])
+
+
+class NeuerSchluessel(unittest.TestCase):
+    """Fehlt vapid_private.pem, entsteht ein neuer Schlüssel; bei vorhandenen Abos laut warnen."""
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        import app
+        self.app = app
+        self.old = getattr(app, "CONN", None)
+        self.dir = tempfile.TemporaryDirectory()
+        d = self.dir.name
+        self.patches = [mock.patch.multiple(app, DATA_DIR=d, DB_PATH=os.path.join(d, "push.sqlite"),
+                                            KEY_PATH=os.path.join(d, "vapid_private.pem"))]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        if self.app.CONN is not self.old:
+            self.app.CONN.close()
+        self.app.CONN = self.old
+        self.dir.cleanup()
+
+    def test_ohne_abos_still(self):
+        with self.assertNoLogs("push", "WARNING"):
+            self.app.init()
+        self.assertTrue(os.path.exists(self.app.KEY_PATH))
+
+    def test_mit_abos_warnung(self):
+        self.app.init()
+        self.app.CONN.execute("INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created) "
+                              "VALUES ('a', 'h', 'https://fcm.googleapis.com/x', '{}', '12:00', '12345', 'Europe/Berlin', '2026-10-05')")
+        self.app.CONN.commit()
+        self.app.CONN.close()
+        with self.assertNoLogs("push", "WARNING"):
+            self.app.init()  # Schlüssel noch da
+        self.app.CONN.close()
+        os.remove(self.app.KEY_PATH)
+        with self.assertLogs("push", "WARNING") as logs:
+            self.app.init()
+        self.assertIn("1 Abos", logs.output[0])

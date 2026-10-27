@@ -15,3 +15,18 @@ services:
     # Nur lokal erreichbar; Caddy läuft im Netz des Servers und reicht /api/ hierher.
     ports:
       - "127.0.0.1:18080:8080"
+    # Schreibt nur nach /data (Abos, Schlüssel); SQLite-Zwischendateien landen in /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
