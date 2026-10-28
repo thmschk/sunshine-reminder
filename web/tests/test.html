@@ -147,7 +147,7 @@ await test("Längste Lücke zwischen Weckruf-Tagen", () => {
 });
 await test("Datum und Profil", () => {
   eq(De.long("2026-08-27"), "Donnerstag, 27.08.2026");
-  eq(new Profile("Muster, Mia", "").firstName, "Mia");
+  eq(new Profile("Muster, Mia").firstName, "Mia");
   eq(/^\d{4}-\d{2}-\d{2}$/.test(todayBerlin()), true, "todayBerlin");
   eq(todayBerlin(new Date("2026-10-05T22:30:00Z")), "2026-10-06", "todayBerlin nach Mitternacht MESZ");
   eq(todayBerlin(new Date("2026-12-31T22:59:00Z")), "2026-12-31", "todayBerlin Silvester MEZ");
@@ -402,7 +402,7 @@ await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu",
   const creds = { customerNo: `test-${Date.now()}`, password: "x" };
   await SessAcc.upsertAccount(creds);
   let logins = 0;
-  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max", ""); } });
+  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max"); } });
   const a = mk();
   eq(await withSession(a, creds, async () => a.token), "T1", "erster Login");
   const b = mk();
@@ -419,7 +419,7 @@ await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu",
 await test("Sitzung: kein Token für ein inzwischen entferntes Konto", async () => {
   const creds = { customerNo: `weg-${Date.now()}`, password: "x" };
   let logins = 0;
-  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max", ""); } });
+  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max"); } });
   const a = mk();
   await withSession(a, creds, async () => 0);
   const b = mk();
@@ -429,7 +429,7 @@ await test("Sitzung: kein Token für ein inzwischen entferntes Konto", async () 
 await test("Sitzung: erste Anmeldung mit „merken“ speichert den Token, Konto kommt erst danach", async () => {
   const creds = { customerNo: `neu-${Date.now()}`, password: "x" };
   let logins = 0;
-  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max", ""); } });
+  const mk = () => ({ async login() { logins++; this.token = `T${logins}`; return new Profile("Muster, Max"); } });
   await login(mk(), creds, true); // wie attempt() in app.js: erst anmelden, dann saveCreds
   await SessAcc.upsertAccount(creds);
   const b = mk();
@@ -443,7 +443,7 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   await SessAcc.upsertAccount(ca);
   await SessAcc.upsertAccount(cb);
   let logins = 0;
-  const mk = () => ({ async login(no) { logins++; this.token = `${no}-T${logins}`; return new Profile("Muster, Max", ""); } });
+  const mk = () => ({ async login(no) { logins++; this.token = `${no}-T${logins}`; return new Profile("Muster, Max"); } });
   const x = mk();
   await withSession(x, ca, async () => 0);
   await withSession(x, cb, async () => 0);
@@ -709,6 +709,112 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     const n = failNotice(new Error("Gerätespeicher nicht lesbar (x)."));
     eq([n.title, n.silent, n.body.includes("(x)")], ["Prüfung fehlgeschlagen", false, true]);
   });
+}
+
+// Netzfehler bei IBS5: ein zweiter Versuch, erst dann Pause (guard.js).
+{
+  const { IbsClient, pacing } = await import("../ibs.js");
+  const { guardHooks, paused, resume } = await import("../guard.js");
+  const { kvDel, kvGet } = await import("../idb.js");
+  const realFetch = window.fetch;
+  const old = { ...pacing };
+  const reset = async () => { await resume(); await kvDel("ibsSilentAt"); };
+  const login = async (replies) => {
+    await reset();
+    let calls = 0;
+    window.fetch = async () => { const r = replies[calls++]; if (r instanceof Error) throw r; return r; };
+    Object.assign(pacing, { gapMs: 0, jitterMs: 0, retryMs: 50 });
+    const t0 = performance.now();
+    let err = null;
+    try { await new IbsClient(undefined, guardHooks).login("1", "x"); } catch (e) { err = e; } finally { window.fetch = realFetch; Object.assign(pacing, old); }
+    const p = await paused();
+    return { calls, err, ms: performance.now() - t0, pauseMin: p ? Math.round((p.until - Date.now()) / 60000) : 0, budget: ((await kvGet("ibsBudget")) || []).length };
+  };
+  const net = () => new TypeError("Failed to fetch");
+  await test("Netzfehler beim Login: zweiter Versuch nach Wartezeit klappt, keine Pause, beide gezählt", async () => {
+    const r = await login([net(), new Response(JSON.stringify({ token: "t", name1: "" }))]);
+    eq([r.err?.message ?? null, r.calls, r.pauseMin, r.budget, r.ms >= 45], [null, 2, 0, 2, true], `${Math.round(r.ms)} ms`);
+  });
+  await test("Netzfehler auch beim zweiten Versuch: Pause wie bisher (15 Minuten)", async () => {
+    const r = await login([net(), net()]);
+    eq([r.calls, r.err?.network, r.pauseMin, r.budget], [2, true, 15, 2]);
+  });
+  await test("Zeitüberschreitung: kein zweiter Versuch", async () => {
+    const r = await login([new DOMException("timeout", "TimeoutError")]);
+    eq([r.calls, /antwortet nicht/.test(r.err?.message || "")], [1, true]);
+  });
+  await reset();
+}
+
+// Gescheiterter Weckruf: Klartext, ein einzelner Aussetzer still, der zweite laut.
+{
+  const { composeToday, composeFailure, composeAll, markFailures, ringsLoud } = await import("../sw.js");
+  const { pushFailure } = await import("../errors.js");
+  const { IbsError } = await import("../ibs.js");
+  const { IbsPausedError } = await import("../guard.js");
+  const { kvDel } = await import("../idb.js");
+  const netErr = () => Object.assign(new IbsError("Keine Verbindung zum Bestellsystem (/Login/Login): Failed to fetch"), { network: true });
+  const kid = (error, no = "1", firstName = "Mia") => ({ customerNo: no, firstName, due: [], noMeal: "", holiday: "", skip: false, error, notice: error && pushFailure(error) });
+  const plain = (m) => !/\/Login|Failed to fetch|keine Antwort beim/.test(`${m.title}\n${m.body}`);
+  await kvDel("pushFailed");
+  await test("Morgens: Netzfehler beim ersten Mal still, beim nächsten Weckruf laut, im Klartext", async () => {
+    const a = kid(netErr());
+    await markFailures([a]);
+    const m1 = composeToday([a]);
+    eq([m1.title, m1.quiet, plain(m1)], ["Bestellsystem gerade nicht erreichbar", true, true], m1.body);
+    eq(m1.body, "Ob bestellt ist, prüft die App beim nächsten Mal. Zum sofortigen Versuch die App öffnen.");
+    const b = kid(netErr());
+    await markFailures([b]);
+    eq(composeToday([b]).quiet, false, "zweites Mal");
+    // Ein geglückter Weckruf dazwischen setzt das zurück.
+    await markFailures([{ customerNo: "1" }]);
+    const c = kid(netErr());
+    await markFailures([c]);
+    eq(composeToday([c]).quiet, true, "nach Erfolg");
+  });
+  await test("Erinnerung: Netzfehler erst beim zweiten Mal laut, je Kind", async () => {
+    await kvDel("pushFailed");
+    const a = kid(netErr());
+    await markFailures([a]);
+    const m1 = composeFailure(a);
+    eq([m1.title, m1.quiet, plain(m1)], ["Bestellsystem gerade nicht erreichbar", true, true], m1.body);
+    const [b, other] = [kid(netErr()), kid(netErr(), "2", "Ben")];
+    await markFailures([b, other]);
+    eq([composeFailure(b).quiet, composeFailure(other).quiet], [false, true]);
+    // Mehrere Kinder: Ben zum ersten Mal gescheitert, Mia ok → still; Ben erneut → laut.
+    const ok = { customerNo: "1", firstName: "Mia", due: [], days: [], checked: [] };
+    const ben = kid(netErr(), "2", "Ben");
+    await markFailures([ok, ben]);
+    eq(ben.repeated, true, "Ben zum zweiten Mal");
+    const ben1 = { ...ben, repeated: false };
+    const all1 = composeAll([ok, ben1], todayBerlin());
+    eq([all1.quiet, ringsLoud(all1, [ok, ben1], new Set(), todayBerlin(), [1, 2, 3, 4, 5]), plain({ title: "", body: all1.body })], [true, false, true], all1.body);
+    const all2 = composeAll([ok, ben], todayBerlin());
+    eq([all2.quiet, ringsLoud(all2, [ok, ben], new Set(), todayBerlin(), [1, 2, 3, 4, 5])], [false, true]);
+  });
+  await test("Pause: Klartext mit Uhrzeit, erst beim zweiten Mal laut", async () => {
+    await kvDel("pushFailed");
+    const until = Date.now() + 15 * 60000;
+    const a = kid(new IbsPausedError(until, "keine Antwort beim Anmelden"));
+    await markFailures([a]);
+    const m = composeToday([a]);
+    eq([m.title, m.quiet, /ab \d\d:\d\d Uhr/.test(m.body), plain(m)], ["Bestellsystem gerade nicht erreichbar", true, true, true], m.body);
+    const b = kid(new IbsPausedError(until, "x"));
+    await markFailures([b]);
+    eq(composeFailure(b).quiet, false);
+  });
+  await test("Falsches Passwort und unlesbare Seite: gleich beim ersten Mal laut", async () => {
+    await kvDel("pushFailed");
+    const e = new IbsAuthError("Kundennummer oder Passwort falsch.");
+    const a = { ...kid(e), notice: pushFailure(e, { rejected: true }) };
+    const p = kid(new ParserError("Antwort enthält keinen Wochenplan — vermutlich eine Fehler- oder Login-Seite."), "2");
+    await markFailures([a, p]);
+    const ma = composeToday([a]);
+    eq([ma.title, ma.quiet, ma.body.includes("Passwort falsch")], ["Anmeldung abgelehnt", false, true], ma.body);
+    const mp = composeFailure(p);
+    eq([mp.title, mp.quiet, mp.body.includes("keinen Wochenplan")], ["Bestellstand unbekannt", false, true], mp.body);
+  });
+  await kvDel("pushFailed");
 }
 
 // Berliner Ferien aus ferien.json.
@@ -1358,6 +1464,115 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
       eq(/HTTP (500|429)/.test(err?.message || ""), true, `Fehler: ${err?.message}`);
     }
   });
+}
+
+// Parser: Strichzeichen in Mengen, ungültige Zeichennummern, Kundennummer nur aus Ziffern.
+{
+  const hist = (...rows) => `<table id="order-history-table"><tbody>${rows.map(([d, q, t]) =>
+    `<tr><td>01.10.2026</td><td>${d}</td><td>${q}</td><td>${t}</td></tr>`).join("")}</tbody></table>`;
+  await test("Bestellhistorie: Abbestellung mit typografischem Minus oder Strich saldiert", () => {
+    for (const minus of ["−1", "–1", "- 1", "-1,00", "－1"]) {
+      const m = parseOrderHistory(hist(["05.10.2026", "1", "M1 - Nudeln"], ["05.10.2026", minus, "M1 - Nudeln"]));
+      eq([m.size, m.touched.has("2026-10-05")], [0, true], minus);
+    }
+    eq(histSummary(parseOrderHistory(hist(["05.10.2026", "1,00", "M2 - Reis"]))), [["2026-10-05", ["M2×1"]]], "positiv");
+  });
+  await test("Entities: Zeichennummern außerhalb von Unicode oder Surrogate werden zu �, der Plan bleibt lesbar", () => {
+    const html = dayOpen.replace('data-name="Linseneintopf"', 'data-name="A&#x110000;B&#xD800;C&#99999999999999999999;D&#0;E&#x41;"');
+    eq(parseWeekplan(html).days.get("2026-10-12").entries[1].name, "A�B�C�D�EA");
+  });
+  await test("Kundennummer aus onclick nur aus Ziffern, sonst nicht wählbar", () => {
+    const d = (no) => parseWeekplan(dayOpen.replace("'1000', '828'", `'${no}', '828'`)).days.get("2026-10-12").entries[1];
+    eq([d("1000").customerId, d("1000").selectable], ["1000", true], "Ziffern");
+    for (const bad of ["10a0", "1000 OR 1", "", "-5"]) eq([d(bad).customerId, d(bad).selectable], ["", false], bad);
+  });
+}
+
+// Service Worker: Frist mit Abbruch, Weckruf mit einem nicht prüfbaren Kind.
+{
+  const { withDeadline, notify } = await import("../sw.js");
+  const { IbsClient, pacing } = await import("../ibs.js");
+  const { kvDel, kvGet, kvSet } = await import("../idb.js");
+  const { saveAccounts } = await import("../accounts.js");
+  const shown = [];
+  const realReg = self.registration;
+  self.registration = { showNotification: async (title, o) => { shown.push({ title, ...o }); }, getNotifications: async () => [] };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await test("Frist: Ersatzmeldung, Abbruch für fn, keine spätere Meldung", async () => {
+    shown.length = 0;
+    let sig = null;
+    await withDeadline(async (signal) => { sig = signal; await sleep(80); await notify("spät", "", { signal }); }, "t", { ms: 20 });
+    eq([shown.map((n) => n.title), sig?.aborted, /zu lange/.test(shown[0]?.body)], [["Prüfung fehlgeschlagen"], true, true], "Frist");
+    await sleep(120);
+    eq(shown.map((n) => n.title), ["Prüfung fehlgeschlagen"], "nichts danach");
+    shown.length = 0;
+    await withDeadline(async (signal) => notify("pünktlich", "", { signal }), "t", { ms: 1000 });
+    eq(shown.map((n) => n.title), ["pünktlich"], "ohne Frist");
+  });
+  await test("Frist: IbsClient bricht laufende Anfrage ab und schickt danach keine mehr", async () => {
+    const realFetch = window.fetch;
+    let calls = 0, failed = 0;
+    window.fetch = (url, init) => {
+      calls++;
+      return new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+    };
+    try {
+      const ctl = new AbortController();
+      const c = new IbsClient(undefined, { failed: () => { failed++; } });
+      c.token = "t";
+      c.signal = ctl.signal;
+      const p = c.orderHistory("2026-10-01", "2026-10-02").catch((e) => e);
+      for (let i = 0; i < 200 && !calls; i++) await sleep(10);
+      ctl.abort(new Error("Frist"));
+      const err = await p;
+      const err2 = await c.dayplan("2026-10-05").catch((e) => e);
+      eq([calls, err?.message, err2?.message, failed], [1, "Frist", "Frist", 0]);
+    } finally {
+      window.fetch = realFetch;
+    }
+  });
+  await test("Weckruf: ein Kind dauerhaft nicht prüfbar → Meldung kommt, lastPushOk gesetzt (ok: false)", async () => {
+    const realFetch = window.fetch;
+    const gap = { ...pacing };
+    Object.assign(pacing, { gapMs: 0, jitterMs: 0 });
+    const keys = ["accounts", "activeAccount", "ibsDayView", "lastPushOk", "pushFailed", "notified", "ibsBudget", "ibsSilentAt", "ibsPause",
+      ...["1000", "2000"].flatMap((n) => [`ibsSession:${n}`, `dayCache:${n}`])];
+    for (const k of keys) await kvDel(k);
+    // Nie ans echte IBS5: alles unter ibs.* beantwortet diese Attrappe.
+    window.fetch = async (url, init) => {
+      url = String(url);
+      if (!/^https:\/\/ibs\./.test(url)) return realFetch(url, init);
+      if (url.includes("/Login/")) {
+        const no = new URLSearchParams(String(init.body)).get("identifierValue");
+        return new Response(JSON.stringify(no === "2000" ? { errorMessage: "Kundennummer oder Passwort falsch." } : { token: "t", name1: "Muster, Mia" }));
+      }
+      if (url.includes("/Account/Orderhistory")) return new Response('<table id="order-history-table"><tbody></tbody></table>');
+      return new Response('<li class="plan" id="dayplan"></li>');
+    };
+    try {
+      await saveAccounts([{ customerNo: "1000", password: "a", name: "" }, { customerNo: "2000", password: "b", name: "" }]);
+      await kvSet("ibsDayView", true);
+      for (let round = 1; round <= 2; round++) {
+        shown.length = 0;
+        const ev = new Event("push");
+        ev.data = { json: () => ({ t: "check" }) };
+        let done = null;
+        ev.waitUntil = (p) => { done = p; };
+        self.dispatchEvent(ev);
+        await done;
+        const last = await kvGet("lastPushOk");
+        const check = shown.filter((n) => n.tag === "hs-check");
+        eq([check.length, /Kd\. 2000/.test(check[0]?.title), last?.ok, Date.now() - (last?.at || 0) < 60000], [1, true, false, true],
+          `Runde ${round}: ${check[0]?.title}`);
+        eq(Object.keys((await kvGet("pushFailed")) || {}), ["2000"], "pushFailed nennt das Kind");
+      }
+    } finally {
+      window.fetch = realFetch;
+      Object.assign(pacing, gap);
+      for (const k of keys) await kvDel(k);
+    }
+  });
+  self.registration = realReg;
 }
 
 const failed = results.filter((r) => r.startsWith("FAIL")).length;

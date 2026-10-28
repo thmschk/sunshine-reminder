@@ -4,7 +4,7 @@
 <!-- Mit echter Wartezeit aufrufen (Screenshot), nicht mit virtueller Zeit: IndexedDB hängt dort. -->
 <body style="font:16px monospace"><pre id="out">läuft</pre>
 <script type="module">
-import { IbsClient, IbsAuthError, collect } from "../ibs.js";
+import { IbsClient, IbsAuthError, collect, pacing } from "../ibs.js";
 import { guardHooks, paused, resume, IbsPausedError, IbsBudgetError, budgetFor, unmetered } from "../guard.js";
 import { kvDel, kvGet, kvSet } from "../idb.js";
 
@@ -13,6 +13,7 @@ const out = document.getElementById("out");
 const check = (name, ok, extra = "") => { lines.push(`${ok ? "ok  " : "FAIL"} ${name}${extra ? ` (${extra})` : ""}`); out.textContent = lines.join("\n") + "\n…"; };
 window.addEventListener("unhandledrejection", (e) => { lines.push("REJ " + e.reason); out.textContent = lines.join("\n"); });
 const realFetch = window.fetch;
+pacing.retryMs = 50;
 let calls = 0;
 const reset = async () => { calls = 0; await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilentAt"); };
 const setNet = (type) => Object.defineProperty(navigator, "connection", { value: type ? { type } : undefined, configurable: true });
@@ -28,7 +29,7 @@ try {
   check("Netzfehler beim Login pausiert", !!(await paused()), e1?.message);
   let e2 = null;
   try { await c.login("1", "x"); } catch (e) { e2 = e; }
-  check("während der Pause keine Anfrage", e2 instanceof IbsPausedError && calls === 1, `Anfragen: ${calls}`);
+  check("ein zweiter Versuch, während der Pause keine Anfrage", e2 instanceof IbsPausedError && calls === 2, `Anfragen: ${calls}`);
   check("erstes Schweigen: 15 Minuten", (await minutesLeft()) === 15, `${await minutesLeft()} min`);
   await resume(); // „Trotzdem jetzt versuchen“
   try { await c.login("1", "x"); } catch { /* erwartet */ }
@@ -65,7 +66,7 @@ try {
     check(`${what} beim Login: keine Ablehnung, keine Pause`, e1d && !(e1d instanceof IbsAuthError) && !(await paused()), e1d?.message);
   }
 
-  // 2. Angemeldet, Abruf scheitert, genau ein erneuter Login, dann Pause.
+  // 2. Angemeldet, Abruf scheitert auch im zweiten Versuch, genau ein erneuter Login (ohne weiteren Versuch), dann Pause.
   await reset();
   let n = 0;
   window.fetch = async (url) => {
@@ -78,7 +79,7 @@ try {
   try { await c2.weekplan(2026, 41); } catch { /* erwartet */ }
   try { await c2.login("1", "x"); } catch { /* erwartet: Login-Retry scheitert */ }
   try { await c2.weekplan(2026, 41); } catch { /* erwartet: pausiert */ }
-  check("ein Folgeversuch, dann Pause", calls === 3 && !!(await paused()), `Anfragen: ${calls}`);
+  check("ein Folgeversuch, dann Pause", calls === 4 && !!(await paused()), `Anfragen: ${calls}`);
 
   // 403 beim Login: falsches Passwort (IBS5-Layout seit 09.10.2026), keine Pause.
   await reset();

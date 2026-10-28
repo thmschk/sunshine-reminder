@@ -18,9 +18,10 @@ const REQUEST_TIMEOUT_MS = 15000;
  * alles). Deshalb startet in diesem Kontext (Seite oder Service Worker) jede Anfrage
  * frühestens gapMs (+ Zufall) nach der vorigen — über alle Clients, Kinder und
  * Abfragearten hinweg, auch Login und Bestellen. Der Zufall verhindert Gleichtakt
- * mehrerer Geräte hinter derselben IP. Tests setzen die Werte auf 0.
+ * mehrerer Geräte hinter derselben IP. retryMs: Wartezeit vor dem zweiten Versuch
+ * nach einem Netzfehler (IbsClient#send). Tests setzen die Werte auf 0.
  */
-export const pacing = { gapMs: 400, jitterMs: 300 };
+export const pacing = { gapMs: 400, jitterMs: 300, retryMs: 5000 };
 let paceChain = Promise.resolve();
 let lastStart = 0;
 function pace() {
@@ -101,10 +102,14 @@ export class IbsClient {
     this.base = baseUrl.replace(/\/+$/, "");
     this.token = null;
     this.hooks = hooks;
+    /** Ein Netzfehler wurde schon wiederholt, seitdem keine Antwort mehr (#send). */
+    this.netRetried = false;
+    /** Abbruch von außen (Frist des Weckrufs): danach geht keine Anfrage mehr hinaus, laufende brechen ab. */
+    this.signal = null;
   }
 
   /**
-   * Bewusst ohne Wiederholung: die Sperrpolitik des Anbieters ist unbekannt.
+   * Wiederholt wird nur ein Netzfehler, einmal (siehe #send): die Sperrpolitik des Anbieters ist unbekannt.
    *
    * Ohne X-Requested-With, damit der Login eine einfache CORS-Anfrage ohne
    * Preflight bleibt: der Service Worker schickt Preflights ohne Accept-Language,
@@ -127,7 +132,7 @@ export class IbsClient {
     if (obj.errorMessage) throw new IbsAuthError(obj.errorMessage);
     if (!obj.token) throw new IbsError("Login-Antwort enthielt kein Token");
     this.token = obj.token;
-    return new Profile(obj.name1 || "", obj.institutionName1 || "");
+    return new Profile(obj.name1 || "");
   }
 
   weekplan(year, week) {
@@ -216,31 +221,51 @@ export class IbsClient {
       headers.Authorization = `Bearer ${this.token}`;
       headers["X-Requested-With"] = "XMLHttpRequest";
     }
-    // Mit Token schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
-    // nicht, sie zwischenzuspeichern): bei IBS5 kommen zwei Anfragen an.
-    await this.hooks.before?.({ path, weight: auth ? 2 : 1, unmetered: !!this.unmetered });
-    await pace();
     let resp;
-    try {
-      resp = await fetch(this.base + path, {
-        ...init,
-        headers,
-        credentials: "omit",
-        redirect: "manual",
-        cache: "no-store",
-        // Ohne Frist hängt ein Weckruf, bis der Browser den Service Worker beendet — ganz ohne Meldung.
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-    } catch (e) {
-      await this.hooks.failed?.({ path, network: true });
-      const timeout = e?.name === "TimeoutError";
-      const err = new IbsError(timeout
-        ? `Bestellsystem antwortet nicht (${path}, ${REQUEST_TIMEOUT_MS / 1000} s)`
-        : `Keine Verbindung zum Bestellsystem (${path}): ${e.message}`);
-      // Eine Zeitüberschreitung ist kein abgelaufener Token: kein zweiter Login hinterher.
-      err.maybeAuth = auth && !timeout;
-      throw err;
+    for (;;) {
+      this.signal?.throwIfAborted();
+      // Mit Token schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
+      // nicht, sie zwischenzuspeichern): bei IBS5 kommen zwei Anfragen an.
+      await this.hooks.before?.({ path, weight: auth ? 2 : 1, unmetered: !!this.unmetered });
+      await pace();
+      this.signal?.throwIfAborted();
+      try {
+        resp = await fetch(this.base + path, {
+          ...init,
+          headers,
+          credentials: "omit",
+          redirect: "manual",
+          cache: "no-store",
+          // Ohne Frist hängt ein Weckruf, bis der Browser den Service Worker beendet — ganz ohne Meldung.
+          signal: this.signal && AbortSignal.any
+            ? AbortSignal.any([this.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        break;
+      } catch (e) {
+        // Von außen abgebrochen: kein zweiter Versuch, nichts fürs Kontingent vermerken.
+        this.signal?.throwIfAborted();
+        const timeout = e?.name === "TimeoutError";
+        // Ein Netzfehler (etwa gleich nach dem Aufwachen des Geräts) bekommt einen zweiten
+        // Versuch, je Client nur einen bis zur nächsten Antwort: so bleibt ein Weckruf in
+        // seiner Frist (sw.js), und eine Sperre bekommt nicht noch mehr Anfragen.
+        if (!timeout && e?.name !== "AbortError" && !this.netRetried) {
+          this.netRetried = true;
+          await new Promise((r) => setTimeout(r, pacing.retryMs));
+          continue;
+        }
+        await this.hooks.failed?.({ path, network: true });
+        const err = new IbsError(timeout
+          ? `Bestellsystem antwortet nicht (${path}, ${REQUEST_TIMEOUT_MS / 1000} s)`
+          : `Keine Verbindung zum Bestellsystem (${path}): ${e.message}`);
+        err.network = true;
+        // Eine Zeitüberschreitung ist kein abgelaufener Token: kein zweiter Login hinterher.
+        err.maybeAuth = auth && !timeout;
+        throw err;
+      }
     }
+    this.netRetried = false;
+    // Ohne AbortSignal.any (Safari vor 17.4) läuft die Anfrage zu Ende, ihre Antwort zählt dann nicht mehr.
+    this.signal?.throwIfAborted();
     if (!resp.ok && resp.type !== "opaqueredirect") await this.hooks.failed?.({ path, status: resp.status });
     if (resp.type === "opaqueredirect" || resp.status === 401 || resp.status === 403) {
       // Falsche Zugangsdaten beantwortet der Login seit dem IBS5-Layout vom 09.10.2026
@@ -277,8 +302,8 @@ export class CartResponse {
 }
 
 export class Profile {
-  constructor(name, institution) {
-    Object.assign(this, { name, institution });
+  constructor(name) {
+    this.name = name;
   }
   /** IBS5 liefert "Nachname, Vorname"; lieber leer als falsch. */
   get firstName() {
@@ -316,11 +341,13 @@ const ENTITIES = {
   auml: "ä", ouml: "ö", uuml: "ü", Auml: "Ä", Ouml: "Ö", Uuml: "Ü", szlig: "ß",
   eacute: "é", egrave: "è", agrave: "à", ndash: "–", mdash: "—",
 };
+// Ungültige Zeichennummern (0, Surrogate, über U+10FFFF) werden wie im Browser zu „�“, statt den Plan unlesbar zu machen.
+const charOf = (cp) => (cp > 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? String.fromCodePoint(cp) : "\ufffd");
 const decode = (s) =>
   s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
     if (e[0] === "#") {
       const cp = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-      return Number.isFinite(cp) ? String.fromCodePoint(cp) : m;
+      return Number.isFinite(cp) ? charOf(cp) : m;
     }
     return ENTITIES[e] ?? m;
   });
@@ -355,10 +382,13 @@ const OFFER_TAG = /\bid\s*=\s*["']?menu_quantity_|menuplan-checkbox|data-order-s
 /** Die Regel aus dem Seiten-JS von IBS5 (M5/KV-SPERRLOGIK). */
 const KV_NAME = /M5|KALTVERPFLEGUNG|\bKV\b/i;
 
+/** Nur Ziffern; sonst "" wie ein nicht gelesenes Argument (der Tag gilt dann als unverstanden). */
 function customerIdFrom(onclick) {
   for (const { re, index } of ONCLICK) {
     const args = re.exec(onclick)?.[1];
-    if (args) return (args.split(",")[index] || "").trim().replace(/^'+|'+$/g, "");
+    if (!args) continue;
+    const id = (args.split(",")[index] || "").trim().replace(/^'+|'+$/g, "");
+    return /^\d+$/.test(id) ? id : "";
   }
   return "";
 }
@@ -473,6 +503,8 @@ export function parseWeekplan(html) {
 // ---------------------------------------------------------------- Bestellhistorie
 
 const cellText = (s) => decode(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+// Menge „−1“: IBS5 könnte statt „-“ ein typografisches Minus oder einen Strich setzen.
+const quantityText = (s) => s.replace(/[\u2010-\u2015\u2212\ufe63\uff0d]/g, "-").replace(/\s+/g, "").replace(",", ".");
 const isoFromDe = (s) => {
   const d = DE_DATE.exec(s);
   return d ? `${d[3]}-${d[2]}-${d[1]}` : null;
@@ -505,7 +537,7 @@ export function parseOrderHistory(html) {
   const net = new Map();
   for (const r of rows) {
     const date = isoFromDe(r.delivery);
-    const quantity = parseFloat(r.quantity.replace(",", "."));
+    const quantity = parseFloat(quantityText(r.quantity));
     if (!date || !Number.isFinite(quantity)) continue;
     const sep = r.text.indexOf(" - ");
     const line = (sep < 0 ? r.text : r.text.slice(0, sep)).split(" ")[0];
@@ -825,6 +857,8 @@ async function collectByDay(client, dates, fresh, onProgress, signal) {
     out.push(day);
   }
   onProgress?.(out.length, dates.length);
+  // Nach der Frist des Weckrufs schreibt er nichts mehr (client.signal); eine überholte Abfrage der Seite speichert, was sie hat.
+  client.signal?.throwIfAborted();
   if (fetched) await saveDayCache(client);
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -860,6 +894,7 @@ async function collectByHistory(client, dates, fresh, onProgress, signal, peek =
     if (cachedOrdered && !ordered.touched.has(d)) continue;
     if (ordered.has(d) !== cachedOrdered) dropped += cache.delete(d);
   }
+  client.signal?.throwIfAborted();
   if (dropped) await saveDayCache(client);
   const fromHistory = (ds) => ds.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
   const known = fromHistory(dates);

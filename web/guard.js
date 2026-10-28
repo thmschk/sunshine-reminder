@@ -19,7 +19,8 @@ const SILENT_PAUSE_MS = 15 * 60 * 1000;
 const SILENT_REPEAT_MS = 6 * 3600 * 1000;
 const HOUR_CAP = 150;
 
-const hhmm = (t) => new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
+/** Uhrzeit in Berlin, „07:21“. */
+export const hhmm = (t) => new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
   .format(new Date(t));
 
 export class IbsPausedError extends IbsError {

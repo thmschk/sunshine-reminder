@@ -1,14 +1,16 @@
 import {
-  DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, IbsError, OrderState, clampDaysAhead,
+  DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, clampDaysAhead,
   addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, submitCartAsSeen, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
-import { freezeWrites, kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
+import { freezeWrites, kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
+import { b64ToBytes } from "./base64.js";
 import {
   accountKey, accountLabel, dayStore, loadAccounts, loadActive, removeAccount, renameAccount, saveActive, upsertAccount,
 } from "./accounts.js";
 import * as Sdui from "./sdui.js";
 import { IbsBudgetError, IbsPausedError, budgetFor, guardHooks, resume, unmetered } from "./guard.js";
 import { login, withSession } from "./session.js";
+import { friendly } from "./errors.js";
 import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
 import {
   askLater, askWithin, askedLater, holidayOn, loadHolidays, loadMealPref, nextHoliday, openWeeks, rangeText, saveMealPref, skipDates,
@@ -51,7 +53,8 @@ async function loadStore() {
   store.active = (await loadActive()) || null;
   const n = await kvGet("daysAhead");
   store.daysAhead = clampDaysAhead(n);
-  store.push = (await kvGet("push")) || null;
+  // Das Abo-Geheimnis liegt verschlüsselt; ein älterer Klartext-Eintrag wird beim Lesen verschlüsselt (secretGet).
+  store.push = (await secretGet("push").catch(() => undefined)) || null;
   const wd = await kvGet("pushWeekdays");
   if (Array.isArray(wd) && wd.length) store.pushWeekdays = wd;
   store.lastOk = (await kvGet("lastOk")) || null;
@@ -101,26 +104,6 @@ function clientFor(customerNo) {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-/**
- * Fehler für die Anzeige: text in Klartext, detail die technische Meldung (nur zum Aufklappen),
- * net: Netz- oder Sperrfehler, bei dem eine andere Verbindung helfen kann.
- * Die Meldungen selbst entstehen in ibs.js und guard.js.
- */
-function friendly(e) {
-  const raw = String(e?.message ?? e ?? "");
-  if (e instanceof IbsBudgetError) return { text: raw, detail: "" };
-  if (navigator.onLine === false) {
-    return { text: "Sobald das Handy wieder Netz hat, nochmal versuchen.", detail: raw, offline: true };
-  }
-  // Grund der Pause in Klammern („HTTP 429“) nur in den Details.
-  if (e instanceof IbsPausedError) return { text: raw.replace(/ \([^)]*\)(?=\.)/, ""), detail: raw, net: true };
-  if (/^Keine Verbindung zum Bestellsystem/.test(raw)) return { text: "Das Bestellsystem ist gerade nicht erreichbar.", detail: raw, net: true };
-  if (/^Bestellsystem antwortet nicht/.test(raw)) return { text: "Das Bestellsystem antwortet gerade nicht.", detail: raw, net: true };
-  if (e instanceof IbsError && !(e instanceof IbsAuthError) && /HTTP \d|JSON|Token|unerwartete Antwort|geliefert wurde/.test(raw)) {
-    return { text: "Das Bestellsystem hat unerwartet geantwortet.", detail: raw };
-  }
-  return { text: raw, detail: "" };
-}
 const NET_TIP = "Das Bestellsystem sperrt manchmal eine Internetverbindung, über die zu viele Anfragen kamen. "
   + "Über mobile Daten statt WLAN (oder umgekehrt) klappt es dann oft.";
 /** Technische Meldung eingeklappt; leer, wenn es keine gibt. */
@@ -631,13 +614,15 @@ function when(ms) {
 
 /** Letzte erfolgreiche Prüfung, für die Fehlerkarte. */
 function lastOkLine() {
-  const at = Math.max(store.lastOk?.at || 0, store.lastPushOk?.at || 0);
+  // lastPushOk.ok === false: Meldung kam, aber ein Kind war nicht prüfbar.
+  const at = Math.max(store.lastOk?.at || 0, store.lastPushOk?.ok !== false ? store.lastPushOk?.at || 0 : 0);
   return at ? `<p class="small muted center-text">Letzte erfolgreiche Prüfung: ${esc(when(at))}</p>` : "";
 }
 
 /**
- * Hat die Erinnerung seit mindestens vier Tagen (bei seltenen Weckrufen länger) nicht
- * mehr erfolgreich geprüft, obwohl sie eingeschaltet ist? Schweigen ist der gefährliche Zustand.
+ * Kam seit mindestens vier Tagen (bei seltenen Weckrufen länger) keine Erinnerung mehr an,
+ * obwohl sie eingeschaltet ist? Schweigen ist der gefährliche Zustand. Dass ein Kind nicht
+ * prüfbar war, sagt die Meldung selbst; das zählt hier nicht als Schweigen.
  */
 function pushStale() {
   if (!store.push) return "";
@@ -646,7 +631,7 @@ function pushStale() {
   const days = Math.max(4, longestGap(store.pushWeekdays) + 1);
   if (!since || Date.now() - since < days * 86400000) return "";
   return `<div class="card hero bad"><h2>Erinnerung schweigt</h2>
-    <p>Die Erinnerung hat zuletzt ${esc(since === store.lastPushOk?.at ? when(since) : "noch nie")} erfolgreich geprüft.
+    <p>${since === store.lastPushOk?.at ? `Die letzte Erinnerung kam am ${esc(when(since))}.` : "Bisher kam keine Erinnerung an."}
       Probier in den Einstellungen „Jetzt testen“, sonst schalte sie dort aus und wieder ein.</p></div>`;
 }
 
@@ -1355,7 +1340,7 @@ function showEvents() {
       toSettings.onclick = () => {
         changed = false; // die Einstellungen ersetzen die Startseite ohnehin
         close();
-        showSettings();
+        showSettings("", { open: "push" });
       };
     }
     dlg.querySelector("#f-event").onsubmit = async (ev) => {
@@ -1430,37 +1415,69 @@ function accountRows(creds) {
     hint: multi() ? "" : "für Geschwister mit eigener Kundennummer" });
 }
 
-/** Einstellungen im Android-Stil: Bereiche ohne Karten, Werte rechts, Ändern per Antippen. */
-function showSettings(message = "") {
+// Aufgeklappte Bereiche der Einstellungen (push, morning, ferien, sdui, konto); gilt, bis die Seite neu lädt.
+const openGroups = new Set();
+const CARET = '<svg class="g-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>';
+
+/** Einklappbarer Bereich: der Titel ist der Knopf, eingeklappt steht rechts die Kurzfassung (groupSummary). */
+function groupHtml(key, title, inner = "") {
+  const open = openGroups.has(key);
+  return `<h3 class="group-title"><button type="button" class="group-head" data-group="${key}" aria-expanded="${open}" aria-controls="${key}-box">
+      <span class="g-name">${esc(title)}</span><span class="g-sum" id="${key}-sum"></span>${CARET}</button></h3>
+    <div class="group" id="${key}-box"${open ? "" : " hidden"}>${inner}</div>`;
+}
+
+/** Bereich auf- oder zuklappen; der Zustand übersteht neues Zeichnen der Einstellungen. */
+function setGroupOpen(key, open) {
+  if (open) openGroups.add(key);
+  else openGroups.delete(key);
+  const head = $app.querySelector(`.group-head[data-group="${key}"]`);
+  const box = document.getElementById(`${key}-box`);
+  if (!head || !box) return;
+  head.setAttribute("aria-expanded", open);
+  box.hidden = !open;
+}
+
+function groupSummary(key, text) {
+  const el = document.getElementById(`${key}-sum`);
+  if (el) el.textContent = text;
+}
+
+/**
+ * Einstellungen im Android-Stil: Bereiche ohne Karten, Werte rechts, Ändern per Antippen.
+ * Bereiche sind eingeklappt; offen sind die zuletzt geöffneten, die in open genannten und
+ * der mit einer Meldung (message gehört zu den Kindern).
+ */
+function showSettings(message = "", { open = [] } = {}) {
   nextView();
   const creds = currentCreds();
   chrome(false);
   $header.hidden = true;
+  for (const key of [open].flat()) openGroups.add(key);
+  if (message) openGroups.add("konto");
+  // Der Betreiber-Schlüssel steht unter „Erinnerung“.
+  if (location.hash === "#betreiber") openGroups.add("push");
   $app.innerHTML = `
     <div class="s-head"><button id="b-back" class="icon" aria-label="Zurück" title="Zurück">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
     </button><h2>Einstellungen</h2></div>
-
-    <div class="group-title">Erinnerung</div>
-    <div class="group" id="push-box"></div>
-
-    <div class="group-title">Ferien (Berlin)</div>
-    <div class="group" id="ferien-box"></div>
-
-    <div class="group-title">Stundenplan (Sdui)</div>
-    <div class="group" id="sdui-box"></div>
-
-    <div class="group-title">${multi() ? "Kinder" : "Konto"}</div>
-    <div class="group">
+    ${groupHtml("push", "Erinnerung")}
+    ${groupHtml("morning", "Morgenmeldung")}
+    ${groupHtml("ferien", "Ferien (Berlin)")}
+    ${groupHtml("sdui", "Stundenplan (Sdui)")}
+    ${groupHtml("konto", multi() ? "Kinder" : "Konto", `
       ${message ? `<p class="small error group-pad">${esc(message)}</p>` : ""}
       ${accountRows(creds)}
-      ${srow("logout", "Abmelden und alles löschen", { tag: "button", id: "b-logout", cls: "danger-row" })}
-    </div>
+      ${srow("logout", "Abmelden und alles löschen", { tag: "button", id: "b-logout", cls: "danger-row" })}`)}
 
     <p class="foot-note">Testversion · <a href="https://github.com/thmschk/sunshine-reminder#architektur" target="_blank" rel="noopener">So funktioniert's</a> · <a href="datenschutz.html">Datenschutz</a>
       · <button id="b-about" class="linklike">Über die App</button></p>`;
   document.getElementById("b-back").onclick = () => showHome();
   document.getElementById("b-about").onclick = showAbout;
+  for (const head of $app.querySelectorAll(".group-head")) {
+    head.onclick = () => setGroupOpen(head.dataset.group, head.getAttribute("aria-expanded") !== "true");
+  }
+  groupSummary("konto", store.accounts.length ? store.accounts.map(accountLabel).join(", ") : creds ? `Kd. ${creds.customerNo}` : "");
   wirePushBox();
   wireFerienBox();
   wireSduiBox();
@@ -1541,6 +1558,7 @@ async function wireFerienBox() {
   const known = ferien.until ? `Termine bekannt bis ${De.long(ferien.until)}.` : "Termine gerade nicht verfügbar.";
   if (!h) {
     box.innerHTML = srow("school", "Keine Ferien bekannt", { hint: known });
+    groupSummary("ferien", "keine bekannt");
     return;
   }
   const weeks = openWeeks(ferien, h, today);
@@ -1554,6 +1572,7 @@ async function wireFerienBox() {
     tag: "button", id: `ferien-${i}`, value: state(prefs[i]),
     hint: i < kids.length - 1 ? "" : `Gefragt wird je Ferienwoche, vor allen Ferien neu. Ohne Antwort wird erinnert. ${known}`,
   })).join("");
+  groupSummary("ferien", prefs.some((p) => unanswered(ferien, h, p, today).length) ? `${h.name}: noch offen` : h.name);
   kids.forEach((a, i) => {
     document.getElementById(`ferien-${i}`).onclick = () => showFerien(a, h, wireFerienBox, { fromSettings: true });
   });
@@ -1571,6 +1590,8 @@ async function wireSduiBox(message = "") {
   const cfg = await Sdui.sduiConfig();
   if (!box.isConnected) return; // inzwischen eine andere Ansicht
   const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
+  if (message) setGroupOpen("sdui", true);
+  groupSummary("sdui", cfg ? cfg.childName || "verbunden" : "nicht eingerichtet");
   if (!cfg) {
     box.innerHTML = `${msg}
       ${srow("school", "Stundenplan einrichten", { tag: "button", id: "b-sdui-setup",
@@ -1614,6 +1635,7 @@ async function wireSduiBox(message = "") {
 function sduiSetupForm(message = "") {
   const box = document.getElementById("sdui-box");
   if (!box) return; // Einstellungen inzwischen verlassen
+  if (message) setGroupOpen("sdui", true);
   box.innerHTML = `<div class="group-pad">
     ${message ? `<p class="small error">${esc(message)}</p>` : ""}
     <p class="small muted u-m0">${SDUI_NOTE}</p>
@@ -1718,44 +1740,66 @@ function pushBoxHtml(message = "") {
       data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}"${dis}>${n}</button>`).join("")}</div>
     ${daysAheadRow()}
     ${on ? srow("play", "Jetzt testen", { tag: "button", id: "b-push-test" }) : ""}
-    ${on ? morningRows() : ""}
     ${admin}`;
 }
 
 /** Morgenmeldung „heute gibt's …“: hängt am Abo der Erinnerung, gleiche Tage. */
-function morningRows() {
+function morningBoxHtml(message = "") {
+  const msg = message ? `<p class="small error group-pad">${esc(message)}</p>` : "";
+  if (!pushSupported || !store.push) {
+    return srow("sun", "Essen von heute", { value: pushSupported ? "aus" : "nicht möglich",
+      hint: pushSupported ? "Geht nur mit eingeschalteter Erinnerung." : "" });
+  }
   const m = store.push.morning;
-  return `${srow("sun", "Morgens: Essen von heute", { rightHtml: toggle("morning-switch", !!m, "Morgenmeldung"),
-      hint: "an denselben Tagen wie die Erinnerung" })}
-    ${m ? srow("clock", "Uhrzeit morgens", { hint: "Meldung kommt bis zu 10 min später",
+  return `${msg}
+    ${srow("sun", "Essen von heute", { rightHtml: toggle("morning-switch", !!m, "Morgenmeldung"),
+      hint: "morgens, an denselben Tagen wie die Erinnerung" })}
+    ${m ? srow("clock", "Uhrzeit", { hint: "Meldung kommt bis zu 10 min später",
       rightHtml: `<input id="morning-time" class="time-value" type="time" value="${esc(m)}" step="300" aria-label="Uhrzeit morgens">` }) : ""}
     ${m ? srow("play", "Morgenmeldung testen", { tag: "button", id: "b-morning-test" }) : ""}`;
 }
 
-function wirePushBox(message = "") {
+/** Kurzfassungen für die eingeklappten Titel, z. B. „werktags 17:00“ oder „aus“. */
+function pushSummary() {
+  if (!pushSupported) return "nicht möglich";
+  if (!store.push) return "aus";
+  return `${store.pushWeekdays.length === WEEKDAYS.length ? "werktags" : weekdaysText(store.pushWeekdays)} ${store.push.time}`;
+}
+function morningSummary() {
+  if (!pushSupported) return "nicht möglich";
+  return store.push?.morning || "aus";
+}
+
+/** Zeichnet Erinnerung und Morgenmeldung neu; message erscheint im Bereich at (push oder morning) und klappt ihn auf. */
+function wirePushBox(message = "", at = "push") {
   const box = document.getElementById("push-box");
   if (!box) return;
-  box.innerHTML = pushBoxHtml(message);
+  box.innerHTML = pushBoxHtml(at === "push" ? message : "");
+  const mbox = document.getElementById("morning-box");
+  if (mbox) mbox.innerHTML = morningBoxHtml(at === "morning" ? message : "");
+  if (message) setGroupOpen(at, true);
+  groupSummary("push", pushSummary());
+  groupSummary("morning", morningSummary());
   wireDaysAhead();
   const sw = document.getElementById("push-switch");
   const test = document.getElementById("b-push-test");
   const time = document.getElementById("push-time");
-  const guard = (fn) => async () => {
+  const guard = (fn, where = "push") => async () => {
     try {
       await fn();
       wirePushBox();
     } catch (e) {
-      wirePushBox(e.message);
+      wirePushBox(e.message, where);
     }
   };
   if (sw) sw.onclick = guard(() => (store.push ? pushDisable() : pushEnable(time?.value || DEFAULT_PUSH_TIME)));
   if (test) test.onclick = () => runPushTest(test);
   const msw = document.getElementById("morning-switch");
-  if (msw) msw.onclick = guard(() => pushSetMorning(store.push.morning ? null : DEFAULT_MORNING_TIME));
+  if (msw) msw.onclick = guard(() => pushSetMorning(store.push.morning ? null : DEFAULT_MORNING_TIME), "morning");
   const mtest = document.getElementById("b-morning-test");
   if (mtest) mtest.onclick = () => runPushTest(mtest, "today");
   const mtime = document.getElementById("morning-time");
-  if (mtime) mtime.onchange = guard(() => pushSetMorning(mtime.value));
+  if (mtime) mtime.onchange = guard(() => pushSetMorning(mtime.value), "morning");
   const adm = document.getElementById("b-push-admin");
   if (adm) adm.onclick = guard(async () => {
     const p = await currentPush();
@@ -1784,11 +1828,6 @@ function wirePushBox(message = "") {
     });
   }
 }
-
-const b64ToBytes = (b64) => {
-  const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (b64.length % 4)) % 4));
-  return Uint8Array.from(s, (c) => c.charCodeAt(0));
-};
 
 async function api(method, path, body, secret, extra = {}) {
   const headers = { "Content-Type": "application/json", ...extra };
@@ -1834,12 +1873,12 @@ async function pushEnable(time) {
     subscription: sub.toJSON(), time, weekdays: store.pushWeekdays, tz: "Europe/Berlin",
   });
   store.push = { id, secret, time, created: Date.now() };
-  await kvSet("push", store.push);
+  await secretSet("push", store.push);
 }
 
 /** Abo frisch aus dem Speicher: der Service Worker legt es bei pushsubscriptionchange womöglich neu an. */
 async function currentPush() {
-  store.push = (await kvGet("push")) ?? store.push;
+  store.push = (await secretGet("push").catch(() => undefined)) ?? store.push;
   return store.push;
 }
 
@@ -1857,7 +1896,7 @@ async function pushSetMorning(morning) {
   const p = await currentPush();
   await api("PUT", `/subscriptions/${p.id}`, { morning_time: morning }, p.secret);
   store.push = { ...p, morning };
-  await kvSet("push", store.push);
+  await secretSet("push", store.push);
 }
 
 async function pushSetTime(time) {
@@ -1865,7 +1904,7 @@ async function pushSetTime(time) {
   const p = await currentPush();
   await api("PUT", `/subscriptions/${p.id}`, { time }, p.secret);
   store.push = { ...p, time };
-  await kvSet("push", store.push);
+  await secretSet("push", store.push);
 }
 
 /**

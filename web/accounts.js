@@ -76,7 +76,7 @@ export const loadActive = () => kvGet(ACTIVE);
 export const saveActive = (customerNo) => kvSet(ACTIVE, customerNo).catch(() => {});
 
 /** Vorname für Reiter und Meldungen; ohne bekannten Namen die Kundennummer. */
-export const accountLabel = (a) => new Profile(a?.name || "", "").firstName || `Kd. ${a?.customerNo || ""}`;
+export const accountLabel = (a) => new Profile(a?.name || "").firstName || `Kd. ${a?.customerNo || ""}`;
 
 /**
  * Tages-Zwischenspeicher (siehe dayCache in ibs.js) je Kundennummer. Gelesen

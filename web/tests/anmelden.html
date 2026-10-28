@@ -14,7 +14,7 @@ const P = (m) => lines.push(m);
 window.addEventListener("error", (e) => P("FAIL ERR " + e.message + " " + e.filename + ":" + e.lineno));
 window.addEventListener("unhandledrejection", (e) => P("FAIL REJ " + (e.reason?.stack || e.reason)));
 window.setTimeout = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => fn(); c.port2.postMessage(0); return 0; };
-const { kvClear, kvGet } = await import("../idb.js");
+const { kvClear, kvGet, secretGet } = await import("../idb.js");
 await kvClear();
 
 let asked = 0;
@@ -52,11 +52,12 @@ document.getElementById("pw").value = "x";
 document.querySelector("#f-login button[type=submit]").click();
 await until(() => document.querySelector(".days") && !document.getElementById("refresh"));
 
-const push = await kvGet("push");
+const push = await secretGet("push");
 const notice = document.querySelector("#app p.error")?.textContent || "";
 if (mode === "granted") {
   check(asked >= 1, "Erlaubnis erfragt");
   check(push?.id === "s1" && push.time === "17:00", "Erinnerung an, 17:00");
+  check((await kvGet("push"))?.enc === 1, "Abo-Geheimnis verschlüsselt gespeichert");
   check(posted[0]?.time === "17:00" && JSON.stringify(posted[0]?.weekdays) === "[1,2,3,4,5]", "Server: 17:00, Mo–Fr");
   check(!notice, `kein Hinweis: ${notice} (gefragt: ${asked})`);
 } else if (mode === "denied") {

@@ -47,8 +47,8 @@
     --on-error: #690005;
     --error-container: #8C1D18;
     --on-error-container: #FFDAD6;
-    --ok: #8FD694;
-    --ok-container: #1F3A21;
+    --ok: #B8CC94;
+    --ok-container: #2F3424;
     --open-text: #EBC54D;
     --event-text: #EBC54D;
     --heart: #E79BB8;
@@ -89,7 +89,8 @@ header {
   width: 100%;
   max-width: 640px;
   margin: 0 auto;
-  padding: 8px 8px 0 16px;
+  /* Querformat mit Notch: links und rechts mindestens der sichere Bereich. */
+  padding: 8px max(8px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 }
 /* App-Name links, die Symbole rechts daneben. */
 header h1 { font-size: 1.125rem; font-weight: 600; margin: 0; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -110,7 +111,8 @@ header h1 { font-size: 1.125rem; font-weight: 600; margin: 0; flex: 1; min-width
 .icon svg { width: 22px; height: 22px; fill: currentColor; }
 .icon:active { background: var(--surface-variant); }
 
-main { width: 100%; max-width: 640px; margin: 0 auto; padding: 0 12px 16px; flex: 1; }
+main { width: 100%; max-width: 640px; margin: 0 auto; flex: 1;
+  padding: 0 max(12px, env(safe-area-inset-right)) 16px max(12px, env(safe-area-inset-left)); }
 footer {
   display: flex;
   align-items: center;
@@ -118,7 +120,7 @@ footer {
   width: 100%;
   max-width: 640px;
   margin: 0 auto;
-  padding: 4px 16px 10px;
+  padding: 4px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
   font-size: .8125rem;
   color: var(--on-surface-variant);
 }
@@ -183,8 +185,7 @@ button:disabled { opacity: .45; cursor: default; }
 .hero.open p { display: none; }
 /* Gelber Knopf auf hellgelber Karte hebt sich nicht ab (1,3:1): hier in --secondary. */
 .hero.open button.block { grid-column: 2; grid-row: 1 / span 2; margin: 0; background: var(--secondary); color: var(--on-secondary); }
-/* Einleitung beim ersten Start: keine Alarmkarte, alle Absätze sichtbar. */
-.intro { border-left: 4px solid var(--primary); }
+/* Einleitung beim ersten Start: schlichte Karte, alle Absätze sichtbar. */
 .intro h2 { font-size: 1.15rem; font-weight: 600; margin: 0 0 2px; line-height: 1.25; }
 .intro p { margin: 8px 0; font-size: .92rem; }
 .intro p.small { font-size: .85rem; }
@@ -218,8 +219,8 @@ button:disabled { opacity: .45; cursor: default; }
 .days .wd, .days .dom, .days .dish, .days .sub { display: block; }
 .days li + li { border-top: 1px solid var(--surface-variant); }
 .day-btn:active { background: var(--bg); }
-/* Heute: neutral abgehoben (Randleiste, fetter Wochentag), nicht antippbar; Gelb heißt „offen“. */
-.days.today { box-shadow: inset 4px 0 0 var(--text); }
+/* Heute: neutral abgehoben (Rahmen, fetter Wochentag), nicht antippbar; Gelb heißt „offen“. */
+.days.today { box-shadow: inset 0 0 0 1.5px var(--text); }
 .days.today .wd { color: var(--text); font-weight: 700; }
 /* Eigene Termine in der Statuszeile: dunkles Gelb, reines Gelb wäre auf Weiß nicht lesbar. */
 .days .sub .ev { color: var(--event-text); font-weight: 600; }
@@ -306,7 +307,8 @@ fieldset.day-order { border: 0; margin: 8px 0; padding: 10px 12px; }
 #f-order { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
 .order-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-  padding: 10px max(12px, calc((100% - 616px) / 2)) calc(10px + env(safe-area-inset-bottom));
+  padding: 10px max(12px, calc((100% - 616px) / 2), env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom))
+    max(12px, calc((100% - 616px) / 2), env(safe-area-inset-left));
   background: var(--bg); box-shadow: 0 -1px 0 var(--surface-variant), 0 -4px 12px rgba(0, 0, 0, .08);
 }
 dialog.dialog {
@@ -458,9 +460,20 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 
 /* Einstellungen im Android-Stil: keine Karten, volle Breite, Werte rechts */
 .s-head { margin: 8px 0 2px -8px; }
-.group-title { text-transform: none; letter-spacing: 0; font-size: .85rem; font-weight: 500; margin: 14px 4px 2px; }
-.group { background: transparent; border-radius: 0; overflow: visible; margin: 0 -16px; }
-.group + .group-title { border-top: 1px solid var(--surface-variant); margin-top: 10px; padding-top: 14px; margin-left: -16px; margin-right: -16px; padding-left: 20px; }
+/* Bereiche einklappbar: der Titel ist ein Knopf über die ganze Breite, eingeklappt rechts die Kurzfassung. */
+.group-title { text-transform: none; letter-spacing: 0; font-size: inherit; font-weight: inherit; margin: 0 -12px; }
+/* Bis an den Rand von main (12 px), nicht darüber: sonst ließe sich die Seite seitlich verschieben. */
+.group { background: transparent; border-radius: 0; overflow: visible; margin: 0 -12px; padding-bottom: 8px; }
+.group + .group-title { border-top: 1px solid var(--surface-variant); }
+.group-head { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 12px 0 16px;
+  background: transparent; color: var(--secondary); border-radius: 0; font-size: .95rem; font-weight: 500; text-align: left; }
+.group-head:active { background: var(--surface-variant); }
+.g-name { flex: none; }
+.g-sum { flex: 1; min-width: 0; text-align: right; color: var(--on-surface-variant); font-size: .88rem; font-weight: normal;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-head[aria-expanded="true"] .g-sum { visibility: hidden; }
+.g-caret { width: 24px; height: 24px; flex: none; fill: var(--on-surface-variant); transition: transform .15s; }
+.group-head[aria-expanded="true"] .g-caret { transform: rotate(180deg); }
 .group > .srow + .srow, .group > .srow-hint + .srow, .group > .srow + .srow-details, .group > .srow-details + .srow,
 .group > .srow-edit + .srow, .group > .srow-info + .srow { border-top: 0; }
 .srow { padding: 0 16px; min-height: 44px; gap: 16px; }

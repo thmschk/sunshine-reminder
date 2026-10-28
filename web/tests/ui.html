@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -40,7 +40,7 @@ if (!mode) {
   window.addEventListener("unhandledrejection", (e) => P("FAIL REJ " + (e.reason?.stack || e.reason)));
   window.setTimeout = (fn) => { const c = new MessageChannel(); c.port1.onmessage = () => fn(); c.port2.postMessage(0); return 0; };
   window.confirm = () => true;
-  const { kvClear, kvGet, kvSet, secretSet } = await import("../idb.js");
+  const { kvClear, kvGet, kvSet, secretGet, secretSet } = await import("../idb.js");
   const { saveAccounts } = await import("../accounts.js");
   await kvClear();
   const until = (cond) => new Promise((r) => { let n = 0; (function tick() { if (cond() || ++n > 200000) r(); else window.setTimeout(tick); })(); });
@@ -134,7 +134,7 @@ if (!mode) {
     check(asked === 1, `Erlaubnis beim Abschicken erfragt (${asked})`);
     document.getElementById("b-resume").click();
     await until(() => document.querySelector(".days") && homeLoaded());
-    const push = await kvGet("push");
+    const push = await secretGet("push");
     check(asked >= 2, `Erlaubnis beim Wiederholen erneut im Klick erfragt (${asked})`);
     check(push?.id === "s1" && posted.length === 1, "Erinnerung nach dem Wiederholen eingeschaltet");
     check(homeLoaded(), "Übersicht geladen");
@@ -167,13 +167,16 @@ if (!mode) {
     check(document.querySelectorAll("[data-remove]").length === 2, "beide Kinder weiter da");
   } else if (mode === "weekdays") {
     // Während der Server die Tage speichert, nimmt die Leiste keinen Tipp an; bei Fehler gilt der alte Stand.
+    // Das Abo liegt noch im Klartext wie bei älteren Installationen: es wird übernommen und verschlüsselt.
     await account();
     await kvSet("push", { id: "s1", secret: "z", time: "17:00", created: Date.now() });
     const puts = [];
+    const auths = [];
     let gate = null;
     hooks.api = async (url, init) => {
       if (init.method !== "PUT") return null;
       puts.push(JSON.parse(init.body));
+      auths.push(init.headers?.Authorization);
       gate = held();
       return gate.p;
     };
@@ -200,6 +203,10 @@ if (!mode) {
     await until(() => on() === "2,3,4,5");
     check(on() === "2,3,4,5" && JSON.stringify(puts.at(-1).weekdays) === "[2,3,4,5]", `Anzeige und Server gleich (${on()})`);
     check(JSON.stringify(await kvGet("pushWeekdays")) === "[2,3,4,5]", "Tage gespeichert");
+    const rec = await kvGet("push");
+    check(rec?.enc === 1 && !JSON.stringify(rec).includes('"z"') && (await secretGet("push"))?.secret === "z",
+      "altes Klartext-Abo übernommen und verschlüsselt");
+    check(auths.length && auths.every((a) => a === "Bearer z"), `Server-Anfragen mit dem übernommenen Geheimnis (${auths.length})`);
   } else if (mode === "sduiback") {
     // „Zurück“, während Sdui die Anmeldung prüft: kein Fehler, wenn die Antwort danach kommt.
     await account();
@@ -499,6 +506,89 @@ if (!mode) {
     check(posted.length === 1, "Erinnerung eingeschaltet über die Zeile");
     check(same ? !unsubscribed && !subscribed : unsubscribed === 1 && JSON.stringify(subscribed) === "[0,0,0]",
       same ? "passendes Abo übernommen" : `altes Abo abgemeldet, neu mit Server-Schlüssel (${subscribed})`);
+  } else if (mode === "groups") {
+    // Einstellungen: Bereiche eingeklappt mit Kurzfassung, Zustand übersteht neues Zeichnen, Sprungziele offen.
+    await account();
+    const puts = [];
+    hooks.api = async (url, init) => {
+      if (init.method !== "PUT") return null;
+      puts.push(JSON.parse(init.body));
+      return hooks.failPut ? new Response("", { status: 500 }) : new Response("{}");
+    };
+    await import("../app.js");
+    await until(homeLoaded);
+    const heads = () => [...document.querySelectorAll(".group-head")];
+    const head = (k) => $(`.group-head[data-group="${k}"]`);
+    const isOpen = (k) => head(k)?.getAttribute("aria-expanded") === "true" && !document.getElementById(`${k}-box`).hidden;
+    const openOnes = () => heads().filter((h) => h.getAttribute("aria-expanded") === "true").map((h) => h.dataset.group).join();
+    const sum = (k) => document.getElementById(`${k}-sum`)?.textContent || "";
+    const settings = async () => {
+      document.getElementById("btn-settings").click();
+      await until(() => $("#push-switch") && /./.test(sum("sdui")) && /./.test(sum("ferien")));
+    };
+
+    // Aus dem Termindialog: „Erinnerung einschalten“ öffnet genau diesen Bereich.
+    document.getElementById("btn-add").click();
+    await until(() => $("#ev-settings"));
+    $("#ev-settings").click();
+    await until(() => $("#push-switch"));
+    check(openOnes() === "push", `„Erinnerung einschalten“ öffnet nur „Erinnerung“ (${openOnes()})`);
+    head("push").click();
+    check(openOnes() === "", "zugeklappt");
+
+    $("#b-back").click();
+    await until(homeLoaded);
+    await settings();
+    check(heads().map((h) => h.dataset.group).join() === "push,morning,ferien,sdui,konto", `Bereiche: ${heads().map((h) => h.dataset.group)}`);
+    check(heads().every((h) => h.tagName === "BUTTON" && h.parentElement.tagName === "H3" && h.getAttribute("aria-expanded") === "false"
+      && document.getElementById(h.getAttribute("aria-controls"))?.hidden), "alle eingeklappt, Knopf mit aria-expanded/aria-controls");
+    check(heads().every((h) => h.getBoundingClientRect().height >= 44 && h.querySelector("svg[aria-hidden=true]")),
+      `Titel ≥ 44 px mit Pfeil (${heads().map((h) => Math.round(h.getBoundingClientRect().height))})`);
+    check(sum("push") === "aus" && sum("morning") === "aus" && sum("sdui") === "nicht eingerichtet" && /^(Mia|Kd\. 1000)$/.test(sum("konto")),
+      `Kurzfassungen: ${heads().map((h) => h.textContent.replace(/\s+/g, " ").trim()).join(" | ")}`);
+
+    head("push").click();
+    check(isOpen("push") && openOnes() === "push", "Antippen klappt auf");
+    check(getComputedStyle($("#push-sum")).visibility === "hidden", "aufgeklappt keine Kurzfassung");
+    $("#push-switch").click();
+    await until(() => $("#b-push-test"));
+    check(isOpen("push"), "nach dem Einschalten (neu gezeichnet) bleibt der Bereich offen");
+    check(sum("push") === "werktags 17:00", `Kurzfassung: ${sum("push")}`);
+    $('.wd-btn[data-wd="3"]').click();
+    await until(() => sum("push") === "Mo, Di, Do, Fr 17:00");
+    check(sum("push") === "Mo, Di, Do, Fr 17:00" && isOpen("push"), `Tage in der Kurzfassung: ${sum("push")}`);
+
+    head("morning").click();
+    $("#morning-switch").click();
+    await until(() => $("#b-morning-test"));
+    check(isOpen("morning") && isOpen("push") && sum("morning") === "07:00", `Morgenmeldung eigener Bereich, an: ${sum("morning")}`);
+    check(!document.getElementById("push-box").querySelector("#morning-switch"), "Morgenmeldung nicht mehr unter „Erinnerung“");
+
+    // Ganz neu gezeichnet (Zurück, wieder Einstellungen): offen bleibt offen, zu bleibt zu.
+    $("#b-back").click();
+    await until(homeLoaded);
+    await settings();
+    check(openOnes() === "push,morning", `nach Zurück und wieder Einstellungen offen: ${openOnes()}`);
+
+    // Fehler in einem zugeklappten Bereich: er klappt auf und zeigt die Meldung.
+    head("morning").click();
+    check(!isOpen("morning"), "Morgenmeldung zugeklappt");
+    hooks.failPut = true;
+    $("#morning-switch").click();
+    await until(() => /HTTP 500/.test(document.getElementById("morning-box").textContent));
+    check(isOpen("morning") && /HTTP 500/.test(document.getElementById("morning-box").querySelector(".error")?.textContent || ""),
+      "Fehler öffnet den Bereich mit der Meldung");
+    check(!/HTTP 500/.test(document.getElementById("push-box").textContent), "Meldung nicht unter „Erinnerung“");
+    hooks.failPut = false;
+
+    // Über …/#betreiber ist „Erinnerung“ offen (dort steht der Schlüssel).
+    head("push").click();
+    location.hash = "#betreiber";
+    $("#b-back").click();
+    await until(homeLoaded);
+    await settings();
+    check(isOpen("push") && $("#b-push-admin"), "#betreiber öffnet „Erinnerung“");
+    history.replaceState(null, "", location.pathname + location.search);
   }
   $out.textContent = summary(lines);
 }

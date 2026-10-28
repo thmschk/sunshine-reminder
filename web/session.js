@@ -28,8 +28,7 @@ export async function login(client, creds, persist) {
   client.profile = await client.login(creds.customerNo, creds.password);
   client.customerNo = creds.customerNo;
   if (persist) {
-    const { name, institution } = client.profile;
-    await secretSet(keyOf(creds.customerNo), { customerNo: creds.customerNo, token: client.token, name, institution }).catch(() => {});
+    await secretSet(keyOf(creds.customerNo), { customerNo: creds.customerNo, token: client.token, name: client.profile.name }).catch(() => {});
   }
 }
 
@@ -42,7 +41,7 @@ export async function withSession(client, creds, fn, { persist = true } = {}) {
     const saved = persist ? await loadSaved(creds.customerNo) : undefined;
     if (saved?.token && saved.customerNo === creds.customerNo) {
       client.token = saved.token;
-      client.profile = new Profile(saved.name || "", saved.institution || "");
+      client.profile = new Profile(saved.name || "");
       client.customerNo = creds.customerNo;
     }
   }

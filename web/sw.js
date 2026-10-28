@@ -6,20 +6,22 @@ import {
   AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, OrderState, addDays, collect, evaluate, lastCall, nextWeekday,
   targetDates, todayBerlin,
 } from "./ibs.js";
-import { KeyUnreadableError, kvGet, kvSet } from "./idb.js";
+import { KeyUnreadableError, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
+import { b64ToBytes } from "./base64.js";
 import { dayStore, loadAccounts, renameAccount } from "./accounts.js";
 import * as Sdui from "./sdui.js";
-import { IbsBudgetError, IbsPausedError, guardHooks } from "./guard.js";
+import { guardHooks } from "./guard.js";
+import { pushFailure } from "./errors.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v66";
+const VERSION = "v68";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
 // Jedes Modul, das app.js oder sw.js per import erreicht, muss hier stehen (Test in tests/test.html).
-export const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "ferien.json"];
+export const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "errors.js", "base64.js", "ferien.json"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -85,14 +87,14 @@ self.addEventListener("push", (ev) => {
   }
   if (kind === "today" || kind === "today-test") {
     ev.waitUntil((async () => {
-      await withDeadline(() => todayAndNotify(), TODAY_TAG);
+      await withDeadline((signal) => todayAndNotify(signal), TODAY_TAG);
       if (kind === "today-test") await confirmTest(TODAY_TAG);
     })());
     return;
   }
   // Essen zuerst: Android dämpft eine zweite Meldung kurz danach, die wichtigere kommt also vorn.
   ev.waitUntil((async () => {
-    await withDeadline(() => checkAndNotify(kind === "test"), "hs-check");
+    await withDeadline((signal) => checkAndNotify(kind === "test", signal), "hs-check");
     if (kind === "test") await confirmTest("hs-check");
     await subjectReminder(kind === "test");
   })());
@@ -100,17 +102,23 @@ self.addEventListener("push", (ev) => {
 
 const TODAY_TAG = "hs-today";
 
-/** Was auch immer schiefgeht, eine Meldung muss erscheinen — sonst kündigt iOS das Abo. */
-async function withDeadline(fn, tag) {
+/**
+ * Was auch immer schiefgeht, eine Meldung muss erscheinen — sonst kündigt iOS das Abo.
+ * fn(signal) bekommt den Abbruch: nach der Frist (oder einem Fehler) geht keine Anfrage
+ * mehr hinaus, nichts wird mehr gespeichert, und keine spätere Meldung ersetzt die Ersatzmeldung.
+ */
+export async function withDeadline(fn, tag, { ms = PUSH_DEADLINE_MS } = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new Error("Die Prüfung dauerte zu lange.")), ms);
+  const deadline = new Promise((_, reject) => ctl.signal.addEventListener("abort", () => reject(ctl.signal.reason), { once: true }));
   try {
-    let timer;
-    const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("Die Prüfung dauerte zu lange.")), PUSH_DEADLINE_MS);
-    });
-    await Promise.race([fn(), deadline]).finally(() => clearTimeout(timer));
+    await Promise.race([fn(ctl.signal), deadline]);
   } catch (e) {
+    ctl.abort(e);
     const n = failNotice(e);
     await notify(n.title, n.body, { silent: n.silent, url: "./", tag }).catch(() => {});
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -170,11 +178,33 @@ async function subjectReminder(isTest) {
 }
 
 
-/** Überschrift der Meldung, wenn die Prüfung eines Kontos scheitert. */
-function failTitle(e, client) {
-  return e instanceof IbsBudgetError ? "Die App macht eine Pause"
-    : e instanceof IbsPausedError ? "Bestellsystem gesperrt oder nicht erreichbar"
-    : e instanceof IbsAuthError && !client.token ? "Anmeldung abgelehnt" : "Bestellstand unbekannt";
+/** Meldung, wenn die Prüfung eines Kontos scheitert; ohne Token hat IBS5 den Login selbst abgelehnt. */
+const failNoticeOf = (e, client) => pushFailure(e, { rejected: e instanceof IbsAuthError && !client.token });
+
+/** k.notice, oder aus k.error abgeleitet (Tests geben nur den Fehler). */
+const noticeOf = (k) => k.notice ?? pushFailure(k.error);
+
+/** Laut nur, was kein Aussetzer ist, oder wenn auch der vorige Weckruf dieses Kindes scheiterte (markFailures). */
+const failLoud = (k) => !noticeOf(k).transient || !!k.repeated;
+
+/**
+ * Merkt je Kind, ob dieser Weckruf (Erinnerung wie Morgenmeldung) scheiterte, und
+ * setzt k.repeated, wenn schon der vorige scheiterte. Geprüfte Kinder fallen heraus.
+ */
+export async function markFailures(kids) {
+  const prev = (await kvGet("pushFailed").catch(() => null)) || {};
+  const now = {};
+  for (const k of kids.filter((x) => x.error)) {
+    k.repeated = !!prev[k.customerNo];
+    now[k.customerNo] = Date.now();
+  }
+  await kvSet("pushFailed", now).catch(() => {});
+}
+
+/** Meldung für ein einzelnes Kind, dessen Prüfung scheiterte. */
+export function composeFailure(k) {
+  const n = noticeOf(k);
+  return { title: n.title, body: n.body, quiet: !failLoud(k) };
 }
 
 /**
@@ -182,23 +212,26 @@ function failTitle(e, client) {
  * fragt jedes Konto seine eigenen Tage ohne Schulessen mit ab. Ferientage in
  * Wochen ohne Ferienessen des Kindes fragt es gar nicht erst ab.
  */
-async function checkAccount(account, checkDates, events, today, ferien) {
+async function checkAccount(account, checkDates, events, today, ferien, signal) {
   const mine = eventsFor(events, account.customerNo);
   const due = dueEvents(mine, today);
   const noMeal = noMealDates(mine);
   const skip = skipDates(ferien, await loadMealPref(account.customerNo), checkDates);
   const dates = [...new Set([...checkDates.filter((d) => !skip.has(d)), ...due.filter((e) => e.noMeal).map((e) => e.date)])].sort();
   const client = new IbsClient(undefined, guardHooks);
+  client.signal = signal;
   client.dayView = !!(await kvGet("ibsDayView"));
   client.dayStore = dayStore(client);
   const kid = { customerNo: account.customerNo, due, firstName: "" };
   try {
     // Nur Ferientage ohne Ferienessen: nichts zu prüfen, auch keine Anmeldung.
-    kid.days = dates.length ? await withSession(client, account, () => collect(client, dates, { history: true })) : [];
+    kid.days = dates.length ? await withSession(client, account, () => collect(client, dates, { history: true, signal })) : [];
     kid.checked = kid.days.filter((d) => checkDates.includes(d.date) && !noMeal.has(d.date) && !skip.has(d.date));
   } catch (e) {
+    // Frist abgelaufen: kein Fehler dieses Kindes, sondern das Ende des Weckrufs.
+    if (signal?.aborted) throw e;
     kid.error = e;
-    kid.failTitle = failTitle(e, client);
+    kid.notice = failNoticeOf(e, client);
   }
   kid.name = client.profile?.name || account.name || "";
   kid.firstName = client.profile?.firstName || "";
@@ -221,7 +254,7 @@ export function pushCheckDates(today, daysAhead, pushDays) {
 // Beim Test („Jetzt testen“) dieselbe Meldung wie beim echten Weckruf, nur immer laut.
 // Mehrere Kinder nacheinander, nie parallel (IP-Sperre von IBS5), und eine gemeinsame
 // Meldung: eine zweite kurz danach dämpft Android.
-async function checkAndNotify(isTest) {
+async function checkAndNotify(isTest, signal) {
   // Ein Lesefehler ist nicht „nicht angemeldet“: er landet in der Fehlermeldung des Weckrufs.
   const accounts = await loadAccounts().catch((e) => { throw storageError(e); });
   if (!accounts.length) {
@@ -234,27 +267,39 @@ async function checkAndNotify(isTest) {
   const events = await loadEvents(today).catch(() => []);
   const ferien = await loadHolidays();
   const kids = [];
-  for (const account of accounts) kids.push(await checkAccount(account, checkDates, events, today, ferien));
+  for (const account of accounts) kids.push(await checkAccount(account, checkDates, events, today, ferien, signal));
+  signal?.throwIfAborted();
 
   // Namen fürs Gerät merken (Reiter, Meldung), auch wenn die Seite seit dem Login nicht offen war.
   for (const [i, k] of kids.entries()) {
     if (k.name && k.name !== accounts[i].name) await renameAccount(accounts[i].customerNo, k.name).catch(() => {});
   }
 
+  await markFailures(kids);
   let msg;
   if (kids.length === 1) {
     const [k] = kids;
-    if (k.error) return notify(k.failTitle, `${k.error.message}\nEin Fehler ist keine Aussage darüber, ob bestellt ist.`, { url: "./" });
+    if (k.error) {
+      const m = composeFailure(k);
+      await notify(m.title, m.body, { silent: m.quiet && !isTest, url: "./", signal });
+      return delivered(false);
+    }
     msg = compose({ checked: k.checked, due: k.due, days: k.days, today, firstName: k.firstName });
   } else {
     msg = composeAll(kids, today);
   }
-  if (!kids.some((k) => k.error)) await kvSet("lastPushOk", { at: Date.now() });
-
   const known = new Set(((await kvGet("notified")) || []).filter((k) => k.slice(0, 10) >= today));
+  signal?.throwIfAborted();
   await kvSet("notified", [...new Set([...known, ...msg.keys])]);
-  return notify(msg.title, msg.body, { silent: msg.quiet || !(isTest || ringsLoud(msg, kids, known, today, pushDays)), url: msg.url });
+  await notify(msg.title, msg.body, { silent: msg.quiet || !(isTest || ringsLoud(msg, kids, known, today, pushDays)), url: msg.url, signal });
+  return delivered(!kids.some((k) => k.error));
 }
+
+/**
+ * lastPushOk: Weckruf kam an, die Meldung ist gezeigt — auch wenn ein Kind nicht geprüft
+ * werden konnte (das merkt pushFailed). ok: alle Kinder geprüft (Fehlerkarte „Letzte erfolgreiche Prüfung“).
+ */
+const delivered = (ok) => kvSet("lastPushOk", { at: Date.now(), ok }).catch(() => {});
 
 /**
  * Laut, wenn ein Tag oder Termin in diesem Zustand neu ist (known: bisher
@@ -263,6 +308,7 @@ async function checkAndNotify(isTest) {
  */
 export function ringsLoud(msg, kids, known, today, pushDays) {
   if (msg.quiet) return false;
+  if (kids.some((k) => k.error && failLoud(k))) return true;
   if (msg.keys.some((k) => !known.has(k))) return true;
   return kids.some((k) => (k.checked || []).some((d) => d.isActionable && lastCall(today, d.date, pushDays)));
 }
@@ -272,7 +318,7 @@ export function ringsLoud(msg, kids, known, today, pushDays) {
  * zusätzlich die Tagesansicht von heute, nacheinander wie bei der Erinnerung. Zählt nicht als Erinnerung (lastPushOk),
  * damit eine kaputte Abendprüfung weiter als „Erinnerung schweigt“ auffällt.
  */
-async function todayAndNotify() {
+async function todayAndNotify(signal) {
   const accounts = await loadAccounts().catch((e) => { throw storageError(e); });
   if (!accounts.length) return notify("Nicht angemeldet", "Bitte die Seite öffnen und anmelden.", { url: "./", tag: TODAY_TAG });
   const today = todayBerlin();
@@ -288,29 +334,34 @@ async function todayAndNotify() {
       skip: skipDates(ferien, await loadMealPref(account.customerNo), [today]).has(today),
     };
     const client = new IbsClient(undefined, guardHooks);
+    client.signal = signal;
     client.dayView = !!(await kvGet("ibsDayView"));
     try {
-      [kid.day] = await withSession(client, account, () => collect(client, [], { history: true, peek: [today] }));
+      [kid.day] = await withSession(client, account, () => collect(client, [], { history: true, peek: [today], signal }));
     } catch (e) {
+      if (signal?.aborted) throw e;
       kid.error = e;
-      kid.failTitle = failTitle(e, client);
+      kid.notice = failNoticeOf(e, client);
     }
     kid.firstName = client.profile?.firstName || "";
     kids.push(kid);
   }
+  signal?.throwIfAborted();
+  await markFailures(kids);
   const msg = composeToday(kids);
-  return notify(msg.title, msg.body, { silent: msg.quiet, url: "./", tag: TODAY_TAG });
+  return notify(msg.title, msg.body, { silent: msg.quiet, url: "./", tag: TODAY_TAG, signal });
 }
 
 /**
  * Text der Morgenmeldung. kids: {customerNo, firstName, day?, noMeal, holiday, skip}
- * oder mit error/failTitle. Laut, wenn etwas bestellt ist oder an einem Schultag
- * nichts (Brot einpacken); still, wenn heute ohnehin kein Essen vorgesehen ist.
+ * oder mit error/notice/repeated. Laut, wenn etwas bestellt ist oder an einem Schultag
+ * nichts (Brot einpacken); still, wenn heute ohnehin kein Essen vorgesehen ist oder
+ * die Prüfung nur ein einzelnes Mal am Netz scheiterte (failLoud).
  */
 export function composeToday(kids) {
   const label = (k) => k.firstName || `Kd. ${k.customerNo}`;
   const status = (k) => {
-    if (k.error) return { text: k.failTitle, loud: true };
+    if (k.error) return { text: noticeOf(k).title, loud: failLoud(k) };
     if (!k.day) return { text: "Bestellstand unbekannt", loud: true };
     if (k.day.state === OrderState.ORDERED) return { text: k.day.orderedItems.join(" + "), ordered: true, loud: true };
     if (k.noMeal) return { text: `kein Schulessen (${k.noMeal})`, reason: k.noMeal };
@@ -327,7 +378,7 @@ export function composeToday(kids) {
     if (s.ordered) return { title: `Heute gibt's${forName}`, body: s.text, quiet };
     if (s.missing) return { title: `Heute kein Essen bestellt${forName}`, body: "Brot einpacken.", quiet };
     if (s.unclear) return { title: `Essen heute unklar${forName}`, body: "Bitte selbst auf der Bestellseite nachsehen.", quiet };
-    if (s.k.error) return { title: s.k.failTitle, body: `${s.k.error.message}\nBitte die App öffnen.`, quiet };
+    if (s.k.error) return composeFailure(s.k);
     if (!s.k.day) return { title: "Essen heute unbekannt", body: "Der Bestellstand von heute war nicht lesbar. Bitte die App öffnen.", quiet };
     return { title: "Heute kein Schulessen", body: s.reason, quiet };
   }
@@ -384,7 +435,7 @@ const nameList = (names) => names.length > 1 ? `${names.slice(0, -1).join(", ")}
  * Meldung für mehrere Kinder: je Kind ein Abschnitt, Termine einmal. keys wie
  * bei compose, aber mit der Kundennummer hinter dem Datum; url öffnet das Kind
  * mit dem ersten offenen Tag. kids: {customerNo, firstName, due, days, checked}
- * oder {customerNo, firstName, due, error, failTitle}.
+ * oder {customerNo, firstName, due, error, notice, repeated}.
  */
 export function composeAll(kids, today) {
   const label = (k) => k.firstName || `Kd. ${k.customerNo}`;
@@ -395,7 +446,7 @@ export function composeAll(kids, today) {
   let url = null;
   for (const k of kids) {
     if (k.error) {
-      sections.push(`${label(k)}: ${k.failTitle}`);
+      sections.push(`${label(k)}: ${noticeOf(k).title}`);
       continue;
     }
     const alarm = evaluate(k.checked);
@@ -408,7 +459,7 @@ export function composeAll(kids, today) {
     sections.push(`${label(k)}: ${AlarmText.body(alarm)}`);
     if (!url && alarm.actionable.length) url = `./?order=${alarm.actionable[0].date}&k=${k.customerNo}`;
   }
-  if (failed.length) sections.push(`${failed[0].error.message}\nEin Fehler ist keine Aussage darüber, ob bestellt ist.`);
+  if (failed.length) sections.push(noticeOf(failed[0]).body);
 
   // Ein Termin für alle steht bei jedem Kind in due, gemeldet wird er einmal.
   const byId = new Map();
@@ -436,7 +487,7 @@ export function composeAll(kids, today) {
 
   const title = alarmed.length === 1 ? AlarmText.title(evaluate(alarmed[0].checked), label(alarmed[0]))
     : alarmed.length ? `Schulessen prüfen für ${nameList(alarmed.map(label))}`
-    : failed.length === kids.length ? failed[0].failTitle
+    : failed.length === kids.length ? noticeOf(failed[0]).title
     : failed.length ? `Bestellstand unbekannt für ${nameList(failed.map(label))}`
     : firstCancel ? `Essen abbestellen: ${firstCancel.e.title}`
     : due.length === 1 ? `Termin: ${due[0].e.title}`
@@ -447,11 +498,13 @@ export function composeAll(kids, today) {
     body: [...sections, evText].filter(Boolean).join("\n\n"),
     url: url || "./",
     keys,
-    quiet: !alarmed.length && !failed.length && !due.length,
+    quiet: !alarmed.length && !failed.some(failLoud) && !due.length,
   };
 }
 
-function notify(title, body, { silent = false, url = "./", tag = "hs-check" } = {}) {
+/** signal: nach Ablauf der Frist erscheint diese Meldung nicht mehr (sie ersetzte sonst die Ersatzmeldung). */
+export async function notify(title, body, { silent = false, url = "./", tag = "hs-check", signal } = {}) {
+  signal?.throwIfAborted();
   return self.registration.showNotification(title, {
     body,
     icon: "icon-192.png?v=2",
@@ -513,9 +566,10 @@ export async function renewPush(push, subscription, { fetch: f = fetch, weekdays
 // das, kämen keine Weckrufe mehr, ohne dass es jemand merkt: deshalb eine Meldung.
 self.addEventListener("pushsubscriptionchange", (ev) => {
   ev.waitUntil((async () => {
-    const push = await kvGet("push");
-    if (!push) return;
+    if (!(await kvGet("push"))) return;
     try {
+      const push = await secretGet("push");
+      if (!push) throw new Error("Abo-Daten nicht lesbar");
       let sub = ev.newSubscription;
       if (!sub) {
         const res = await fetch("/api/vapid");
@@ -528,7 +582,7 @@ self.addEventListener("pushsubscriptionchange", (ev) => {
       const weekdays = (await kvGet("pushWeekdays")) || DEFAULT_CHECK.weekdays;
       const renewed = await renewPush(push, sub.toJSON(), { weekdays });
       // Inzwischen ausgeschaltet: das neue Abo nicht wieder als eingeschaltet ablegen.
-      if (renewed !== push && (await kvGet("push"))) await kvSet("push", renewed);
+      if (renewed !== push && (await kvGet("push"))) await secretSet("push", renewed);
     } catch (e) {
       await self.registration.showNotification("Erinnerung bitte neu einschalten", {
         body: `Das Abo für die Erinnerung ließ sich nicht erneuern (${e?.message || e}). `
@@ -541,8 +595,3 @@ self.addEventListener("pushsubscriptionchange", (ev) => {
     }
   })());
 });
-
-function b64ToBytes(b64) {
-  const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (b64.length % 4)) % 4));
-  return Uint8Array.from(s, (c) => c.charCodeAt(0));
-}
