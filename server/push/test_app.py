@@ -534,6 +534,81 @@ class HttpServer(unittest.TestCase):
             time.sleep(0.3)
             self.assertTrue(self.srv.slots.acquire(blocking=False))  # Platz wurde wieder frei
 
+    # --- Handler-Pfade mit Tabelle ---
+
+    def api(self, method, path, body=None, headers=None):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request(method, path, json.dumps(body) if body is not None else None, headers or {})
+        r = c.getresponse()
+        data = r.read()
+        c.close()
+        return r.status, (json.loads(data) if data else None)
+
+    def tabelle(self):
+        self.app.CONN.execute(
+            "CREATE TABLE subs (id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL, endpoint TEXT NOT NULL UNIQUE, keys TEXT NOT NULL, "
+            "time TEXT NOT NULL, weekdays TEXT NOT NULL, tz TEXT NOT NULL, last_sent TEXT, created TEXT NOT NULL, offset_min INTEGER, "
+            "is_admin INTEGER NOT NULL DEFAULT 0, morning_time TEXT, morning_last_sent TEXT, auth_failed_since TEXT)")
+
+    def abo(self, endpoint, headers=None):
+        return self.api("POST", "/api/subscriptions", {"subscription": {"endpoint": endpoint, "keys": GOOD_KEYS}}, headers)
+
+    def test_post_uebernimmt_is_admin_nicht(self):
+        self.tabelle()
+        ep = "https://fcm.googleapis.com/fcm/send/abc"
+        st, a = self.abo(ep)
+        self.assertEqual(st, 201)
+        self.app.CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (a["id"],))
+        st, b = self.abo(ep)
+        self.assertEqual(st, 201)
+        rows = self.app.CONN.execute("SELECT id, is_admin FROM subs").fetchall()
+        self.assertEqual([(r["id"], r["is_admin"]) for r in rows], [(b["id"], 0)])  # altes Abo weg, kein Admin geerbt
+
+    def test_put_endpoint_loescht_altes_abo_ohne_is_admin_erbe(self):
+        self.tabelle()
+        st, a = self.abo("https://fcm.googleapis.com/fcm/send/a")
+        st, b = self.abo("https://fcm.googleapis.com/fcm/send/b")
+        self.app.CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (a["id"],))
+        st, _ = self.api("PUT", f"/api/subscriptions/{b['id']}",
+                         {"subscription": {"endpoint": "https://fcm.googleapis.com/fcm/send/a", "keys": GOOD_KEYS}},
+                         {"Authorization": "Bearer " + b["secret"]})
+        self.assertEqual(st, 200)
+        rows = self.app.CONN.execute("SELECT id, is_admin FROM subs").fetchall()
+        self.assertEqual([(r["id"], r["is_admin"]) for r in rows], [(b["id"], 0)])
+
+    def test_rate_limit_je_echter_ip(self):
+        from unittest import mock
+        self.tabelle()
+        with mock.patch.object(self.app, "sub_limit", RateLimit(2, 3600)):
+            def von(ip, n):
+                return self.abo(f"https://fcm.googleapis.com/fcm/send/{n}", {"X-Forwarded-For": ip})[0]
+            # Vorangestellter, gefälschter Eintrag ändert den Schlüssel nicht.
+            self.assertEqual([von("1.1.1.%d, 9.9.9.9" % i, i) for i in range(3)], [201, 201, 429])
+            self.assertEqual(von("1.1.1.1, 8.8.8.8", 10), 201)  # andere echte IP: eigenes Kontingent
+
+    def test_health_ohne_antwortinhalte(self):
+        self.tabelle()
+        old = dict(self.app.selfcheck_state)
+        self.addCleanup(self.app.selfcheck_state.update, old)
+        self.app.selfcheck_state.update(ok=False, problems=["IBS5-Login ohne Preflight: HTTP 200, Antwort: 'geheim'", "Sdui nicht erreichbar: URLError"])
+        st, out = self.api("GET", "/api/health")
+        self.assertEqual(st, 200)
+        self.assertEqual(out["selfcheck"]["problems"], ["IBS5-Login ohne Preflight", "Sdui nicht erreichbar"])
+        self.assertNotIn("geheim", json.dumps(out))
+        self.assertEqual(out["auth_rejected"], 0)
+
+
+class ClientIp(unittest.TestCase):
+    def test_letzter_eintrag(self):
+        from app import client_ip
+        self.assertEqual(client_ip({"X-Forwarded-For": "6.6.6.6, 1.2.3.4"}, ("127.0.0.1", 1)), "1.2.3.4")
+        self.assertEqual(client_ip({"X-Forwarded-For": " 1.2.3.4 "}, ("127.0.0.1", 1)), "1.2.3.4")
+
+    def test_ohne_header_peer(self):
+        from app import client_ip
+        self.assertEqual(client_ip({}, ("10.0.0.5", 1)), "10.0.0.5")
+
 
 class Wochentage(unittest.TestCase):
     def test_bool_ist_kein_wochentag(self):

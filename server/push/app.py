@@ -156,8 +156,10 @@ def sdui_login_body(raw: bytes) -> bytes:
 
 
 def client_ip(headers, client_address) -> str:
-    """Erster X-Forwarded-For-Eintrag (Caddy), sonst die Peer-Adresse. Nur für Begrenzungen, nie im Log."""
-    return (headers.get("X-Forwarded-For") or client_address[0]).split(",")[0].strip()
+    """Letzter X-Forwarded-For-Eintrag, sonst die Peer-Adresse. Nur für Begrenzungen, nie im Log.
+
+    Caddy hängt die echte Peer-Adresse hinten an; vorangestellte Einträge kann der Client fälschen."""
+    return (headers.get("X-Forwarded-For") or client_address[0]).split(",")[-1].strip()
 
 
 log = logging.getLogger("push")
@@ -661,7 +663,9 @@ class Handler(BaseHTTPRequestHandler):
             with db_lock:
                 rejected = CONN.execute("SELECT COUNT(*) FROM subs WHERE auth_failed_since IS NOT NULL").fetchone()[0]
             # auth_rejected > 0: Push-Dienste lehnen Abos mit 401/403 ab, siehe AUTH_FAIL_DAYS.
-            return self.reply(200, {"selfcheck": selfcheck_state, "auth_rejected": rejected})
+            # Öffentlich nur die Kategorie je Problem (Text vor dem ersten ":"); Details stehen im Log.
+            public = {**selfcheck_state, "problems": [p.split(":")[0] for p in selfcheck_state["problems"]]}
+            return self.reply(200, {"selfcheck": public, "auth_rejected": rejected})
         if self.path.split("?")[0] == "/api/vapid":
             return self.reply(200, {"publicKey": public_key_b64(self.vapid)})
         self.reply(404)
@@ -680,14 +684,14 @@ class Handler(BaseHTTPRequestHandler):
                     # Dasselbe Gerät zählt nicht mit: es ersetzt nur sein altes Abo.
                     if CONN.execute("SELECT COUNT(*) FROM subs WHERE endpoint != ?", (s["endpoint"],)).fetchone()[0] >= MAX_SUBSCRIPTIONS:
                         return self.reply(503, {"error": "voll"})
-                    # Dasselbe Gerät neu angemeldet: altes Abo ersetzen, Betreiber bleibt Betreiber.
-                    old = CONN.execute("SELECT is_admin FROM subs WHERE endpoint = ?", (s["endpoint"],)).fetchone()
+                    # Dasselbe Gerät neu angemeldet: altes Abo ersetzen. is_admin wird nicht übernommen
+                    # (der Endpoint ist kein Geheimnis); Betreiber melden sich per ADMIN_KEY neu an.
                     CONN.execute("DELETE FROM subs WHERE endpoint = ?", (s["endpoint"],))
                     CONN.execute(
                         "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created, offset_min, is_admin, morning_time) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (new_id, sha(secret), s["endpoint"], s["keys"], s["time"], s["weekdays"], s["tz"],
-                         dt.date.today().isoformat(), pick_offset(CONN, s["time"]), old["is_admin"] if old else 0,
+                         dt.date.today().isoformat(), pick_offset(CONN, s["time"]), 0,
                          s["morning_time"]),
                     )
                     CONN.commit()
