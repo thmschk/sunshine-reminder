@@ -4,9 +4,13 @@
 Die Web-App liest nur diese Datei; zur Laufzeit fragt niemand OpenHolidaysAPI.
 Berlin legt die Ferien Jahre im Voraus fest, die Datei reicht deshalb lange.
 Läuft sie bald aus, meldet das die tägliche Selbstprüfung des Servers an die
-Betreiber-Geräte; dann dieses Skript laufen lassen und deployen:
+Betreiber-Geräte; dann dieses Skript laufen lassen, den Diff ansehen, committen,
+pushen und erst dann deployen (deploy.sh lädt den gepushten Stand von GitHub):
 
-    python3 tools/ferien.py && server/deploy.sh
+    python3 tools/ferien.py
+    git diff web/ferien.json
+    git commit -m "Ferientermine aktualisiert" web/ferien.json && git push
+    server/deploy.sh
 """
 
 from __future__ import annotations

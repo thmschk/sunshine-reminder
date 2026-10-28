@@ -1,5 +1,5 @@
 import {
-  DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, clampDaysAhead,
+  DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, IbsError, OrderState, clampDaysAhead,
   addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, submitCartAsSeen, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { freezeWrites, kvClear, kvDel, kvGet, kvSet, secretSet } from "./idb.js";
@@ -15,21 +15,23 @@ import {
   unanswered, weekText,
 } from "./holidays.js";
 
-// Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in
-// diesem Browser, in IndexedDB, damit auch der Service Worker sie bei der
-// Push-Prüfung lesen kann. Beim Start
-// einmal in den Speicher geladen; vorher genutztes localStorage wird übernommen.
+// Herkunft: Ansichten und Texte folgen der Android-Fassung (bis 6160aed).
+
+// Höchstens so viele Wochen lädt die Bestellansicht.
 const ORDER_WEEKS = 8;
 // Die Bestellansicht lädt erst wenige Wochen, weitere auf Knopfdruck: jede Woche kostet
 // auf dem Handy fünf Anfragen, und die zählen gegen das Stundenkontingent (guard.js).
 const FIRST_WEEKS = 3;
 const MORE_WEEKS = 3;
-/** So viele Tage zeigt die Liste auf der Startseite (wie DAY_LIST_LENGTH der App). */
+/** So viele Tage zeigt die Liste auf der Startseite. */
 const DAY_LIST_LENGTH = 5;
 
 // 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
 const DEFAULT_PUSH_TIME = "17:00";
 const DEFAULT_MORNING_TIME = "07:00";
+// Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in diesem Browser, in
+// IndexedDB, damit auch der Service Worker sie beim Weckruf lesen kann. Beim Start einmal in den
+// Speicher geladen; vorher genutztes localStorage wird übernommen.
 // accounts: je Kind ein IBS5-Konto (siehe accounts.js), active: Kundennummer des gewählten Reiters.
 // pushWeekdays: Tage des Weckrufs (1 = Mo); gemerkt auch bei ausgeschalteter Erinnerung, der Service Worker liest sie mit.
 const store = { accounts: [], active: null, daysAhead: DAYS_AHEAD.def, push: null, pushWeekdays: [1, 2, 3, 4, 5] };
@@ -73,8 +75,9 @@ const $footer = document.getElementById("footer");
 
 const $header = document.querySelector("header");
 
+/** Kopfzeile mit App-Namen und Symbolen nur auf der Startseite; Einrichten, Bestellen und Einstellungen haben eigene Köpfe. */
 function chrome(visible) {
-  $header.hidden = false;
+  $header.hidden = !visible;
   $reload.hidden = $settings.hidden = $web.hidden = $add.hidden = !visible;
   if (!visible) $footer.hidden = true;
 }
@@ -97,6 +100,31 @@ function clientFor(customerNo) {
 }
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+/**
+ * Fehler für die Anzeige: text in Klartext, detail die technische Meldung (nur zum Aufklappen),
+ * net: Netz- oder Sperrfehler, bei dem eine andere Verbindung helfen kann.
+ * Die Meldungen selbst entstehen in ibs.js und guard.js.
+ */
+function friendly(e) {
+  const raw = String(e?.message ?? e ?? "");
+  if (e instanceof IbsBudgetError) return { text: raw, detail: "" };
+  if (navigator.onLine === false) {
+    return { text: "Sobald das Handy wieder Netz hat, nochmal versuchen.", detail: raw, offline: true };
+  }
+  // Grund der Pause in Klammern („HTTP 429“) nur in den Details.
+  if (e instanceof IbsPausedError) return { text: raw.replace(/ \([^)]*\)(?=\.)/, ""), detail: raw, net: true };
+  if (/^Keine Verbindung zum Bestellsystem/.test(raw)) return { text: "Das Bestellsystem ist gerade nicht erreichbar.", detail: raw, net: true };
+  if (/^Bestellsystem antwortet nicht/.test(raw)) return { text: "Das Bestellsystem antwortet gerade nicht.", detail: raw, net: true };
+  if (e instanceof IbsError && !(e instanceof IbsAuthError) && /HTTP \d|JSON|Token|unerwartete Antwort|geliefert wurde/.test(raw)) {
+    return { text: "Das Bestellsystem hat unerwartet geantwortet.", detail: raw };
+  }
+  return { text: raw, detail: "" };
+}
+const NET_TIP = "Das Bestellsystem sperrt manchmal eine Internetverbindung, über die zu viele Anfragen kamen. "
+  + "Über mobile Daten statt WLAN (oder umgekehrt) klappt es dann oft.";
+/** Technische Meldung eingeklappt; leer, wenn es keine gibt. */
+const detailsHtml = (f) => (f.detail ? `<details class="err-detail"><summary>Technische Details</summary><code>${esc(f.detail)}</code></details>` : "");
 
 /** Konto speichern (neu oder mit aktuellem Namen) und als Reiter wählen; wirft, wenn das Gerät nicht speichern kann. */
 async function saveCreds(c, name = "") {
@@ -161,7 +189,7 @@ document.addEventListener("click", (ev) => {
 });
 
 function busy(text) {
-  $app.innerHTML = `<p class="muted">${esc(text)}</p>`;
+  $app.innerHTML = `<p class="muted" role="status">${esc(text)}</p>`;
 }
 
 // ---------------------------------------------------------------- Einrichten
@@ -186,15 +214,15 @@ let homeState = null;
  * adding: weiteres Kind zu gespeicherten Konten; dann ohne Einleitung und immer gemerkt
  * (die Erinnerung prüft nur gespeicherte Konten).
  */
-function showSetup(message = "", prefill = {}, retry = null, { adding = false } = {}) {
+function showSetup(message = "", prefill = {}, retry = null, { adding = false, detail = "" } = {}) {
   nextView();
   chrome(false);
-  if (adding) $header.hidden = true;
+  const msg = message ? `<p class="error">${esc(message)}</p>${detailsHtml({ detail })}` : "";
   $app.innerHTML = adding ? `
     <div class="card">
       <h2 class="u-mt0">Weiteres Kind</h2>
       <p class="small muted">Jedes Kind hat im Bestellsystem (IBS5) eine eigene Kundennummer und ein eigenes Passwort.</p>
-      ${message ? `<p class="error">${esc(message)}</p>` : ""}
+      ${msg}
       ${retry ? `<div class="row"><button id="b-resume" type="button" class="block">Trotzdem jetzt versuchen</button></div>` : ""}
       <form id="f-login" autocomplete="on">
         <label for="cn">Kundennummer</label>
@@ -223,7 +251,7 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false } 
     <div class="card">
       <h2 class="u-mt0">Anmelden</h2>
       <p class="small muted">Mit Kundennummer und Passwort des Schulessen-Bestellsystems (IBS5).</p>
-      ${message ? `<p class="error">${esc(message)}</p>` : ""}
+      ${msg}
       ${retry ? `<div class="row"><button id="b-resume" type="button" class="block">Trotzdem jetzt versuchen</button></div>` : ""}
       <form id="f-login" autocomplete="on">
         <label for="cn">Kundennummer</label>
@@ -247,8 +275,10 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false } 
       await login(c, creds, remember);
     } catch (e) {
       const isPause = e instanceof IbsPausedError;
-      showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}` : e.message, creds,
-        isPause ? { creds, remember, wantPush: !!perm } : null, { adding });
+      const f = friendly(e);
+      showSetup(e instanceof IbsAuthError ? `Anmeldung abgelehnt: ${e.message}`
+        : f.offline ? `Du bist offline. ${f.text}` : f.net ? `${f.text} ${NET_TIP}` : f.text, creds,
+        isPause ? { creds, remember, wantPush: !!perm } : null, { adding, detail: f.detail });
       return;
     }
     if (remember) {
@@ -362,7 +392,7 @@ function refreshInstallTip() {
 const EYE = "M12,4.5C7,4.5 2.73,7.61 1,12c1.73,4.39 6,7.5 11,7.5s9.27,-3.11 11,-7.5c-1.73,-4.39 -6,-7.5 -11,-7.5zM12,17c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5zM12,9c-1.66,0 -3,1.34 -3,3s1.34,3 3,3 3,-1.34 3,-3 -1.34,-3 -3,-3z";
 const EYE_OFF = "M12,7c2.76,0 5,2.24 5,5 0,0.65 -0.13,1.26 -0.36,1.83l2.92,2.92c1.51,-1.26 2.7,-2.89 3.43,-4.75 -1.73,-4.39 -6,-7.5 -11,-7.5 -1.4,0 -2.740,0.25 -3.98,0.7l2.16,2.16C10.74,7.13 11.35,7 12,7zM2,4.27l2.28,2.28 0.46,0.46C3.08,8.3 1.78,10.02 1,12c1.73,4.39 6,7.5 11,7.5 1.55,0 3.03,-0.3 4.38,-0.84l0.42,0.42L19.73,22 21,20.73 3.27,3 2,4.27zM7.53,9.8l1.55,1.55c-0.05,0.21 -0.08,0.43 -0.08,0.65 0,1.66 1.34,3 3,3 0.22,0 0.44,-0.03 0.65,-0.08l1.55,1.55c-0.67,0.33 -1.41,0.53 -2.2,0.53 -2.76,0 -5,-2.24 -5,-5 0,-0.79 0.2,-1.53 0.53,-2.2zM11.84,9.02l3.15,3.15 0.02,-0.16c0,-1.66 -1.34,-3 -3,-3l-0.17,0.01z";
 
-/** Passwortfeld mit Auge zum Anzeigen, wie in der App (ic_visibility / ic_visibility_off). */
+/** Passwortfeld mit Auge zum Anzeigen. */
 function passwordField(id, extra = "") {
   return `<div class="pw-field">
     <input id="${id}" ${extra} type="password" autocomplete="current-password" required>
@@ -389,7 +419,7 @@ let sessionCreds = null;
 /** Hinweis für die nächste Übersicht, wenn die Erinnerung beim Anmelden nicht anging. */
 let pushNotice = "";
 async function enableAfterLogin(perm) {
-  if ((await perm) !== "granted") return "Erinnerung ist aus, weil Benachrichtigungen nicht erlaubt wurden. Einschalten unter ⚙.";
+  if ((await perm) !== "granted") return "Die Erinnerung ist aus, weil Benachrichtigungen nicht erlaubt wurden. Einschalten kannst du sie in den Einstellungen.";
   try {
     await pushEnable(DEFAULT_PUSH_TIME);
     return "";
@@ -430,7 +460,7 @@ async function showHome(fresh = false) {
   const usable = cached && cached.from === today && cached.daysAhead === cfg.daysAhead && cached.customerNo === creds.customerNo;
   if (my !== viewSeq) return;
   if (usable) await renderHome(my, creds, daysFromJson(cached.days), { staleAt: cached.at });
-  else $app.innerHTML = `${kidTabs()}<p class="muted">${progressText("Wochenplan wird geladen")}</p>${progressBar()}`;
+  else $app.innerHTML = `${kidTabs()}<p class="muted" role="status">${progressText("Wochenplan wird geladen")}</p>${progressBar()}`;
 
   let days;
   try {
@@ -443,20 +473,36 @@ async function showHome(fresh = false) {
     }
     const isPause = e instanceof IbsPausedError;
     const isBudget = e instanceof IbsBudgetError;
+    // Kein Stand von heute: dann wenigstens den zuletzt bekannten zeigen, ab heute und als veraltet benannt.
+    let old = null;
+    if (!usable && cached?.customerNo === creds.customerNo && cached.days) {
+      try {
+        old = daysFromJson(cached.days).filter((d) => d.date >= today);
+      } catch { /* Stand aus einer älteren Fassung */ }
+    }
+    if (old?.length) {
+      await renderHome(my, creds, old, { staleAt: cached.at });
+      if (my !== viewSeq) return;
+    }
+    const shown = usable || !!old?.length;
+    const f = friendly(e);
     const card = `
       <div class="card hero ${isPause && !isBudget ? "bad" : "neutral"}">
-        <h2>${isBudget ? "Die App macht eine Pause" : isPause ? "Bestellsystem gesperrt oder nicht erreichbar"
-          : usable ? "Aktualisieren fehlgeschlagen" : "Bestellstand unbekannt"}</h2>
-        <p>${esc(e.message)}</p>
-        <p class="small">${usable ? `Unten steht der Stand von ${esc(when(cached.at))}. ` : ""}${isBudget ? ""
-          : "Ein Netzfehler ist keine Aussage darüber, ob bestellt ist. Über mobile Daten statt WLAN geht es oft trotzdem."}</p>
+        <h2>${isBudget ? "Die App macht eine Pause" : f.offline ? "Du bist offline"
+          : isPause ? "Bestellsystem gesperrt oder nicht erreichbar"
+          : shown ? "Aktualisieren fehlgeschlagen" : "Bestellstand unbekannt"}</h2>
+        <p>${esc(f.text)}</p>
+        <p class="small">${shown ? `Unten steht der letzte bekannte Stand von ${esc(when(cached.at))}, er kann veraltet sein.`
+          : isBudget ? "" : "Ob bestellt ist, kann die App gerade nicht sagen."}</p>
+        ${f.net ? `<p class="small">${NET_TIP}</p>` : ""}
+        ${detailsHtml(f)}
         <button id="b-retry" class="block">${isPause ? "Trotzdem jetzt versuchen" : "Nochmal versuchen"}</button>
       </div>`;
     document.getElementById("refresh")?.remove();
     document.getElementById("pbar-text")?.replaceWith("Aktualisieren fehlgeschlagen");
     const tabs = document.querySelector(".kids");
-    if (usable && tabs) tabs.insertAdjacentHTML("afterend", card);
-    else if (usable) $app.insertAdjacentHTML("afterbegin", card);
+    if (shown && tabs) tabs.insertAdjacentHTML("afterend", card);
+    else if (shown) $app.insertAdjacentHTML("afterbegin", card);
     else $app.innerHTML = kidTabs() + card + lastOkLine();
     document.getElementById("b-retry").onclick = async () => {
       if (isPause) await resume();
@@ -534,10 +580,11 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   wireInstallTip();
   if (!staleAt) pushNotice = "";
   for (const li of $app.querySelectorAll(".days:not(.today) li")) {
-    li.querySelector(".day-btn").onclick = () => {
+    const btn = li.querySelector(".day-btn");
+    btn.onclick = () => {
       const d = days.find((x) => x.date === li.dataset.date);
       if (d.isActionable || d.state === OrderState.ORDERED) showOrder(d.date);
-      else li.classList.toggle("expanded");
+      else btn.setAttribute("aria-expanded", li.classList.toggle("expanded"));
     };
   }
   document.getElementById("b-all").onclick = () => showOrder();
@@ -562,7 +609,8 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
     .format(new Date(staleAt || Date.now()));
   const pushInfo = store.push && store.lastPushOk ? ` · Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "";
-  $footer.innerHTML = `<span>${staleAt ? `Stand ${t} · ${progressText("wird aktualisiert")}` : `Geprüft ${t}${pushInfo}`}</span>
+  // Der gespeicherte Stand kann von gestern sein: dann mit Tag.
+  $footer.innerHTML = `<span role="status">${staleAt ? `Stand ${esc(when(staleAt))} · ${progressText("wird aktualisiert")}` : `Geprüft ${t}${pushInfo}`}</span>
     <button id="b-heart" class="icon heart" title="Über diese App" aria-label="Über diese App">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART}"/></svg>
     </button>`;
@@ -570,7 +618,7 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   document.getElementById("b-heart").onclick = showAbout;
 }
 
-/** „heute 12:01“, „gestern 12:01“ oder „03.10. 12:01“ — wie checkedLabel der App. */
+/** „heute 12:01“, „gestern 12:01“ oder „03.10. 12:01“. */
 function when(ms) {
   const f = (o) => new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", ...o }).format(new Date(ms));
   const day = f({ year: "numeric", month: "2-digit", day: "2-digit" });
@@ -588,8 +636,8 @@ function lastOkLine() {
 }
 
 /**
- * Hat die Erinnerung seit über zwei Werktagen nicht mehr erfolgreich geprüft,
- * obwohl sie eingeschaltet ist? Schweigen ist der gefährliche Zustand.
+ * Hat die Erinnerung seit mindestens vier Tagen (bei seltenen Weckrufen länger) nicht
+ * mehr erfolgreich geprüft, obwohl sie eingeschaltet ist? Schweigen ist der gefährliche Zustand.
  */
 function pushStale() {
   if (!store.push) return "";
@@ -599,7 +647,7 @@ function pushStale() {
   if (!since || Date.now() - since < days * 86400000) return "";
   return `<div class="card hero bad"><h2>Erinnerung schweigt</h2>
     <p>Die Erinnerung hat zuletzt ${esc(since === store.lastPushOk?.at ? when(since) : "noch nie")} erfolgreich geprüft.
-      Unter ⚙ → „Jetzt testen“ ausprobieren, sonst aus- und wieder einschalten.</p></div>`;
+      Probier in den Einstellungen „Jetzt testen“, sonst schalte sie dort aus und wieder ein.</p></div>`;
 }
 
 /** Tage nach Kalenderwoche gruppiert: jede Woche eine eigene Karte, damit der Montag sich absetzt. */
@@ -613,7 +661,7 @@ function byWeek(days) {
   return out.map((w) => w.days);
 }
 
-/** Die eine Aussage der Startseite, wie HeroCard der App: Dringendes zuerst. */
+/** Die eine Aussage der Startseite: Dringendes zuerst. */
 function heroCard(days, firstName) {
   const open = days.filter((d) => d.isActionable);
   const late = days.filter((d) => d.state === OrderState.DEADLINE_PASSED);
@@ -651,7 +699,7 @@ function heroCard(days, firstName) {
 }
 
 /**
- * Zeitleiste je Tag wie TimetableStrip der App: eine gleich breite Zelle je
+ * Zeitleiste je Tag: eine gleich breite Zelle je
  * Schulstunde bis zur spätesten Stunde des ganzen Plans, gewählte Fächer dunkel,
  * Freistunden als Lücke.
  */
@@ -767,7 +815,7 @@ async function showFerien(creds, h, onDone, { fromSettings = false } = {}) {
 const SYM_TEXT = { ok: "Status: in Ordnung", open: "Status: offen", bad: "Status: Achtung" };
 
 /**
- * Wie DayRow der App: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts;
+ * Zeile der Startseite: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts;
  * eigene Termine und Ferien im Status. skip: Ferientag eines Kindes ohne Ferienessen.
  */
 function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, isToday = false) {
@@ -795,7 +843,7 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
   const inner = `
       <span class="date"><span class="wd">${isToday ? "heute" : esc(De.chip(d.date).slice(0, 2))}</span><span class="dom">${Number(d.date.slice(8, 10))}</span></span>
       <span class="text"><span class="dish">${esc(dish)}</span>${
-        // Mit Zeitleiste sagt der Haken rechts schon „bestellt“, wie in der App.
+        // Mit Zeitleiste sagt der Haken rechts schon „bestellt“.
         timeline && d.state === OrderState.ORDERED && !titles ? "" : `<span class="sub ${subCls}">${subHtml}</span>`}${timeline}</span>
       <span class="sym ${symCls}" aria-hidden="true">${sym}</span><span class="sr-only">${SYM_TEXT[symCls]}</span>`;
   return isToday ? `<li data-date="${d.date}">${inner}</li>`
@@ -807,9 +855,18 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
 // Anfragen einer Bestellung, CORS-Vorabfragen mitgezählt: je Tag Vorab-Laden, Leeren,
 // Hinzufügen und Nachladen, dazu Abschicken und vielleicht ein Login.
 const orderCost = (changes) => 8 * changes.length + 3;
+/**
+ * Läuft gerade eine Bestellung (auch die Rückfrage davor)? Dann wechselt die
+ * Seite nicht, wenn eine Meldung angetippt wird: der Warenkorb wäre halb gefüllt.
+ */
+let submitting = false;
+/** Schluss der Meldung „Abgeschickt, aber nicht bestätigt“. */
+const checkHint = (missing) => (missing?.length
+  ? `<p>Bitte auf der Bestellseite nachsehen: ${esc(missing.map(De.short).join(", "))}</p>`
+  : "<p>Bitte auf der Bestellseite nachsehen.</p>");
 
 /**
- * Bestellen, umbestellen, abbestellen — wie OrderScreen der App. Jeder noch
+ * Bestellen, umbestellen, abbestellen. Jeder noch
  * änderbare Tag, offene mit „nichts“ vorausgewählt, bestellte mit dem
  * bestellten Gericht. Abgeschickt wird nur, was davon abweicht.
  */
@@ -820,7 +877,7 @@ async function showOrder(focusDate = null) {
   const my = nextView();
   const { signal } = viewAbort;
   chrome(false);
-  $header.hidden = true; // wie OrderScreen der App: nur „Bestellen“ und „Zurück“
+  $header.hidden = true; // eigener Kopf: nur „Bestellen“ und „Zurück“
   // Bei mehreren Kindern steht im Kopf, für wen bestellt wird.
   const forKid = multi() && kidName(creds) ? ` für ${esc(kidName(creds))}` : "";
   $app.innerHTML = `
@@ -840,9 +897,6 @@ async function showOrder(focusDate = null) {
   }
   const $result = document.getElementById("o-result");
   const form = document.getElementById("f-order");
-  const setResult = (text, cls = "") => {
-    $result.innerHTML = text ? `<pre class="msg order-result ${cls}">${esc(text)}</pre>` : "";
-  };
   const $cart = document.getElementById("o-cart");
   /** Hinweis, solange bei IBS5 Nicht-Abgeschicktes liegt: abgeschickt wird immer der ganze Warenkorb. */
   async function showCart() {
@@ -853,7 +907,7 @@ async function showOrder(focusDate = null) {
         <h3>${r.total === 1 ? "1 Eintrag" : `${r.total} Einträge`} im Warenkorb, nicht abgeschickt</h3>
         ${r.others?.length ? `<ul class="entries">${cartRows(r.others)}</ul>` : ""}
         <div class="cart-actions">
-          <button type="button" class="text" id="b-cart-discard">Verwerfen</button>
+          <button type="button" class="text btn-danger-text" id="b-cart-discard">Verwerfen</button>
           ${r.others?.length ? `<button type="button" class="text" id="b-cart-send">Abschicken</button>` : ""}
         </div>
       </div>`;
@@ -870,7 +924,7 @@ async function showOrder(focusDate = null) {
     const n = seen.total === 1 ? "Der Eintrag wird" : `Alle ${seen.total} Einträge werden`;
     const ok = await askDialog(send ? "Warenkorb verbindlich abschicken?" : "Warenkorb verwerfen?",
       send ? `<ul class="entries">${cartRows(seen.others)}</ul>` : `<p>${n} aus dem Warenkorb entfernt, bestellt wird nichts.</p>`,
-      send ? "Abschicken" : "Verwerfen");
+      send ? "Abschicken" : "Verwerfen", { danger: !send });
     if (!ok || submitting) return;
     submitting = true;
     lock(true);
@@ -881,7 +935,7 @@ async function showOrder(focusDate = null) {
       return left === 0 ? { kind: "done" }
         : { kind: "aborted", reason: `Danach liegen noch ${left ?? "?"} Einträge im Warenkorb — bitte auf der Bestellseite nachsehen.` };
     };
-    const outcome = await budgetFor(send ? 4 + 2 * seen.others.length : 4)
+    const outcome = await budgetFor(send ? 6 + 2 * seen.others.length : 4)
       .then(() => withLogin(creds, (c) => unmetered(c, () => (send
         ? submitCartAsSeen(c, seen.others, { reload: (ds) => collect(c, ds, { fresh: true }) })
         : discard(c)))))
@@ -894,7 +948,7 @@ async function showOrder(focusDate = null) {
       resultDialog("error", send ? "Nichts abgeschickt" : "Nicht verworfen", `<p>${esc(outcome.reason)}</p>`);
     } else {
       resultDialog("error", "Abgeschickt, aber nicht bestätigt", `<p>${esc(outcome.reason)}</p>
-        <p>Bitte auf der Bestellseite nachsehen: ${esc((outcome.missing || []).map(De.short).join(", "))}</p>`);
+        ${checkHint(outcome.missing)}`);
     }
     release();
     if (outcome.kind === "aborted") await showCart();
@@ -906,7 +960,7 @@ async function showOrder(focusDate = null) {
   // Jeder Ladevorgang hat seine Nummer: ein überholter (z. B. nach dem Abschicken neu
   // gestartet) bricht ab, statt weiter Tage in die neue Liste zu hängen.
   let loadSeq = 0;
-  let submitting = false;
+  submitting = false;
   // Bis zum Neuladen bleiben die Knöpfe aus: zwei Bestellungen auf einem Warenkorb zählen sich gegenseitig.
   // „Zurück“ ebenso: die Ergebnismeldung, auch „nicht bestätigt“, steht nur in dieser Ansicht.
   const lock = (on) => {
@@ -921,7 +975,7 @@ async function showOrder(focusDate = null) {
     refresh();
   };
   const ferien = await loadHolidays();
-  // Die bestellte Linie, falls sie sich noch ändern lässt (DayStatus.ordered() der App).
+  // Die bestellte Linie, falls sie sich noch ändern lässt.
   const orderedOf = (d) => d.entries.find((e) => e.isOrdered && e.selectable) ?? null;
   const isChangeable = (d) =>
     d.state === OrderState.NOT_ORDERED || d.state === OrderState.IN_CART ? d.entries.some((e) => e.selectable)
@@ -954,11 +1008,21 @@ async function showOrder(focusDate = null) {
     focusDate ? Math.floor((Date.parse(focusDate) - Date.parse(monday)) / (7 * 86400000)) + 1 : 0));
   let cursor = null;
 
+  /** Aktionsleiste unten nur, solange eine Änderung ansteht (auch während des Abschickens). */
+  const syncBar = () => {
+    const bar = document.getElementById("o-bar");
+    if (bar) bar.hidden = !days.length || !pending().length;
+  };
+
   /** Neu aufbauen, mit so vielen Wochen wie zuletzt gewünscht (auch nach dem Abschicken). */
   async function load() {
-    form.innerHTML = `<div id="o-days"></div><p id="o-more" class="small muted"></p>
+    // Abschicken steht in einer Leiste am unteren Rand, sichtbar ab der ersten Änderung (syncBar).
+    form.innerHTML = `<div id="o-days"></div><p id="o-more" class="small muted" role="status"></p>
       <button id="b-more-weeks" type="button" class="text" hidden>Weitere Wochen laden</button>
-      <button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button>`;
+      <div id="o-bar" class="order-bar" hidden><button id="b-submit" type="submit" class="block" disabled>Nichts geändert</button></div>`;
+    // refresh() schreibt Zähler und Sperre in den Knopf; jede Änderung daran stellt die Leiste nach.
+    new MutationObserver(syncBar).observe(document.getElementById("b-submit"),
+      { attributes: true, childList: true, characterData: true, subtree: true });
     document.getElementById("b-more-weeks").onclick = () => {
       wanted = Math.min(ORDER_WEEKS, wanted + MORE_WEEKS);
       loadWeeks();
@@ -1033,10 +1097,14 @@ async function showOrder(focusDate = null) {
     // jetzt steht die Seite und er wird genau ausgerichtet.
     if (focusDate && !userScrolled) document.getElementById(`day-${focusDate}`)?.scrollIntoView({ block: "start" });
     focusDate = null;
-    if (error) setResult(error.message, "error");
+    if (error) {
+      const f = friendly(error);
+      $result.innerHTML = `<div class="msg order-result error"><p class="u-m0">${esc(f.offline ? `Du bist offline. ${f.text}` : f.text)}</p>
+        ${f.net ? `<p class="small">${NET_TIP}</p>` : ""}${detailsHtml(f)}</div>`;
+    }
     const further = !error && !cursor.end && cursor.n < ORDER_WEEKS && cursor.w < ORDER_WEEKS + 8;
     $moreWeeks.hidden = !further;
-    document.getElementById("b-submit").hidden = !days.length;
+    syncBar();
     if (!days.length && !document.getElementById("o-none") && !(error && !further)) {
       $days.insertAdjacentHTML("afterbegin", `<p id="o-none">Keine Tage, die sich ${further ? "in diesen Wochen " : ""}noch ändern lassen.</p>`);
     }
@@ -1093,7 +1161,8 @@ async function showOrder(focusDate = null) {
     const discard = choice === "discard";
 
     working(true);
-    const previouslyInCart = discard ? [] : all.flatMap((d) => d.entries.filter((e) => e.quantityInCart === "1" && e.selectable));
+    // Neu- wie Abbestellungen (Menge 1 bzw. −1): ein Abbruch legt sie wieder in den Warenkorb.
+    const previouslyInCart = discard ? [] : all.flatMap((d) => d.entries.filter((e) => e.quantityInCart !== "" && e.selectable));
     const othersInCart = choice === "all" ? cart.others.length : 0;
     // Mit halb gefülltem Warenkorb darf die Stundenbremse nicht greifen: vorher prüfen, ob alles passt.
     const outcome = await budgetFor(orderCost(changes) + (discard ? 4 : 0))
@@ -1115,7 +1184,7 @@ async function showOrder(focusDate = null) {
       resultDialog("error", "Nichts abgeschickt", `<p>${esc(outcome.reason)}</p>`);
     } else {
       resultDialog("error", "Abgeschickt, aber nicht bestätigt", `<p>${esc(outcome.reason)}</p>
-        <p>Bitte auf der Bestellseite nachsehen: ${esc((outcome.missing || []).map(De.short).join(", "))}</p>`);
+        ${checkHint(outcome.missing)}`);
     }
     // Die geänderten Tage hat placeOrders frisch geladen, der Rest kommt aus dem Zwischenspeicher.
     submitting = false;
@@ -1128,10 +1197,10 @@ async function showOrder(focusDate = null) {
 
 const REPO_URL = "https://github.com/thmschk/sunshine-reminder";
 const DONATE_URL = "https://paypal.me/LorenzThomschke";
-// ic_heart der App (Material favorite_border).
+// Herz-Symbol (Material favorite_border).
 const HEART = "M16.5,3c-1.74,0 -3.41,0.81 -4.5,2.09C10.91,3.81 9.24,3 7.5,3 4.42,3 2,5.42 2,8.5c0,3.78 3.4,6.86 8.55,11.54L12,21.35l1.45,-1.32C18.6,15.36 22,12.28 22,8.5 22,5.42 19.58,3 16.5,3zM12.1,18.55l-0.1,0.1 -0.1,-0.1C7.14,14.24 4,11.39 4,8.5 4,6.5 5.5,5 7.5,5c1.54,0 3.04,0.99 3.57,2.36h1.87C13.46,5.99 14.96,5 16.5,5c2,0 3.5,1.5 3.5,3.5 0,2.89 -3.14,5.74 -7.9,10.05z";
 
-/** Wie DonateDialog der App: erst der Satz, dann der Griff nach draußen. */
+/** Spenden-Dialog: erst der Satz, dann der Griff nach draußen. */
 function showAbout() {
   const dlg = document.createElement("dialog");
   dlg.className = "dialog about";
@@ -1171,17 +1240,20 @@ const entryRow = (date, what, name) => `
 /** Einträge aus dem Warenkorb von IBS5 (cartOthers). */
 const cartRows = (items) => items.map((i) => entryRow(i.date, i.kind, i.name)).join("");
 
-/** Rückfrage mit fertigem HTML; true = okLabel. */
-function askDialog(title, body, okLabel) {
+/**
+ * Rückfrage mit fertigem HTML; true = okLabel. Knöpfe untereinander: die Aktion gefüllt,
+ * bei danger (Löschen, Verwerfen) in Fehlerfarbe, „Abbrechen“ neutral darunter.
+ */
+function askDialog(title, body, okLabel, { danger = false } = {}) {
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
     dlg.className = "dialog result-dialog";
     dlg.innerHTML = `
       <h3>${esc(title)}</h3>
       ${body}
-      <div class="dialog-actions">
-        <button type="button" class="text" data-v="">Abbrechen</button>
-        <button type="button" class="text" data-v="1">${esc(okLabel)}</button>
+      <div class="dialog-actions stacked">
+        <button type="button" class="${danger ? "btn-danger" : "btn-fill"}" data-v="1">${esc(okLabel)}</button>
+        <button type="button" class="text btn-neutral" data-v="">Abbrechen</button>
       </div>`;
     document.body.append(dlg);
     const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
@@ -1192,7 +1264,7 @@ function askDialog(title, body, okLabel) {
 }
 
 /**
- * Rückfrage wie AlertDialog der App. Liegt im Warenkorb noch anderes (cartOthers),
+ * Rückfrage vor dem Abschicken. Liegt im Warenkorb noch anderes (cartOthers),
  * steht es mit darin: verwerfen oder mitbestellen; ist es nicht lesbar, nur verwerfen.
  * @returns {Promise<false|"mine"|"discard"|"all">}
  */
@@ -1205,9 +1277,10 @@ function orderDialog(lines, { total, others }) {
       <p class="cart-extra">Im Warenkorb liegen außerdem ${what}, die nicht abgeschickt sind.
         Abgeschickt wird immer der ganze Warenkorb:</p>
       <ul class="entries">${cartRows(others)}</ul>`;
-  const buttons = !rest ? [["mine", "Abschicken"]]
-    : others == null ? [["discard", "Verwerfen, nur meine Auswahl"]]
-    : [["discard", "Verwerfen, nur meine Auswahl"], ["all", "Alles abschicken"]];
+  // [Wert, Beschriftung, Klasse]: Abschicken gefüllt, Verwerfen in Fehlerfarbe, zuoberst das Verbindliche.
+  const buttons = !rest ? [["mine", "Abschicken", "btn-fill"]]
+    : others == null ? [["discard", "Verwerfen, nur meine Auswahl", "btn-danger"]]
+    : [["all", "Alles abschicken", "btn-fill"], ["discard", "Verwerfen, nur meine Auswahl", "btn-danger-text"]];
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
     dlg.className = "dialog";
@@ -1215,9 +1288,9 @@ function orderDialog(lines, { total, others }) {
       <h3>Verbindlich abschicken?</h3>
       ${lines.map((l) => `<p class="clamp">${esc(l)}</p>`).join("")}
       ${extra}
-      <div class="dialog-actions${buttons.length > 1 ? " stacked" : ""}">
-        <button type="button" class="text" data-v="">Abbrechen</button>
-        ${buttons.map(([v, label]) => `<button type="button" class="text" data-v="${v}">${label}</button>`).join("")}
+      <div class="dialog-actions stacked">
+        ${buttons.map(([v, label, cls]) => `<button type="button" class="${cls}" data-v="${v}">${label}</button>`).join("")}
+        <button type="button" class="text btn-neutral" data-v="">Abbrechen</button>
       </div>`;
     document.body.append(dlg);
     const done = (v) => { dlg.close(); dlg.remove(); resolve(v || false); };
@@ -1264,17 +1337,27 @@ function showEvents() {
           `<option value="${esc(a.customerNo)}"${a.customerNo === currentCreds()?.customerNo ? " selected" : ""}>${esc(accountLabel(a))}</option>`).join("")}</select>` : ""}
         <label class="check"><input id="ev-nomeal" type="checkbox"> kein Schulessen an dem Tag</label>
         <p class="small muted">Bleibt nur auf diesem Gerät: nicht auf anderen Handys, und „Abmelden“ löscht es.
-          ${store.push ? "Erinnert wird mit der täglichen Erinnerung." : "Die Erinnerung ist aus (⚙) — dann steht es nur hier auf der Startseite."}</p>
+          ${store.push ? "Erinnert wird mit der täglichen Erinnerung." : `Die Erinnerung ist aus, dann steht der Termin nur hier auf der Startseite.
+            <button type="button" class="linklike" id="ev-settings">Erinnerung einschalten</button>`}</p>
         <div class="dialog-actions">
-          <button type="button" class="text" id="ev-close">Schließen</button>
-          <button type="submit" class="text">Speichern</button>
+          <button type="button" class="text btn-neutral" id="ev-close">Schließen</button>
+          <button type="submit" class="btn-fill">Speichern</button>
         </div>
       </form>
       ${list.length ? `<div class="section">EINGETRAGEN</div>
         <ul class="event-list">${list.map((e) => `
           <li><span>${esc(De.chip(e.date))} ${esc(e.title)}<span class="muted"> · ${whoText(e)}${e.noMeal ? "kein Schulessen · " : ""}${leadText(e.lead)}</span></span>
-            <button type="button" class="text" data-del="${e.id}" aria-label="Termin löschen">Löschen</button></li>`).join("")}</ul>` : ""}`;
+            <button type="button" class="text btn-danger-text" data-del="${e.id}"
+              aria-label="${esc(`Termin „${e.title}“ am ${De.chip(e.date)} löschen`)}">Löschen</button></li>`).join("")}</ul>` : ""}`;
     dlg.querySelector("#ev-close").onclick = close;
+    const toSettings = dlg.querySelector("#ev-settings");
+    if (toSettings) {
+      toSettings.onclick = () => {
+        changed = false; // die Einstellungen ersetzen die Startseite ohnehin
+        close();
+        showSettings();
+      };
+    }
     dlg.querySelector("#f-event").onsubmit = async (ev) => {
       ev.preventDefault();
       const title = dlg.querySelector("#ev-title").value.trim();
@@ -1287,6 +1370,9 @@ function showEvents() {
     };
     for (const b of dlg.querySelectorAll("[data-del]")) {
       b.onclick = async () => {
+        const e = list.find((x) => String(x.id) === b.dataset.del);
+        const ok = await askDialog("Termin löschen?", `<p>${esc(e ? `${De.chip(e.date)} ${e.title}` : "")}</p>`, "Löschen", { danger: true });
+        if (!ok) return;
         await removeEvent(today, b.dataset.del);
         changed = true;
         render();
@@ -1304,7 +1390,8 @@ function showEvents() {
 const ICON = {
   bell: "M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z",
   clock: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
-  calendar: "M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z",
+  dateRange: "M9 11H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2zm2-7h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11z",
+  week: "M6 5H3c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1h3c.55 0 1-.45 1-1V6c0-.55-.45-1-1-1zm14 0h-3c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1h3c.55 0 1-.45 1-1V6c0-.55-.45-1-1-1zm-7 0h-3c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1h3c.55 0 1-.45 1-1V6c0-.55-.45-1-1-1z",
   play: "M8 5v14l11-7z",
   school: "M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3L1 9l11 6 9-4.91V17h2V9L12 3z",
   face: "M9 11.75c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zm6 0c-.69 0-1.25.56-1.25 1.25s.56 1.25 1.25 1.25 1.25-.56 1.25-1.25-.56-1.25-1.25-1.25zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8 0-.29.02-.58.05-.86 2.36-1.05 4.23-2.98 5.21-5.37C11.07 8.33 14.05 10 17.42 10c.78 0 1.53-.09 2.25-.26.21.71.33 1.47.33 2.26 0 4.41-3.59 8-8 8z",
@@ -1320,22 +1407,25 @@ const ico = (name) => `<svg class="s-ico" viewBox="0 0 24 24" aria-hidden="true"
 /**
  * Eine Zeile der Einstellungen im Android-Stil: Symbol, Titel, rechts der
  * aktuelle Wert oder ein Bedienelement, nur wo nötig ein kleiner Hinweis darunter.
+ * title, value, hint und tip sind Text und werden maskiert; fertiges HTML nur über
+ * valueHtml (statt value) und rightHtml. attrs: weitere Attribute, fertig maskiert.
  */
-function srow(icon, title, { value = "", hint = "", right = "", cls = "", tag = "div", id = "", tip = "" } = {}) {
-  return `<${tag} ${id ? `id="${id}"` : ""} ${tip ? `title="${esc(tip)}"` : ""} class="srow ${tag === "button" ? "srow-btn " : ""}${cls}">${ico(icon)}
-    <span class="srow-t">${title}</span>${value ? `<span class="srow-v">${value}</span>` : ""}${right}</${tag}>
-    ${hint ? `<div class="srow-hint">${hint}</div>` : ""}`;
+function srow(icon, title, { value = "", valueHtml = "", hint = "", rightHtml = "", cls = "", tag = "div", id = "", tip = "", attrs = "" } = {}) {
+  const v = valueHtml || esc(value);
+  return `<${tag} ${id ? `id="${esc(id)}"` : ""} ${tip ? `title="${esc(tip)}"` : ""} ${attrs} class="srow ${tag === "button" ? "srow-btn " : ""}${esc(cls)}">${ico(icon)}
+    <span class="srow-t">${esc(title)}</span>${v ? `<span class="srow-v">${v}</span>` : ""}${rightHtml}</${tag}>
+    ${hint ? `<div class="srow-hint">${esc(hint)}</div>` : ""}`;
 }
 
 /** Kinder: je Konto eine Zeile, Entfernen erst ab zwei (sonst „Abmelden und alles löschen“). */
 function accountRows(creds) {
   if (!store.accounts.length) {
     const c = clients.get(creds?.customerNo);
-    return srow("person", esc(c?.profile?.name || "Angemeldet"), { value: `Kd. ${esc(creds?.customerNo || "")}` });
+    return srow("person", c?.profile?.name || "Angemeldet", { value: `Kd. ${creds?.customerNo || ""}` });
   }
-  return store.accounts.map((a) => srow("person", esc(a.name || accountLabel(a)), {
-    value: `Kd. ${esc(a.customerNo)}`,
-    right: multi() ? `<button type="button" class="text srow-x" data-remove="${esc(a.customerNo)}">Entfernen</button>` : "",
+  return store.accounts.map((a) => srow("person", a.name || accountLabel(a), {
+    value: `Kd. ${a.customerNo}`,
+    rightHtml: multi() ? `<button type="button" class="text srow-x" data-remove="${esc(a.customerNo)}">Entfernen</button>` : "",
   })).join("") + srow("add", "Kind hinzufügen", { tag: "button", id: "b-kid-add",
     hint: multi() ? "" : "für Geschwister mit eigener Kundennummer" });
 }
@@ -1379,7 +1469,9 @@ function showSettings(message = "") {
   for (const b of $app.querySelectorAll("[data-remove]")) {
     b.onclick = async () => {
       const acc = store.accounts.find((a) => a.customerNo === b.dataset.remove);
-      if (!acc || !confirm(`${accountLabel(acc)} (Kd. ${acc.customerNo}) von diesem Gerät entfernen? Seine Termine gehen mit.`)) return;
+      if (!acc || !(await askDialog(`${accountLabel(acc)} entfernen?`,
+        `<p>${esc(accountLabel(acc))} (Kd. ${esc(acc.customerNo)}) wird von diesem Gerät entfernt, seine Termine auch.</p>`,
+        "Entfernen", { danger: true }))) return;
       try {
         store.accounts = await removeAccount(acc.customerNo);
       } catch (e) {
@@ -1392,7 +1484,9 @@ function showSettings(message = "") {
     };
   }
   document.getElementById("b-logout").onclick = async () => {
-    if (!confirm("Alles auf diesem Gerät löschen? Zugangsdaten, Sdui, Einstellungen und Erinnerung.")) return;
+    const ok = await askDialog("Abmelden und alles löschen?",
+      "<p>Gelöscht werden auf diesem Gerät Zugangsdaten, Termine, Sdui, Einstellungen und die Erinnerung.</p>", "Alles löschen", { danger: true });
+    if (!ok) return;
     await pushDisable().catch(() => {});
     // Ein Fehler wird nur gemeldet: nach freezeWrites kann die Seite ohnehin nichts mehr ablegen.
     await clearCreds().catch((e) => alert(`Löschen fehlgeschlagen, auf dem Gerät kann noch etwas liegen: ${e.message}`));
@@ -1407,7 +1501,8 @@ function showSettings(message = "") {
  */
 function daysAheadRow() {
   const n = loadDaysAhead();
-  return srow("calendar", "Vorwarnzeit", { tag: "button", id: "b-days", value: `<span id="days-ahead-val">${n}</span> Tage` }) + `
+  return srow("dateRange", "Vorwarnzeit", { tag: "button", id: "b-days", attrs: 'aria-expanded="false" aria-controls="days-edit"',
+    valueHtml: `<span id="days-ahead-val">${n}</span> Tage` }) + `
     <div id="days-edit" class="srow-edit" hidden>
       <button type="button" id="days-minus" class="step" aria-label="einen Tag weniger" ${n <= DAYS_AHEAD.min ? "disabled" : ""}>−</button>
       <button type="button" id="days-plus" class="step" aria-label="einen Tag mehr" ${n >= DAYS_AHEAD.max ? "disabled" : ""}>+</button>
@@ -1419,6 +1514,7 @@ function wireDaysAhead() {
   document.getElementById("b-days").onclick = () => {
     const e = document.getElementById("days-edit");
     e.hidden = !e.hidden;
+    document.getElementById("b-days").setAttribute("aria-expanded", !e.hidden);
   };
   const step = (d) => () => {
     saveDaysAhead(clampDaysAhead(loadDaysAhead() + d));
@@ -1453,9 +1549,9 @@ async function wireFerienBox() {
     const on = weeks.filter((w) => pref[w.monday]).length;
     return on === weeks.length ? "Essen" : on ? `Essen ${on} von ${weeks.length} Wochen` : "kein Essen";
   };
-  const title = `${esc(h.name)} ${esc(rangeText(h))}`;
-  box.innerHTML = kids.map((a, i) => srow("school", multi() ? `${esc(accountLabel(a))}: ${title}` : title, {
-    tag: "button", id: `ferien-${i}`, value: esc(state(prefs[i])),
+  const title = `${h.name} ${rangeText(h)}`;
+  box.innerHTML = kids.map((a, i) => srow("school", multi() ? `${accountLabel(a)}: ${title}` : title, {
+    tag: "button", id: `ferien-${i}`, value: state(prefs[i]),
     hint: i < kids.length - 1 ? "" : `Gefragt wird je Ferienwoche, vor allen Ferien neu. Ohne Antwort wird erinnert. ${known}`,
   })).join("");
   kids.forEach((a, i) => {
@@ -1487,7 +1583,7 @@ async function wireSduiBox(message = "") {
   if (!box.isConnected) return;
   // „Erinnern an“ ist selbst die Zeile: zugeklappt rechts die Kürzel, aufgeklappt die Fächerliste darunter.
   box.innerHTML = `${msg}
-    ${srow("school", esc(cfg.childName || "verbunden"), { hint: esc(cfg.slink || ""),
+    ${srow("school", cfg.childName || "verbunden", { hint: cfg.slink || "",
       tip: "Sdui läuft über unseren Server, der nichts speichert." })}
     ${known.length ? `
     <details class="srow-details">
@@ -1497,7 +1593,7 @@ async function wireSduiBox(message = "") {
           ${esc(sub)}${shorts.get(sub) ? ` <span class="small muted">(${esc(shorts.get(sub))})</span>` : ""}</label>`).join("")}</div>
     </details>` : srow("star", "Erinnern an", { value: "noch kein Plan" })}
     ${srow("logout", "Sdui entfernen", { tag: "button", id: "b-sdui-off", cls: "danger-row" })}`;
-  // Im zugeklappten Feld stehen die Kürzel der gewählten Fächer, wie in der App.
+  // Im zugeklappten Feld stehen die Kürzel der gewählten Fächer.
   const showChosen = () => {
     const chosen = [...box.querySelectorAll(".subjects input:checked")].map((x) => x.value);
     const v = box.querySelector(".dd-value");
@@ -1509,7 +1605,7 @@ async function wireSduiBox(message = "") {
   });
   showChosen();
   document.getElementById("b-sdui-off").onclick = async () => {
-    if (!confirm("Sdui-Zugang und Stundenplan auf diesem Gerät löschen?")) return;
+    if (!(await askDialog("Sdui entfernen?", "<p>Sdui-Zugang und Stundenplan werden von diesem Gerät gelöscht.</p>", "Entfernen", { danger: true }))) return;
     for (const k of ["sdui", "sduiSubjects", "sduiPlan", "sduiKnown", "sduiNotified"]) await kvDel(k);
     wireSduiBox();
   };
@@ -1588,7 +1684,7 @@ function weekdaysText(days) {
 }
 
 const toggle = (id, on, label) =>
-  `<button type="button" id="${id}" class="switch${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="${label}"></button>`;
+  `<button type="button" id="${id}" class="switch${on ? " on" : ""}" role="switch" aria-checked="${on}" aria-label="${esc(label)}"></button>`;
 // Die ganze Zeile eines Schalters schaltet; andere Bedienelemente darin bleiben für sich.
 document.addEventListener("click", (ev) => {
   const row = ev.target.closest?.(".srow, .ferien-week");
@@ -1605,18 +1701,21 @@ function pushBoxHtml(message = "") {
   }
   const on = !!store.push;
   const time = on ? store.push.time : DEFAULT_PUSH_TIME;
+  // Uhrzeit und Tage gehören zur Erinnerung: bei ausgeschalteter gedimmt und gesperrt.
+  const off = on ? "" : "srow-off";
+  const dis = on ? "" : " disabled";
   // Betreiber-Gerät markieren: nur sichtbar über …/#betreiber, braucht den Schlüssel vom Server.
   const admin = on && location.hash === "#betreiber" ? `
     ${srow("key", "Betreiber-Gerät", { hint: "bekommt die Alarme der täglichen Selbstprüfung" })}
     <div class="group-pad">${passwordField("admin-key", 'placeholder="Betreiber-Schlüssel"')}
       <div class="row"><button id="b-push-admin" class="text u-pl0">Als Betreiber-Gerät markieren</button></div></div>` : "";
   return `${msg}
-    ${srow("bell", "Erinnerung werktags", { right: toggle("push-switch", on, "Erinnerung") })}
-    ${srow("clock", "Uhrzeit", { hint: "Meldung kommt bis zu 30 min später",
-      right: `<input id="push-time" class="time-value" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit">` })}
-    ${srow("calendar", "Tage", { value: weekdaysText(store.pushWeekdays) })}
-    <div class="srow-edit wd-pick">${WEEKDAYS.map((n, i) => `<button type="button" class="wd-btn${store.pushWeekdays.includes(i + 1) ? " on" : ""}"
-      data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}">${n}</button>`).join("")}</div>
+    ${srow("bell", "Erinnerung werktags", { rightHtml: toggle("push-switch", on, "Erinnerung") })}
+    ${srow("clock", "Uhrzeit", { hint: "Meldung kommt bis zu 30 min später", cls: off,
+      rightHtml: `<input id="push-time" class="time-value" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit"${dis}>` })}
+    ${srow("week", "Tage", { value: weekdaysText(store.pushWeekdays), cls: off })}
+    <div class="srow-edit wd-pick ${off}">${WEEKDAYS.map((n, i) => `<button type="button" class="wd-btn${store.pushWeekdays.includes(i + 1) ? " on" : ""}"
+      data-wd="${i + 1}" aria-pressed="${store.pushWeekdays.includes(i + 1)}"${dis}>${n}</button>`).join("")}</div>
     ${daysAheadRow()}
     ${on ? srow("play", "Jetzt testen", { tag: "button", id: "b-push-test" }) : ""}
     ${on ? morningRows() : ""}
@@ -1626,10 +1725,10 @@ function pushBoxHtml(message = "") {
 /** Morgenmeldung „heute gibt's …“: hängt am Abo der Erinnerung, gleiche Tage. */
 function morningRows() {
   const m = store.push.morning;
-  return `${srow("sun", "Morgens: Essen von heute", { right: toggle("morning-switch", !!m, "Morgenmeldung"),
+  return `${srow("sun", "Morgens: Essen von heute", { rightHtml: toggle("morning-switch", !!m, "Morgenmeldung"),
       hint: "an denselben Tagen wie die Erinnerung" })}
     ${m ? srow("clock", "Uhrzeit morgens", { hint: "Meldung kommt bis zu 10 min später",
-      right: `<input id="morning-time" class="time-value" type="time" value="${esc(m)}" step="300" aria-label="Uhrzeit morgens">` }) : ""}
+      rightHtml: `<input id="morning-time" class="time-value" type="time" value="${esc(m)}" step="300" aria-label="Uhrzeit morgens">` }) : ""}
     ${m ? srow("play", "Morgenmeldung testen", { tag: "button", id: "b-morning-test" }) : ""}`;
 }
 
@@ -1667,7 +1766,7 @@ function wirePushBox(message = "") {
   // Die ganze Zeile öffnet die Zeitauswahl, nicht nur die Ziffern.
   for (const input of [time, mtime]) {
     input?.closest(".srow")?.addEventListener("click", (ev) => {
-      if (ev.target !== input) try { input.showPicker(); } catch { input.focus(); }
+      if (ev.target !== input && !input.disabled) try { input.showPicker(); } catch { input.focus(); }
     });
   }
   // Ohne Abo merkt sich das Feld nur die Wahl fürs Einschalten.
@@ -1826,6 +1925,21 @@ $add.onclick = showEvents;
 const swReady = "serviceWorker" in navigator
   ? navigator.serviceWorker.register("sw.js", { type: "module" }).then(() => true, () => false)
   : Promise.resolve(false);
+
+// Antippen einer Meldung bei offener Seite: der Service Worker lädt sie nicht neu,
+// sondern schickt {open: "?order=<Tag>[&k=<Kundennummer>]"}. Während einer
+// Bestellung bleibt die Ansicht stehen.
+navigator.serviceWorker?.addEventListener("message", (ev) => {
+  if (typeof ev.data?.open !== "string" || submitting) return;
+  const q = new URLSearchParams(ev.data.open);
+  const kid = q.get("k");
+  const date = q.get("order");
+  if (kid && store.accounts.some((a) => a.customerNo === kid)) selectAccount(kid);
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date) && currentCreds()) {
+    chrome(true);
+    showOrder(date);
+  } else showHome();
+});
 
 // Antippen der Erinnerung öffnet ./?order=<Tag>[&k=<Kundennummer>] → direkt in die Bestellansicht.
 await loadStore();

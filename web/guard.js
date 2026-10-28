@@ -1,9 +1,10 @@
 // Schutz vor der IP-Sperre von IBS5. Gesperrt antwortet IBS5 auf alles mit 406
 // ohne CORS-Freigabe, im Browser kommt davon nur „Failed to fetch“ an — nicht von
-// einem Netzfehler zu unterscheiden. Bei 429 auf den Login ruht jede Abfrage
-// drei Stunden (403 dort heißt seit 09.10.2026 nur „Passwort falsch“), statt die Sperre durch Wiederholungen zu verlängern. Bleibt der
-// Login nur ohne Antwort, kann das auch ein Aussetzer sein: erst 15 Minuten, erst
-// beim nächsten Schweigen binnen sechs Stunden drei. Die Sperre gilt der
+// einem Netzfehler zu unterscheiden. Bei 429 (auf jedem Pfad) ruht jede Abfrage
+// drei Stunden, statt die Sperre durch Wiederholungen zu verlängern; 403 beim Login
+// heißt seit 09.10.2026 nur „Passwort falsch“. Bleibt der Login ohne Antwort, kann
+// das auch ein Aussetzer sein: erst 15 Minuten, erst beim nächsten Schweigen binnen
+// sechs Stunden drei. Die Sperre gilt der
 // IP-Adresse, deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔
 // Mobilfunk, nur wo der Browser das verrät). Dazu eine Obergrenze je Stunde und
 // Gerät, die nur bremst, bis wieder Platz im Stundenfenster ist; gezählt wird, was

@@ -1,5 +1,5 @@
-// Stundenplan aus Sdui, nur lesend (hervorgegangen aus SduiClient der eingestellten
-// Android-App). Sdui sperrt Browserzugriffe fremder Seiten, deshalb laufen die
+// Stundenplan aus Sdui, nur lesend (Herkunft: SduiClient der Android-Fassung, bis 6160aed).
+// Sdui sperrt Browserzugriffe fremder Seiten, deshalb laufen die
 // Aufrufe über /api/sdui/ auf unserem Server, der sie nur durchreicht.
 //
 // Das Passwort wird nur beim Einrichten gebraucht: Sdui gibt einen Token aus, der
@@ -76,7 +76,7 @@ function local(epochSecs) {
   return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
 }
 
-/** „SoL“ → „SOL“, „D/SL“ → „DSL“, „Sport“ → „SPO“ — wie SubjectReminder.shortLabel. */
+/** „SoL“ → „SOL“, „D/SL“ → „DSL“, „Sport“ → „SPO“ — auch in der Fächermeldung des Service Workers. */
 export function shortLabel(raw) {
   const s = [...(raw || "")].filter((c) => /[\p{L}\p{N}]/u.test(c)).join("").toUpperCase().slice(0, 3);
   return s || (raw || "").trim().toUpperCase().slice(0, 3);

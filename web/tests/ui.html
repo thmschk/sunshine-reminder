@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -159,6 +159,9 @@ if (!mode) {
     await until(() => $('[data-remove="2000"]'));
     SubtleCrypto.prototype.encrypt = async () => { throw new DOMException("Speicher voll", "QuotaExceededError"); };
     $('[data-remove="2000"]').click();
+    await until(() => $('dialog [data-v="1"]'));
+    check(/Ben/.test($("dialog h3").textContent), `Rückfrage im eigenen Dialog: ${$("dialog h3").textContent}`);
+    $('dialog [data-v="1"]').click();
     await until(() => /Entfernen fehlgeschlagen/.test(errorText()));
     check(/Entfernen fehlgeschlagen/.test(errorText()), `Meldung: ${errorText()}`);
     check(document.querySelectorAll("[data-remove]").length === 2, "beide Kinder weiter da");
@@ -409,6 +412,74 @@ if (!mode) {
     rows.find((li) => li.querySelector(".sym.open")).querySelector(".day-btn").click();
     await until(() => $("#f-order") && orderLoaded());
     check(!!$("#f-order"), "Tippen auf offenen Tag öffnet die Bestellansicht");
+  } else if (mode === "errtext") {
+    // Netzfehler: Klartext sichtbar, die technische Meldung nur eingeklappt.
+    await account();
+    hooks.ibs = () => { throw new TypeError("Failed to fetch"); };
+    await import("../app.js");
+    await until(() => $("#b-retry"));
+    const hero = $(".hero");
+    const visible = [...hero.querySelectorAll(":scope > p, h2")].map((x) => x.textContent).join(" ");
+    check(!/Failed|\/Login|\/Menu|HTTP/.test(visible), `Klartext ohne Interna: ${visible.slice(0, 120)}`);
+    check(/Failed to fetch/.test(hero.querySelector("details.err-detail code")?.textContent || "")
+      && !hero.querySelector("details.err-detail").open, "technische Meldung eingeklappt");
+    check(/mobile Daten/.test(visible) && /sperrt/.test(visible), "Rat zu mobilen Daten mit Begründung");
+    // Danach einmal geladen, dann scheitert die nächste Aktualisierung mit einem Stand von gestern: der wird gezeigt.
+    hooks.ibs = null;
+    $("#b-retry").click();
+    await until(() => homeLoaded() && $(".days") && !$("#b-retry"));
+    const last = await kvGet("lastDays:1000");
+    await kvSet("lastDays:1000", { ...last, from: "2000-01-01", at: Date.now() - 86400e3 });
+    hooks.ibs = () => { throw new TypeError("Failed to fetch"); };
+    document.getElementById("btn-reload").click();
+    await until(() => $("#b-retry"));
+    check($(".days") && /letzte bekannte Stand von gestern/.test($(".hero").textContent),
+      `alter Stand als veraltet gezeigt: ${$(".hero p.small")?.textContent}`);
+  } else if (mode === "uifix") {
+    // Text in Einstellungszeilen maskiert, Rückfrage vor dem Löschen eines Termins, Abschickleiste ab der ersten Änderung.
+    // Das zweite Kind meldet sich nicht an, sein Name bleibt wie gespeichert.
+    await saveAccounts([{ customerNo: "1000", password: "a", name: "" }, { customerNo: "2000", password: "b", name: "<b>Ben</b>" }]);
+    const { addEvent, loadEvents } = await import("../events.js");
+    const { todayBerlin, addDays } = await import("../ibs.js");
+    await addEvent(todayBerlin(), { title: "Wandertag", date: addDays(todayBerlin(), 20), lead: 2, noMeal: false });
+    hooks.status = 0;
+    await import("../app.js");
+    await until(homeLoaded);
+    document.getElementById("btn-settings").click();
+    await until(() => $("#push-switch"));
+    const name = [...document.querySelectorAll(".srow-t")].find((x) => /Ben/.test(x.textContent));
+    check(name && name.textContent === "<b>Ben</b>" && !name.querySelector("b"), "Name in der Zeile als Text, nicht als HTML");
+    check($("#push-time").disabled && [...document.querySelectorAll(".wd-btn")].every((b) => b.disabled),
+      "Erinnerung aus: Uhrzeit und Tage gesperrt");
+    const days = $("#b-days");
+    days.click();
+    check(days.getAttribute("aria-expanded") === "true" && !$("#days-edit").hidden, "Vorwarnzeit aufgeklappt mit aria-expanded");
+    $("#b-back").click();
+    await until(homeLoaded);
+    document.getElementById("btn-add").click();
+    await until(() => $("[data-del]"));
+    check(/Wandertag/.test($("[data-del]").getAttribute("aria-label")), `Löschen benennt den Termin: ${$("[data-del]").getAttribute("aria-label")}`);
+    $("[data-del]").click();
+    await until(() => document.querySelectorAll("dialog").length === 2);
+    [...document.querySelectorAll('dialog [data-v=""]')].at(-1).click();
+    await ticks(20);
+    check((await loadEvents(todayBerlin())).length === 1, "Abbrechen lässt den Termin stehen");
+    $("[data-del]").click();
+    await until(() => document.querySelectorAll("dialog").length === 2);
+    $('dialog [data-v="1"]').click();
+    await until(() => !$("[data-del]"));
+    check((await loadEvents(todayBerlin())).length === 0, "nach Bestätigen gelöscht");
+    $("#ev-close").click();
+    await until(homeLoaded);
+    $("#b-order-now").click();
+    await until(() => $('#f-order input[type=radio][value="827"]') && orderLoaded());
+    check($("#o-bar").hidden, "ohne Änderung keine Abschickleiste");
+    const radio = $('#f-order input[type=radio][value="827"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    await ticks(5);
+    check(!$("#o-bar").hidden && $("#o-bar #b-submit").textContent === "1 Essen bestellen"
+      && getComputedStyle($("#o-bar")).position === "fixed", `Leiste unten: ${$("#b-submit").textContent}`);
   } else if (mode === "pushkey" || mode === "pushkeysame") {
     // Bestehendes Browser-Abo: nur übernehmen, wenn es zum Server-Schlüssel passt (/api/vapid: "AAAA" = 0,0,0).
     await account();

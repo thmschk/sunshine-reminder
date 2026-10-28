@@ -7,7 +7,7 @@
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
   parseOrderHistory, parseCart, cartOthers, submitCartAsSeen, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
-  ParserError, MenuEntry,
+  ParserError, MenuEntry, lastCall,
 } from "../ibs.js";
 
 const results = [];
@@ -37,7 +37,7 @@ await test("echtes Fixture: alle Tage bestellt", () => {
 });
 await test("vergessen, aber noch bestellbar", () => {
   const d = parseWeekplan(withoutOrders(kw35, "2026-08-27")).days.get("2026-08-27");
-  eq(d.state, OrderState.NOT_ORDERED); eq(d.orderable, true);
+  eq(d.state, OrderState.NOT_ORDERED); eq(d.isActionable, true);
 });
 await test("vergessen nach Bestellschluss", () => {
   eq(parseWeekplan(withoutOrders(kw35, "2026-08-24")).days.get("2026-08-24").state, OrderState.DEADLINE_PASSED);
@@ -84,6 +84,43 @@ await test("KW 42: Bestell-IDs, Kaltverpflegung, Warenkorb, Umlaute", () => {
   eq(mon.entries[1].name, "Gemüseeintopf", "Umlaut");
   eq(p.days.get("2026-10-13").state, OrderState.IN_CART, "Di Warenkorb");
 });
+// Ein Hinweis mit anderer KW vor dem Seitenkopf darf die Gegenprobe nicht stören.
+const kw42hint = kw42.replace('<div class="weekplan-title">', '<p class="hint">Bestellschluss für KW 7 beachten!</p><div class="weekplan-title">');
+await test("KW: Hinweis mit anderer KW vor dem Kopf, Kopf zählt", () => {
+  eq(kw42hint.indexOf("KW 7") < kw42hint.indexOf("weekplan-title"), true, "Hinweis steht vor dem Kopf");
+  const p = parseWeekplan(kw42hint);
+  eq([p.displayedWeek, p.weeksMentioned.sort()], [42, [42, 7]]);
+});
+await test("KW: ohne Kopf zählen alle Nennungen", () => {
+  const noTitle = kw42hint.replace('class="weekplan-title"', 'class="title"');
+  eq([parseWeekplan(noTitle).displayedWeek, parseWeekplan(noTitle).weeksMentioned.sort()], [null, [42, 7]]);
+  eq(parseWeekplan(kw42.replace('class="weekplan-title"', 'class="title"')).displayedWeek, 42, "eine Nennung");
+});
+await test("KW: collect mit Hinweis lädt, falsche Woche wirft weiter", async () => {
+  const days = await collect({ async weekplan() { return kw42hint; } }, ["2026-10-12"]);
+  eq(days.map((d) => d.date), ["2026-10-12"]);
+  let err = null;
+  try { await collect({ async weekplan() { return kw42hint; } }, ["2026-10-19"]); } catch (e) { err = e; }
+  eq(/Angefragt war KW 43, geliefert wurde KW 42/.test(err?.message || ""), true, `Fehler: ${err?.message}`);
+  err = null;
+  const noTitle = kw42hint.replace('class="weekplan-title"', 'class="title"');
+  try { await collect({ async weekplan() { return noTitle; } }, ["2026-10-19"]); } catch (e) { err = e; }
+  eq(/geliefert wurde KW (7\/42|42\/7)$/.test(err?.message || ""), true, `ohne Kopf: ${err?.message}`);
+  eq((await collect({ async weekplan() { return noTitle; } }, ["2026-10-12"])).length, 1, "ohne Kopf, Woche genannt");
+});
+
+await test("Letzter Weckruf vor dem Bestellschluss: täglich nächster und übernächster Schultag", () => {
+  const daily = [1, 2, 3, 4, 5];
+  // Mo 26.10.: Di, Mi dringend, Do noch nicht
+  eq(["2026-10-27", "2026-10-28", "2026-10-29"].map((d) => lastCall("2026-10-26", d, daily)), [true, true, false]);
+  // Fr 30.10.: Mo, Di dringend, Mi nicht
+  eq(["2026-11-02", "2026-11-03", "2026-11-04"].map((d) => lastCall("2026-10-30", d, daily)), [true, true, false], "übers Wochenende");
+  // Weckruf nur freitags: am Fr ist der Mi danach dringend (nächster Weckruf erst am Fr)
+  eq(["2026-11-04", "2026-11-09", "2026-11-10"].map((d) => lastCall("2026-10-30", d, [5])), [true, true, false], "nur freitags");
+  // Weckruf Mo und Do: am Mo ist der Fr noch nicht dran, der Do schon
+  eq(["2026-10-29", "2026-10-30", "2026-11-02"].map((d) => lastCall("2026-10-26", d, [1, 4])), [true, true, false], "Mo und Do");
+});
+
 await test("ISO-Kalenderwoche über Jahresgrenzen", () => {
   eq(isoWeek("2026-08-27"), [2026, 35]);
   eq(isoWeek("2026-01-01"), [2026, 1]);
@@ -825,7 +862,12 @@ class FakeClient {
   async cancelInCart(e) { this.calls.push(`cancel ${e.date}`); this.items.push(e); return new CartResponse(true, null, this.total()); }
   async submitCart() { this.calls.push("submit"); this.submitted = !this.failSubmit; return new CartResponse(!this.failSubmit, this.failSubmit ? "nein" : null, 0); }
   async discardCart() { this.calls.push("discard"); this.items = []; this.extraInCart = 0; }
+  async cartPage() { this.calls.push("cartPage"); return cartHtml(this.page || []); }
 }
+/** Warenkorbseite (Desktop) mit den Einträgen {date, name, kind}; date null = unlesbar. */
+const cartHtml = (items) => `<div id="shopping-cart"><table><tbody>${items.map((i) => `<tr>
+  <td><span>${i.date ? `Mo ${i.date.slice(8, 10)}.${i.date.slice(5, 7)}.${i.date.slice(0, 4)}` : "—"}</span></td>
+  <td><div>${i.name}</div></td><td><div>${i.kind}</div></td><td>1</td><td>1</td></tr>`).join("")}</tbody></table></div>`;
 const p42 = parseWeekplan(kw42);
 const line = (date, id) => p42.days.get(date).entries.find((e) => e.menuLineId === id);
 /** Tag aus KW 42 mit genau den Linien aus ordered (id → Menge) bestellt; closed: Bestellschluss vorbei. */
@@ -937,11 +979,37 @@ await test("Bestellen: Verwerfen greift nicht → nichts abgeschickt", async () 
   eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
 });
 
+// Abbruch: was vorher im Warenkorb lag, kommt wieder hinein, auch Abbestellungen.
+await test("Bestellen: Abbruch legt eine vorher liegende Abbestellung wieder in den Warenkorb", async () => {
+  const c = new FakeClient({ extraInCart: 1 });
+  const old = new MenuEntry({ ...line("2026-10-13", "828"), quantityInCart: "-1" });
+  c.items.push(old);
+  const r = await placeOrders(c, [{ date: "2026-10-13", current: null, target: line("2026-10-13", "829") }],
+    { previouslyInCart: [old], reload: orderedAfter("2026-10-13", "829") });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+  eq([c.calls.includes("cancel 2026-10-13"), c.calls.some((x) => x.startsWith("add 2026-10-13 828"))], [true, false], c.calls.join(", "));
+  eq(c.items.map((e) => [e.date, e.quantityInCart]), [["2026-10-13", "-1"]], "Warenkorb wie vorher");
+});
+await test("Bestellen: Abbruch nach liegender Umbestellung legt nur die neue Linie zurück", async () => {
+  // Bestellt ist 828, im Warenkorb lag die Umbestellung auf 829 (+1 und −1); jetzt abbestellen, Abbruch.
+  const c = new FakeClient({ extraInCart: 1 });
+  c.switchFrom = { "2026-10-13": true };
+  const neu = new MenuEntry({ ...line("2026-10-13", "829"), quantityInCart: "1" });
+  const alt = new MenuEntry({ ...line("2026-10-13", "828"), quantityInCart: "-1" });
+  const r = await placeOrders(c, [{ date: "2026-10-13", current: line("2026-10-13", "828"), target: null }],
+    { previouslyInCart: [neu, alt], reload: states({ "2026-10-13": { 828: 1 } }, {}) });
+  eq(r.kind, "aborted", r.reason);
+  const steps = c.calls.filter((x) => /^(add|cancel) /.test(x));
+  eq(steps, ["cancel 2026-10-13", "add 2026-10-13 829"], c.calls.join(", "));
+  eq(c.items.map((e) => e.menuLineId ?? "Abbestellung"), ["829", "Abbestellung"], "Warenkorb wie vorher");
+});
+
 // Nur den Warenkorb abschicken, ohne Auswahl.
 const seen = [{ date: "2026-11-09", name: "Hörnchennudeln", kind: "Neubestellung" }, { date: "2026-11-10", name: "Linsen", kind: "Abbestellung" }];
 const dayAfter = (ordered) => async (ds) => ds.map((d) => ({ date: d, entries: ordered.includes(d) ? [{ isOrdered: true }] : [] }));
 await test("Nur Warenkorb: wie gesehen → abgeschickt und nachgeprüft", async () => {
   const c = new FakeClient({ extraInCart: 2 });
+  c.page = seen;
   const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09"]) });
   eq(r.kind, "done", r.reason); eq(c.submitted, true);
 });
@@ -952,15 +1020,71 @@ await test("Nur Warenkorb: Zahl weicht ab → nichts abgeschickt", async () => {
 });
 await test("Nur Warenkorb: Abbestellung steht danach noch als bestellt → unbestätigt", async () => {
   const c = new FakeClient({ extraInCart: 2 });
+  c.page = seen;
   const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09", "2026-11-10"]) });
   eq(r.kind, "unconfirmed"); eq(r.missing, ["2026-11-10"]);
 });
 await test("Nur Warenkorb: Antwort fehlt, Stand passt → erledigt", async () => {
   const c = new FakeClient({ extraInCart: 2 });
+  c.page = seen;
   c.submitCart = async () => { throw new Error("Netz weg"); };
   const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09"]) });
   eq(r.kind, "done");
 });
+
+await test("Nur Warenkorb: gleich viele, aber andere Einträge → nichts abgeschickt", async () => {
+  for (const other of [
+    [seen[0], { ...seen[1], date: "2026-11-11" }],
+    [seen[0], { ...seen[1], name: "Erbsen" }],
+    [seen[0], { ...seen[1], kind: "Neubestellung" }],
+  ]) {
+    const c = new FakeClient({ extraInCart: 2 });
+    c.page = other;
+    const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09"]) });
+    eq(r.kind, "aborted", JSON.stringify(other[1])); eq(c.calls.includes("submit"), false, "submit");
+    eq(/Nichts abgeschickt/.test(r.reason), true, r.reason);
+  }
+});
+await test("Nur Warenkorb: Seite unlesbar → nichts abgeschickt", async () => {
+  const c = new FakeClient({ extraInCart: 2 });
+  c.cartPage = async () => "<p>Login</p>";
+  const r = await submitCartAsSeen(c, seen, { reload: dayAfter(["2026-11-09"]) });
+  eq(r.kind, "aborted"); eq(c.calls.includes("submit"), false, "submit");
+});
+await test("Nur Warenkorb: Eintrag ohne lesbares Datum → nichts abgeschickt, Grund nennt ihn", async () => {
+  const undated = [seen[0], { date: null, name: "Linsen", kind: "Abbestellung" }];
+  const c = new FakeClient({ extraInCart: 2 });
+  c.page = undated;
+  eq(parseCart(cartHtml(undated))[1].date, null, "Fixture");
+  const r = await submitCartAsSeen(c, undated, { reload: dayAfter(["2026-11-09"]) });
+  eq([r.kind, c.calls], ["aborted", []]);
+  eq(/„Linsen“/.test(r.reason) && /Nichts abgeschickt/.test(r.reason), true, r.reason);
+});
+{
+  // Umbestellung: das Gericht im Warenkorb muss danach bestellt sein; andere Bestellarten bleiben unbestätigt.
+  const um = [{ date: "2026-11-09", name: "Hörnchennudeln(BIO), Gemüse-Bolognese", kind: "Umbestellung" }];
+  const dayWith = (name) => async (ds) => ds.map((d) => ({ date: d, entries: name ? [{ isOrdered: true, name }] : [] }));
+  const send = async (items, reload) => {
+    const c = new FakeClient({ extraInCart: items.length });
+    c.page = items;
+    return [await submitCartAsSeen(c, items, { reload }), c];
+  };
+  await test("Nur Warenkorb: Umbestellung, Gericht danach bestellt → erledigt", async () => {
+    const [r, c] = await send(um, dayWith("Hörnchennudeln"));
+    eq(r.kind, "done", r.reason); eq(c.submitted, true);
+  });
+  await test("Nur Warenkorb: Umbestellung, anderes oder kein Gericht bestellt → unbestätigt", async () => {
+    for (const name of ["Linseneintopf", null]) {
+      const [r] = await send(um, dayWith(name));
+      eq([r.kind, r.missing], ["unconfirmed", ["2026-11-09"]], `bestellt: ${name}`);
+    }
+  });
+  await test("Nur Warenkorb: unbekannte Bestellart → unbestätigt mit Grund", async () => {
+    const [r] = await send([{ date: "2026-11-09", name: "Hörnchennudeln", kind: "Sonderbestellung" }], dayWith("Hörnchennudeln"));
+    eq([r.kind, r.missing], ["unconfirmed", ["2026-11-09"]]);
+    eq(/„Sonderbestellung“ kann die App nicht nachprüfen/.test(r.reason), true, r.reason);
+  });
+}
 
 await test("Bestellen: Probelauf schickt nichts ab", async () => {
   const c = new FakeClient();
@@ -1081,11 +1205,11 @@ await test("Neues Layout: Kundennummer aus $('#id').click(…), Tages- und Woche
   const day = (...b) => parseWeekplan(`<ul><li class="plan" id="dayplan">${b.join("")}</li></ul>`).days.get("2026-10-12");
   await test("Tagesansicht: offene Kaltverpflegung hält einen abgelaufenen Tag nicht offen", () => {
     const d = day(btn(827, "Linseneintopf", "true"), btn(828, "Gemüsepfanne", "true"), btn(831, "Kaltverpflegung", "false"));
-    eq([d.state, d.orderable], [OrderState.DEADLINE_PASSED, false]);
+    eq(d.state, OrderState.DEADLINE_PASSED);
   });
   await test("Tagesansicht: offener Tag bleibt offen", () => {
     const d = day(btn(827, "Linseneintopf", "false"), btn(831, "Kaltverpflegung", "false"));
-    eq([d.state, d.orderable], [OrderState.NOT_ORDERED, true]);
+    eq(d.state, OrderState.NOT_ORDERED);
   });
 }
 
@@ -1130,7 +1254,71 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
 });
 
 {
-  const { cacheKey, renewPush } = await import("../sw.js");
+  const { cacheKey, renewPush, ringsLoud, openTarget, SHELL } = await import("../sw.js");
+  await test("Weckruf: offener Tag vor dem Bestellschluss wieder laut, sonst nur Neues", () => {
+    const daily = [1, 2, 3, 4, 5];
+    const kid = (date, state = OrderState.NOT_ORDERED) => ({ checked: [new DayStatus(date, state)] });
+    const msg = (date) => ({ keys: [`${date}:NOT_ORDERED`], quiet: false });
+    const seenBefore = (date) => new Set([`${date}:NOT_ORDERED`]);
+    // Mo 26.10.: Do bekannt → still; Mi bekannt → laut (letzter Abend davor); neuer Do → laut
+    eq(ringsLoud(msg("2026-10-29"), [kid("2026-10-29")], seenBefore("2026-10-29"), "2026-10-26", daily), false, "Do am Mo");
+    eq(ringsLoud(msg("2026-10-28"), [kid("2026-10-28")], seenBefore("2026-10-28"), "2026-10-26", daily), true, "Mi am Mo");
+    eq(ringsLoud(msg("2026-10-29"), [kid("2026-10-29")], new Set(), "2026-10-26", daily), true, "neu");
+    // Bestellschluss vorbei oder alles bestellt (quiet): nicht wegen der Frist laut
+    eq(ringsLoud({ keys: ["2026-10-27:DEADLINE_PASSED"], quiet: false }, [kid("2026-10-27", OrderState.DEADLINE_PASSED)],
+      new Set(["2026-10-27:DEADLINE_PASSED"]), "2026-10-26", daily), false, "zu spät");
+    eq(ringsLoud({ keys: [], quiet: true }, [kid("2026-10-27", OrderState.ORDERED)], new Set(), "2026-10-26", daily), false, "alles bestellt");
+    // Zwei Kinder, eines mit Fehler (ohne checked)
+    eq(ringsLoud(msg("2026-10-27"), [{ error: new Error("x") }, kid("2026-10-27")], seenBefore("2026-10-27"), "2026-10-26", daily), true, "zwei Kinder");
+  });
+  {
+    const scope = "https://satt.example/app/";
+    const fakeClients = (urls) => {
+      const log = [];
+      const wins = urls.map((url) => ({
+        url,
+        navigate: async (u) => log.push(["navigate", u]),
+        focus: async () => log.push(["focus", url]),
+        postMessage: (m) => log.push(["post", url, m]),
+      }));
+      return { log, clients: { matchAll: async () => wins, openWindow: async (u) => log.push(["open", u]) } };
+    };
+    await test("Meldung angetippt, Seite offen: nach vorn und Nachricht, kein Neuladen", async () => {
+      const { log, clients } = fakeClients(["https://satt.example/app/"]);
+      await openTarget("./?order=2026-10-28&k=1000", clients, scope);
+      eq(log, [["post", "https://satt.example/app/", { open: "?order=2026-10-28&k=1000" }], ["focus", "https://satt.example/app/"]]);
+    });
+    await test("Meldung angetippt, keine Seite offen: neues Fenster mit Ziel", async () => {
+      const { log, clients } = fakeClients([]);
+      await openTarget("./?order=2026-10-28", clients, scope);
+      eq(log, [["open", "https://satt.example/app/?order=2026-10-28"]]);
+    });
+    await test("Meldung angetippt mit Ziel außerhalb der App (/api/health): eigenes Fenster", async () => {
+      const { log, clients } = fakeClients(["https://satt.example/app/"]);
+      await openTarget("/api/health", clients, scope);
+      eq(log, [["open", "https://satt.example/api/health"]]);
+    });
+  }
+  await test("Service Worker: SHELL enthält jedes per import erreichbare Modul", async () => {
+    const files = new Set(SHELL.map((f) => f.split("?")[0]));
+    const index = await fetch("../index.html").then((r) => r.text());
+    const todo = [...index.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]);
+    eq(todo, ["app.js"], "Einstieg in index.html");
+    todo.push("sw.js");
+    const seenMods = new Set();
+    while (todo.length) {
+      const f = todo.pop();
+      if (seenMods.has(f)) continue;
+      seenMods.add(f);
+      const src = await fetch(`../${f}`).then((r) => { if (!r.ok) throw new Error(`${f}: HTTP ${r.status}`); return r.text(); });
+      // Statisch (auch mehrzeilig) und dynamisch: from "./x.js", import "./x.js", import("./x.js").
+      for (const m of src.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)["']\.\/([^"']+)["']/g)) todo.push(m[1]);
+    }
+    seenMods.delete("sw.js");
+    const missing = [...seenMods].filter((f) => !files.has(f));
+    eq(missing, [], `fehlt in SHELL (erreichbar: ${[...seenMods].sort().join(", ")})`);
+    eq(seenMods.size >= 9, true, `zu wenige Module gefunden: ${[...seenMods].join(", ")}`);
+  });
   await test("Service Worker: Aufrufe der App teilen sich die Hülle, auch mit ?order= (#4 K7)", () => {
     const scope = "https://satt.example/app/";
     const nav = (path) => ({ mode: "navigate", url: `https://satt.example${path}` });

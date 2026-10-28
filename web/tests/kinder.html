@@ -72,6 +72,8 @@ document.getElementById("b-add-cancel").click();
 await until(() => document.querySelector("[data-remove]"));
 
 document.querySelector('[data-remove="2000"]').click();
+await until(() => document.querySelector('dialog [data-v="1"]'));
+document.querySelector('dialog [data-v="1"]').click();
 await until(() => !document.querySelector("[data-remove]"));
 check(!document.querySelector("[data-remove]"), "Ben entfernt, bei einem Kind kein Entfernen mehr");
 document.getElementById("b-back").click();

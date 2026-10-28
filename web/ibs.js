@@ -1,7 +1,6 @@
 // IBS5-Client, Wochenplan-Parser, Prüfung und Bestellung für den Browser.
 //
-// Hervorgegangen aus der eingestellten Android-App (Git-Historie bis 6160aed,
-// android/core). Der Parser arbeitet bewusst mit regulären
+// Herkunft: android/core der Android-Fassung (bis 6160aed). Der Parser arbeitet bewusst mit regulären
 // Ausdrücken statt DOMParser, weil er auch im Service Worker laufen muss, und den
 // gibt es dort nicht.
 //
@@ -175,7 +174,7 @@ export class IbsClient {
     });
   }
 
-  /** Schickt den GESAMTEN Warenkorb ab — OrderPlacer prüft vorher dessen Inhalt. */
+  /** Schickt den GESAMTEN Warenkorb ab — placeOrders prüft vorher dessen Inhalt. */
   submitCart() { return this.#postJson("/Cart/Order", null); }
 
   /** Warenkorbseite: die einzige Stelle, die den Inhalt nennt (parseCart). */
@@ -386,7 +385,6 @@ export class DayStatus {
     this.entries = entries;
   }
   get orderedItems() { return this.entries.filter((e) => e.isOrdered).map((e) => e.name); }
-  get orderable() { return this.entries.some(orderableMeal); }
   get isActionable() { return this.state === OrderState.NOT_ORDERED || this.state === OrderState.IN_CART; }
   get label() { return STATE_LABEL[this.state]; }
 }
@@ -406,7 +404,9 @@ function dayState(entries) {
 
 /**
  * Wochenplan oder Tagesansicht in Tage zerlegen.
- * @returns {{days: Map<string, DayStatus>, displayedWeek: number|null, view: "week"|"day"}}
+ * displayedWeek: die KW aus dem Seitenkopf (class="weekplan-title"); fehlt der,
+ * die einzige im Seitentext genannte, sonst null. weeksMentioned: alle dort genannten.
+ * @returns {{days: Map<string, DayStatus>, displayedWeek: number|null, weeksMentioned: number[], view: "week"|"day"}}
  */
 export function parseWeekplan(html) {
   // Anker am Container: eine Ferienwoche ist legitim leer, eine Fehlerseite nie ein Plan.
@@ -415,8 +415,13 @@ export function parseWeekplan(html) {
   if (!view) {
     throw new ParserError("Antwort enthält keinen Wochenplan — vermutlich eine Fehler- oder Login-Seite.");
   }
+  // Ein Hinweis wie „Bestellschluss für KW 7 beachten“ kann vor dem Kopf stehen.
   const text = decode(html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " "));
-  const kw = /\bKW\s*(\d{1,2})\b/.exec(text);
+  const weeksMentioned = [...new Set([...text.matchAll(/\bKW\s*(\d{1,2})\b/g)].map((m) => parseInt(m[1], 10)))];
+  // Der Kopf darf weitere Tags enthalten: gesucht wird im Text kurz hinter seinem Anfang.
+  const title = /<[^>]*class\s*=\s*["'][^"']*\bweekplan-title\b[^>]*>/i.exec(html);
+  const titleWeek = title && /\bKW\s*(\d{1,2})\b/.exec(decode(html.slice(title.index + title[0].length).slice(0, 300).replace(/<[^>]+>/g, " ")));
+  const kw = titleWeek ? parseInt(titleWeek[1], 10) : weeksMentioned.length === 1 ? weeksMentioned[0] : null;
 
   const bound = new Map();
   for (const m of html.matchAll(CLICK_BINDING)) bound.set(m[1], m[2]);
@@ -461,7 +466,8 @@ export function parseWeekplan(html) {
   }
   const days = new Map();
   for (const [date, entries] of byDate) days.set(date, new DayStatus(date, dayState(entries), entries));
-  return { days, displayedWeek: view === "week" && kw ? parseInt(kw[1], 10) : null, view };
+  const week = view === "week";
+  return { days, displayedWeek: week ? kw : null, weeksMentioned: week ? weeksMentioned : [], view };
 }
 
 // ---------------------------------------------------------------- Bestellhistorie
@@ -564,18 +570,39 @@ export async function cartOthers(client, dates) {
   return { total, others };
 }
 
+/** Gleicher Inhalt, Reihenfolge egal. */
+const sameItems = (a, b) => {
+  const key = (items) => items.map((i) => JSON.stringify([i.date, i.name, i.kind])).sort().join("\n");
+  return key(a) === key(b);
+};
+
 /**
  * Nur den Warenkorb abschicken, ohne eigene Auswahl: genau die Einträge, die der
- * Nutzer gesehen hat (cartOthers). Weicht die Zahl ab, kam unterdessen etwas dazu
- * oder weg, dann wird nicht abgeschickt. Nachgeprüft wird je Tag: mit Neubestellung
- * bestellt, mit nur Abbestellungen nicht mehr bestellt.
+ * Nutzer gesehen hat (cartOthers). Vorher werden Zahl und Seite erneut gelesen;
+ * weicht ein Eintrag ab (Tag, Gericht, Bestellart), kam unterdessen etwas dazu,
+ * weg oder anders, dann wird nicht abgeschickt. Ohne lesbares Datum ließe sich ein
+ * Eintrag nicht nachprüfen, auch dann nicht. Nachgeprüft wird je Tag: mit
+ * Neubestellung bestellt, mit Umbestellung das Gericht bestellt, mit nur
+ * Abbestellungen nicht mehr bestellt; eine andere Bestellart gilt als unbestätigt.
  * @returns {Promise<{kind:"done"|"aborted"|"unconfirmed", reason?:string, missing?:string[]}>}
  */
 export async function submitCartAsSeen(client, seen, { reload }) {
+  const undated = seen.find((i) => !i.date);
+  if (undated) {
+    return { kind: "aborted", reason: `Ein Eintrag im Warenkorb hat kein lesbares Datum („${undated.name || undated.kind || "?"}“), die App kann ihn nicht nachprüfen. Nichts abgeschickt — bitte auf der Bestellseite abschicken.` };
+  }
   const total = (await client.cart()).totalItemsInCart;
   if (total !== seen.length) {
     return { kind: "aborted", reason: `Im Warenkorb liegen ${total ?? "?"} statt ${seen.length} Einträge — er hat sich unterdessen geändert. Nichts abgeschickt.` };
   }
+  let now;
+  try {
+    now = parseCart(await client.cartPage());
+  } catch (e) {
+    if (!(e instanceof ParserError)) throw e;
+    return { kind: "aborted", reason: `Warenkorb nicht lesbar (${e.message}). Nichts abgeschickt.` };
+  }
+  if (!sameItems(now, seen)) return { kind: "aborted", reason: "Im Warenkorb liegt inzwischen etwas anderes als angezeigt — er hat sich unterdessen geändert. Nichts abgeschickt." };
   // Ab hier kann die Bestellung durch sein, auch wenn keine Antwort kommt (wie placeOrders).
   let lost = null;
   try {
@@ -584,7 +611,7 @@ export async function submitCartAsSeen(client, seen, { reload }) {
   } catch (e) {
     lost = e;
   }
-  const dates = [...new Set(seen.map((i) => i.date).filter(Boolean))];
+  const dates = [...new Set(seen.map((i) => i.date))];
   const why = lost ? `Antwort auf das Abschicken fehlt (${lost.message})` : null;
   let after;
   try {
@@ -592,14 +619,25 @@ export async function submitCartAsSeen(client, seen, { reload }) {
   } catch (e) {
     return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates };
   }
+  const unknownKinds = new Set();
   const asSeen = (date) => {
-    const kinds = seen.filter((i) => i.date === date).map((i) => i.kind);
-    const ordered = (after.find((d) => d.date === date)?.entries || []).some((e) => e.isOrdered);
-    return kinds.some((k) => /^neu/i.test(k)) ? ordered : kinds.every((k) => /^ab/i.test(k)) ? !ordered : true;
+    const items = seen.filter((i) => i.date === date);
+    const ordered = (after.find((d) => d.date === date)?.entries || []).filter((e) => e.isOrdered);
+    const is = (re) => items.filter((i) => re.test(i.kind));
+    const [neu, um, ab] = [is(/^neu/i), is(/^um/i), is(/^ab/i)];
+    if (neu.length + um.length + ab.length < items.length) {
+      for (const i of items) if (!/^(neu|um|ab)/i.test(i.kind)) unknownKinds.add(i.kind || "ohne Angabe");
+      return false;
+    }
+    // Was „Umbestellung“ genau meint, verrät die Seite nicht: das Gericht muss danach bestellt sein.
+    const dish = (i) => ordered.some((e) => e.name && e.name.toLowerCase() === shortDish(i.name).toLowerCase());
+    if (um.length) return um.every(dish);
+    return neu.length ? ordered.length > 0 : ordered.length === 0;
   };
   const missing = dates.filter((d) => !asSeen(d));
+  const unknown = unknownKinds.size ? `Bestellart ${[...unknownKinds].map((k) => `„${k}“`).join(", ")} kann die App nicht nachprüfen.` : null;
   return missing.length
-    ? { kind: "unconfirmed", reason: why || "Nicht alle Tage stehen so im Wochenplan wie im Warenkorb.", missing }
+    ? { kind: "unconfirmed", reason: [why, unknown].filter(Boolean).join("; ") || "Nicht alle Tage stehen so im Wochenplan wie im Warenkorb.", missing }
     : { kind: "done" };
 }
 
@@ -641,6 +679,17 @@ export function nextWeekday(today, weekdays) {
     if (weekdays.includes(weekdayNo(d))) return d;
   }
   return addDays(today, 1);
+}
+
+/**
+ * Ist der Weckruf heute womöglich der letzte vor dem Bestellschluss von date?
+ * Eine Uhrzeit dafür liefert IBS5 nicht. Angenommen wird: am Abend vor dem
+ * vorigen Schultag ist noch Zeit, später vielleicht nicht mehr. Also ja, wenn der
+ * nächste Weckruf (pushDays) erst am Schultag direkt vor date oder danach kommt —
+ * bei täglichen Weckrufen für den nächsten und übernächsten Schultag.
+ */
+export function lastCall(today, date, pushDays, schoolDays = DEFAULT_CHECK.weekdays) {
+  return date <= nextWeekday(nextWeekday(today, pushDays), schoolDays);
 }
 
 /** Längste Lücke in Kalendertagen zwischen zwei aufeinanderfolgenden Wochentagen aus weekdays (Mo–Fr: 3, Fr → Mo). */
@@ -695,9 +744,11 @@ export async function collect(client, dates, { fresh = false, onProgress, histor
       client.dayView = true;
       return byDay();
     }
-    // „KW nn“ im Seitenkopf als Gegenprobe: eine andere Woche nie zuordnen.
-    if (plan.displayedWeek != null && plan.displayedWeek !== w) {
-      throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${plan.displayedWeek}`);
+    // „KW nn“ im Seitenkopf als Gegenprobe: eine andere Woche nie zuordnen. Ohne
+    // eindeutigen Kopf muss die angefragte Woche wenigstens unter den genannten sein.
+    const shown = plan.displayedWeek != null ? [plan.displayedWeek] : plan.weeksMentioned;
+    if (shown.length && !shown.includes(w)) {
+      throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${shown.join("/")}`);
     }
     for (const d of ds) result.push(plan.days.get(d) ?? new DayStatus(d, OrderState.NO_OFFER));
   }
@@ -876,6 +927,9 @@ function orderedAs(day, line) {
     && parseFloat(String(ordered[0].quantityOrdered ?? "").replace(",", ".")) === 1;
 }
 
+/** Menge laut data-quantity-in-shopping-cart; 0, wenn leer oder unlesbar. */
+const cartQuantity = (e) => parseFloat(String(e.quantityInCart ?? "").replace(",", ".")) || 0;
+
 /** current = bestellte Linie oder null, target = gewünschte Linie oder null ("nichts"). */
 export function changeKind(c) {
   if (!c.current && c.target) return "ORDER";
@@ -888,11 +942,15 @@ export function changeKind(c) {
  * Warenkorb füllen, prüfen, abschicken. Cart/Order schickt den ganzen Warenkorb
  * ab, und IBS5 nennt vom Warenkorb nur die Zahl der Einträge. Geprüft wird
  * deshalb: jedes Hinzufügen legt nach dem Leeren des Tages genau die eigenen
- * Einträge dazu, und am Ende liegt nur die Auswahl darin. Weicht eine Zahl ab,
+ * Einträge dazu, und am Ende liegt nur die Auswahl darin, dazu genau othersInCart
+ * vom Nutzer gesehene fremde Einträge (siehe unten). Weicht eine Zahl ab,
  * liegt dort etwas Fremdes (oder ein Schritt kam nicht an), dann wird nicht
  * abgeschickt. Umbestellen =
  * nur neue Linie Typ I, die Abbestellung der alten legt der Server selbst dazu
  * (zwei Einträge).
+ *
+ * previouslyInCart: Einträge mit quantityInCart (1 = Neu-, −1 = Abbestellung), die
+ * vorher im Warenkorb lagen; ein Abbruch legt sie an berührten Tagen wieder hinein.
  *
  * Was an anderen Tagen im Warenkorb liegt (cartOthers), hat der Nutzer vorher
  * gesehen: discard = erst den ganzen Warenkorb verwerfen, sonst gehen genau
@@ -934,8 +992,12 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
     let clean = true;
     const step = (p) => p.catch(() => { clean = false; });
     for (const e of touched) await step(client.clearCart(e.customerId, e.date, e.menuGroupId));
-    for (const old of previouslyInCart.filter((o) => touched.some((t) => t.date === o.date))) {
-      await step(client.addToCart(old));
+    for (const date of new Set(touched.map((t) => t.date))) {
+      const olds = previouslyInCart.filter((o) => o.date === date);
+      // Lag eine Umbestellung im Warenkorb, legt der Server zur neuen Linie die Abbestellung selbst dazu.
+      const adds = olds.filter((o) => cartQuantity(o) > 0);
+      for (const old of adds) await step(client.addToCart(old));
+      if (!adds.length) for (const old of olds.filter((o) => cartQuantity(o) < 0)) await step(client.cancelInCart(old));
     }
     return clean;
   };

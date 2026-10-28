@@ -3,22 +3,23 @@
 // davon nichts; er schickt nur {"t":"check"} zur gewählten Uhrzeit und, falls
 // eingeschaltet, morgens {"t":"today"} für „heute gibt's …“.
 import {
-  AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, OrderState, addDays, collect, evaluate, nextWeekday, targetDates,
-  todayBerlin,
+  AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, OrderState, addDays, collect, evaluate, lastCall, nextWeekday,
+  targetDates, todayBerlin,
 } from "./ibs.js";
 import { KeyUnreadableError, kvGet, kvSet } from "./idb.js";
-import { accountLabel, dayStore, loadAccounts, renameAccount } from "./accounts.js";
+import { dayStore, loadAccounts, renameAccount } from "./accounts.js";
 import * as Sdui from "./sdui.js";
 import { IbsBudgetError, IbsPausedError, guardHooks } from "./guard.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v65";
+const VERSION = "v66";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
-const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "ferien.json"];
+// Jedes Modul, das app.js oder sw.js per import erreicht, muss hier stehen (Test in tests/test.html).
+export const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "ferien.json"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -138,7 +139,7 @@ async function confirmTest(tag) {
   }
 }
 
-/** Gewählte Fächer am nächsten Schultag, wie SduiCheck der App; still, wenn nichts ansteht. */
+/** Gewählte Fächer am nächsten Schultag, wie in der Übersicht; still, wenn nichts ansteht. */
 async function subjectReminder(isTest) {
   try {
     const cfg = await Sdui.sduiConfig();
@@ -228,7 +229,8 @@ async function checkAndNotify(isTest) {
   }
   const daysAhead = clampDaysAhead(await kvGet("daysAhead"));
   const today = todayBerlin();
-  const checkDates = pushCheckDates(today, daysAhead, (await kvGet("pushWeekdays")) || DEFAULT_CHECK.weekdays);
+  const pushDays = (await kvGet("pushWeekdays")) || DEFAULT_CHECK.weekdays;
+  const checkDates = pushCheckDates(today, daysAhead, pushDays);
   const events = await loadEvents(today).catch(() => []);
   const ferien = await loadHolidays();
   const kids = [];
@@ -249,11 +251,20 @@ async function checkAndNotify(isTest) {
   }
   if (!kids.some((k) => k.error)) await kvSet("lastPushOk", { at: Date.now() });
 
-  // Wie NotifiedDays der App: laut nur, wenn ein Tag oder Termin in diesem Zustand neu ist.
   const known = new Set(((await kvGet("notified")) || []).filter((k) => k.slice(0, 10) >= today));
-  const fresh = isTest || msg.keys.some((k) => !known.has(k));
   await kvSet("notified", [...new Set([...known, ...msg.keys])]);
-  return notify(msg.title, msg.body, { silent: msg.quiet || !fresh, url: msg.url });
+  return notify(msg.title, msg.body, { silent: msg.quiet || !(isTest || ringsLoud(msg, kids, known, today, pushDays)), url: msg.url });
+}
+
+/**
+ * Laut, wenn ein Tag oder Termin in diesem Zustand neu ist (known: bisher
+ * gemeldete keys) oder ein offener Tag womöglich zum letzten Mal vor seinem
+ * Bestellschluss gemeldet wird (lastCall); msg.quiet bleibt immer still.
+ */
+export function ringsLoud(msg, kids, known, today, pushDays) {
+  if (msg.quiet) return false;
+  if (msg.keys.some((k) => !known.has(k))) return true;
+  return kids.some((k) => (k.checked || []).some((d) => d.isActionable && lastCall(today, d.date, pushDays)));
 }
 
 /**
@@ -455,17 +466,24 @@ function notify(title, body, { silent = false, url = "./", tag = "hs-check" } = 
 
 self.addEventListener("notificationclick", (ev) => {
   ev.notification.close();
-  const target = new URL(ev.notification.data?.url || "./", self.registration.scope).href;
-  ev.waitUntil((async () => {
-    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    const win = wins.find((w) => w.url.startsWith(self.registration.scope));
-    if (win) {
-      await win.navigate(target).catch(() => {});
-      return win.focus();
-    }
-    return self.clients.openWindow(target);
-  })());
+  ev.waitUntil(openTarget(ev.notification.data?.url || "./", self.clients, self.registration.scope));
 });
+
+/**
+ * Ziel einer angetippten Meldung öffnen. Eine offene App-Seite wird nicht neu
+ * geladen (vielleicht ist gerade ein Warenkorb halb gefüllt): sie kommt nach vorn
+ * und bekommt {open: "?order=…"}, ob sie wechselt, entscheidet sie selbst.
+ */
+export async function openTarget(url, clients, scope) {
+  const target = new URL(url, scope);
+  const base = new URL(scope).pathname;
+  const appPage = target.origin === new URL(scope).origin && (target.pathname === base || target.pathname === `${base}index.html`);
+  const wins = await clients.matchAll({ type: "window", includeUncontrolled: true });
+  const win = appPage && wins.find((w) => w.url.startsWith(scope));
+  if (!win) return clients.openWindow(target.href);
+  win.postMessage({ open: target.search });
+  return win.focus().catch(() => {});
+}
 
 /**
  * Neue Abo-Adresse dem Server melden. Kennt der Server das Abo nicht mehr (404),

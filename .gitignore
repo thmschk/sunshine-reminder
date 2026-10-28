@@ -10,7 +10,6 @@ venv/
 .idea/
 .vscode/
 
-# Signierschluessel — gehoeren NIE ins Repo
-*.jks
-*.keystore
-keystore.properties
+# Schlüssel und Daten des Push-Servers (VAPID-Schlüssel, Abos) — gehören NIE ins Repo
+*.pem
+*.sqlite
