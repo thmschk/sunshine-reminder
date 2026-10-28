@@ -460,3 +460,99 @@ class NeuerSchluessel(unittest.TestCase):
         with self.assertLogs("push", "WARNING") as logs:
             self.app.init()
         self.assertIn("1 Abos", logs.output[0])
+
+
+class HttpServer(unittest.TestCase):
+    """Handler gegen einen echten lokalen Server: kaputte Content-Length, Timeout, Verbindungslimit."""
+
+    def setUp(self):
+        import sqlite3
+        import threading
+        from unittest import mock
+        import app
+        self.app = app
+        self.old = getattr(app, "CONN", None)
+        app.CONN = sqlite3.connect(":memory:", check_same_thread=False)
+        app.CONN.row_factory = sqlite3.Row
+        self.patch = mock.patch.object(app.Handler, "timeout", 1)
+        self.patch.start()
+        self.srv = app.LimitedServer(("127.0.0.1", 0), app.Handler)
+        self.port = self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.patch.stop()
+        self.app.CONN.close()
+        self.app.CONN = self.old
+
+    def raw(self, request: bytes, wait=True) -> bytes:
+        import socket
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        s.sendall(request)
+        if not wait:
+            return s
+        out = b""
+        try:
+            while chunk := s.recv(4096):
+                out += chunk
+        except TimeoutError:
+            pass
+        s.close()
+        return out
+
+    def post(self, length: str, body=b""):
+        return self.raw(b"POST /api/subscriptions HTTP/1.1\r\nHost: x\r\nContent-Length: " + length.encode() + b"\r\n\r\n" + body)
+
+    def test_content_length_keine_zahl(self):
+        for bad in ("abc", "-5", "1e3", "", "٣"):
+            self.assertIn(b" 400 ", self.post(bad).split(b"\r\n")[0], bad)
+
+    def test_content_length_negativ_und_zu_gross_sdui(self):
+        out = self.raw(b"POST /api/sdui/auth/login HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n")
+        self.assertIn(b" 400 ", out.split(b"\r\n")[0])
+        out = self.raw(b"POST /api/sdui/auth/login HTTP/1.1\r\nHost: x\r\nContent-Length: 99999\r\n\r\n")
+        self.assertIn(b" 413 ", out.split(b"\r\n")[0])
+
+    def test_zu_wenig_bytes_laufen_in_den_timeout(self):
+        import time
+        t = time.monotonic()
+        out = self.post("100", b"{}")
+        self.assertIn(b" 400 ", out.split(b"\r\n")[0])
+        self.assertLess(time.monotonic() - t, 4)
+
+    def test_verbindungslimit_503(self):
+        from unittest import mock
+        with mock.patch.object(self.srv, "slots", __import__("threading").BoundedSemaphore(1)):
+            hold = self.raw(b"GET /nix HTTP/1.1\r\nHost: x\r\n", wait=False)  # Kopf unvollständig: belegt den Platz
+            import time
+            time.sleep(0.2)
+            out = self.raw(b"GET /nix HTTP/1.1\r\nHost: x\r\n\r\n")
+            self.assertTrue(out.startswith(b"HTTP/1.1 503"))
+            hold.close()
+            time.sleep(0.3)
+            self.assertTrue(self.srv.slots.acquire(blocking=False))  # Platz wurde wieder frei
+
+
+class Wochentage(unittest.TestCase):
+    def test_bool_ist_kein_wochentag(self):
+        with self.assertRaises(BadRequest):
+            parse_settings({"weekdays": [True]}, partial=True)
+        self.assertEqual(parse_settings({"weekdays": [1, 7]}, partial=True)["weekdays"], "17")
+
+
+class PushFehlerLog(unittest.TestCase):
+    def test_endpoint_nicht_im_log(self):
+        import requests
+        from unittest import mock
+        import app
+        url = "https://fcm.googleapis.com/fcm/send/GEHEIMES-TOKEN"
+        r = {"id": "a", "endpoint": url, "keys": "{}"}
+        for exc in (requests.ConnectionError(url), requests.ReadTimeout(url)):
+            with mock.patch.object(app, "webpush", side_effect=exc), self.assertLogs("push", "WARNING") as logs:
+                self.assertFalse(app.send(r, None))
+            text = "\n".join(logs.output)
+            self.assertNotIn("GEHEIMES-TOKEN", text)
+            self.assertIn(type(exc).__name__, text)
+            self.assertNotIn("Traceback", text)

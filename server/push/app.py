@@ -1,10 +1,13 @@
 """Push-Wecker und Sdui-Durchreiche für die Web-App.
 
-Speichert je Gerät nur ein Web-Push-Abo samt Uhrzeit, Zeitzone und Wochentagen —
-keine Zugangsdaten, keinen Namen, keinen Bestellstand. Zur gewählten Zeit geht
-ein Push mit {"t": "check"} hinaus, zur Morgenzeit (falls gewählt) {"t": "today"};
-was gemeldet wird, entscheidet der Service Worker auf dem Gerät, der IBS5 selbst
-abfragt.
+Speichert je Gerät nur ein Web-Push-Abo (Adresse, Schlüssel) mit Uhrzeit,
+gegebenenfalls Morgenzeit, Wochentagen, Zeitzone, Zufallsverschiebung, Tag des
+letzten Weckrufs je Art, Anlagedatum, SHA-256 des Abo-Geheimnisses,
+Betreiber-Kennzeichen (is_admin) und Beginn einer Ablehnung durch den Push-Dienst
+(auth_failed_since) — keine Zugangsdaten, keinen Namen, keinen Bestellstand.
+Zur gewählten Zeit geht ein Push mit {"t": "check"} hinaus, zur Morgenzeit
+(falls gewählt) {"t": "today"}; was gemeldet wird, entscheidet der Service Worker
+auf dem Gerät, der IBS5 selbst abfragt.
 
 Die id ist öffentlich, ändern oder löschen darf nur, wer das beim Anlegen
 ausgegebene Geheimnis kennt (gespeichert wird nur dessen SHA-256).
@@ -48,6 +51,9 @@ KEY_PATH = os.path.join(DATA_DIR, "vapid_private.pem")
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://sunshine.thomschke.info")
 PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY = 4096
+# Socket-Timeout je Verbindung (s) und Obergrenze gleichzeitiger Verbindungen.
+HANDLER_TIMEOUT = 30
+MAX_CONNECTIONS = 64
 MAX_SUBSCRIPTIONS = 5000
 PUSH_TTL = 3 * 3600
 PUSH_TIMEOUT = 10
@@ -202,9 +208,6 @@ def init() -> Vapid:
             CONN.execute("ALTER TABLE subs ADD COLUMN morning_last_sent TEXT")
         if "auth_failed_since" not in cols:
             CONN.execute("ALTER TABLE subs ADD COLUMN auth_failed_since TEXT")
-        # Übergang: früher standen Betreiber-Abos als Liste in ADMIN_SUBS.
-        for legacy in [x for x in os.environ.get("ADMIN_SUBS", "").split(",") if x]:
-            CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (legacy,))
         CONN.execute(f"UPDATE subs SET offset_min = abs(random()) % {MAX_OFFSET_MIN + 1} WHERE offset_min IS NULL")
         CONN.commit()
         subs = CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
@@ -298,7 +301,7 @@ def parse_settings(body: dict, partial: bool = False) -> dict:
         out["morning_time"] = m
     if "weekdays" in body or not partial:
         w = body.get("weekdays", [1, 2, 3, 4, 5])
-        if not isinstance(w, list) or not w or not all(isinstance(x, int) and 1 <= x <= 7 for x in w):
+        if not isinstance(w, list) or not w or not all(isinstance(x, int) and not isinstance(x, bool) and 1 <= x <= 7 for x in w):
             raise BadRequest("weekdays muss eine Liste aus 1–7 sein")
         out["weekdays"] = "".join(str(x) for x in sorted(set(w)))
     if "tz" in body or not partial:
@@ -370,8 +373,12 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
     except requests.TooManyRedirects:
         log.warning("Push fehlgeschlagen: Umleitung nicht gefolgt")
         return False
+    except requests.RequestException as exc:
+        # Nur der Typ: Meldung und Traceback enthalten die Endpoint-URL (= Push-Token).
+        log.warning("Push fehlgeschlagen: %s", type(exc).__name__)
+        return False
     except ValueError:
-        # Schlüssel oder Adresse nicht verwendbar (z. B. vor der Kurvenprüfung angelegt): wird nie zustellbar.
+        # Schlüssel oder Adresse nicht verwendbar (die Prüfung beim Anlegen fängt das meist ab): wird nie zustellbar.
         with db_lock:
             CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ?", (row["id"], row["endpoint"]))
             CONN.commit()
@@ -399,7 +406,7 @@ def selfcheck() -> list[str]:
     problems = []
 
     def req(method, url, headers=None, data=None, limit=2000):
-        # Wie ein Browser: das IBS5-Layout seit 09.10.2026 weist fremde Kennungen womöglich ab.
+        # Sicherheitshalber wie ein Browser (Origin, User-Agent), so wie die Web-App anfragt.
         h = {"Origin": ORIGIN, "User-Agent": BROWSER_UA, **(headers or {})}
         r = urllib.request.Request(url, data=data, method=method, headers=h)
         try:
@@ -551,6 +558,8 @@ def scheduler(vapid: Vapid) -> None:
 class Handler(BaseHTTPRequestHandler):
     server_version = "push"
     sys_version = ""
+    # Langsame oder abgebrochene Clients halten sonst ewig einen Thread.
+    timeout = HANDLER_TIMEOUT
     vapid: Vapid
 
     def log_message(self, *args):  # keine IPs, keine Pfade mit ids im Log
@@ -565,12 +574,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def body(self) -> dict:
-        n = int(self.headers.get("Content-Length") or 0)
+    def content_length(self) -> int:
+        """Content-Length als Zahl in 0..MAX_BODY; sonst BadRequest."""
+        raw = (self.headers.get("Content-Length") or "0").strip()
+        if not raw.isascii() or not raw.isdigit():
+            raise BadRequest("Content-Length ungültig")
+        n = int(raw)
         if n > MAX_BODY:
             raise BadRequest("zu groß")
+        return n
+
+    def read_body(self, n: int) -> bytes:
         try:
-            obj = json.loads(self.rfile.read(n) or b"{}")
+            return self.rfile.read(n)
+        except TimeoutError:
+            raise BadRequest("Zeitüberschreitung")
+
+    def body(self) -> dict:
+        try:
+            obj = json.loads(self.read_body(self.content_length()) or b"{}")
         except json.JSONDecodeError:
             raise BadRequest("kein JSON")
         if not isinstance(obj, dict):
@@ -596,13 +618,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404)
         if not sdui_allowed(client_ip(self.headers, self.client_address)):
             return self.reply(429, {"error": "zu viele Anfragen, bitte später"})
-        n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
-            return self.reply(413)
+        try:
+            n = self.content_length()
+        except BadRequest as exc:
+            return self.reply(413 if str(exc) == "zu groß" else 400, {"error": str(exc)})
         headers = {"Accept": "application/json", "User-Agent": "theoretisch-satt (+https://github.com/thmschk/sunshine-reminder)"}
         if self.headers.get("Authorization", "").startswith("Bearer "):
             headers["Authorization"] = self.headers["Authorization"]
-        data = self.rfile.read(n) if method == "POST" else None
+        try:
+            data = self.read_body(n) if method == "POST" else None
+        except BadRequest as exc:
+            return self.reply(400, {"error": str(exc)})
         if data is not None:
             try:
                 data = sdui_login_body(data)
@@ -725,6 +751,35 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200)
 
 
+class LimitedServer(ThreadingHTTPServer):
+    """Höchstens MAX_CONNECTIONS gleichzeitige Verbindungen; weitere bekommen sofort 503."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:  # Thread nicht gestartet: Platz sofort freigeben.
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     vapid = init()
@@ -732,7 +787,7 @@ def main() -> None:
     threading.Thread(target=scheduler, args=(vapid,), daemon=True).start()
     threading.Thread(target=run_selfcheck, args=(vapid,), daemon=True).start()
     log.info("lauscht auf :%d", PORT)
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    LimitedServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":

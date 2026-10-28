@@ -23,7 +23,11 @@ sunshine.thomschke.info {
 	@manifest path *.webmanifest
 	header @manifest Content-Type application/manifest+json
 
+	# max_size passend zu MAX_BODY in server/push/app.py (4096), mit Luft.
 	handle /api/* {
+		request_body {
+			max_size 16KB
+		}
 		reverse_proxy 127.0.0.1:18080
 	}
 
