@@ -2,7 +2,7 @@
 
 Anlass war eine externe Durchsicht des README (Commit `399d4f8`) mit neun Befunden.
 Hier steht je Befund, was im Code tatsächlich zutraf, was geändert wurde und wie
-es geprüft ist. Stand: 2026-10-05.
+es geprüft ist. Stand: 2026-10-27.
 
 | | Befund | im Code | Ergebnis |
 |---|---|---|---|
@@ -12,8 +12,8 @@ es geprüft ist. Stand: 2026-10-05.
 | F4 | Code-Integrität | CSP und Header gab es, mit `style-src 'unsafe-inline'` | **behoben**: CSP ohne `unsafe-inline`, `object-src 'none'`, HSTS mit `includeSubDomains`, COOP; README-Abschnitt mit Prüfbefehl. **nicht umgesetzt**: CI mit Prüfsummen (siehe unten) |
 | F5 | Zugangsdaten, XSS | IBS5-Passwort gespeichert (nötig für die Hintergrundprüfung), Fremddaten überall maskiert | **behoben**: „Abmelden“ löscht alles samt Schlüssel und Abo, README ehrlich. **geprüft**: präpariertes `<img onerror>` bleibt Text. **nicht umgesetzt**: DOMParser, Trusted Types (siehe unten) |
 | F6 | Sdui-Relay härten | Pfad-Liste, numerische IDs, fester Host, Header-Auswahl, Limit, Timeout gab es | **behoben**: keine Kodierungs-/Traversal-Tricks, Login-Body streng geprüft und neu serialisiert. **nicht umgesetzt**: eigene Subdomain (siehe unten) |
-| F7 | Impressum, Datenschutz, Anbieterbedingungen | fehlte | **offen**: Entwürfe liegen vor, Angaben des Betreibers fehlen. Bis dahin bleibt die Web-Version im geschlossenen Test |
-| F8 | IP-Sperre durch Last | nacheinander, Pausen, Cache gab es. **Fehler**: bei Sperre meldete sich die Seite erneut an | **behoben**: Schutzschalter (3 h Pause nach Netzfehler beim Login oder 429), 150 Anfragen je Stunde und Gerät (bremst nur, bis wieder Platz ist, mit eigener Meldung; Bestellungen prüfen vorher, ob sie hineinpassen, und laufen dann ohne Bremse durch, ein gescheitertes Zurücksetzen des Warenkorbs wird gemeldet; die Bestellansicht lädt erst drei Wochen), Zufall in den Pausen, Anzeige in App und Meldung; Pause bei bloßem Schweigen erst 15 min (3 h erst bei Wiederholung binnen 6 h), endet bei Netzwechsel, Retry auch im Anmeldeformular; Weiterleitung/401/403 beim Login gilt nicht als falsches Passwort. Mehrere Kinder (je eigene Kundennummer): ein Weckruf prüft sie nacheinander, nie parallel, und macht entsprechend mehr Abfragen; Schutzschalter und Stundenlimit gelten je Gerät, nicht je Kind |
+| F7 | Impressum, Datenschutz, Anbieterbedingungen | fehlte | **behoben**: Datenschutzerklärung (`web/datenschutz.html`, in der App verlinkt), Web-Version öffentlich unter `sunshine.thomschke.info`. **bewusst nicht**: Impressum (privates, nicht kommerzielles Angebot). **offen**: Anbieterbedingungen, siehe unten |
+| F8 | IP-Sperre durch Last | nacheinander, Pausen, Cache gab es. **Fehler**: bei Sperre meldete sich die Seite erneut an | **behoben**: Schutzschalter (3 h Pause nach 429; bleibt der Login ohne Antwort, erst 15 min, 3 h erst bei Wiederholung binnen 6 h; `web/guard.js`), 150 Anfragen je Stunde und Gerät (bremst nur, bis wieder Platz ist, mit eigener Meldung; Bestellungen prüfen vorher, ob sie hineinpassen, und laufen dann ohne Bremse durch, ein gescheitertes Zurücksetzen des Warenkorbs wird gemeldet; die Bestellansicht lädt erst drei Wochen), Zufall in den Pausen, Anzeige in App und Meldung; Pause endet bei Netzwechsel, Retry auch im Anmeldeformular; Weiterleitung/401 beim Login gilt als Störung, 403 dort seit dem IBS5-Layout vom 09.10.2026 als falsches Passwort. Mehrere Kinder (je eigene Kundennummer): ein Weckruf prüft sie nacheinander, nie parallel, und macht entsprechend mehr Abfragen; Schutzschalter und Stundenlimit gelten je Gerät, nicht je Kind |
 | F9 | Stilles Versagen | Fehler beim Weckruf meldeten sich schon | **behoben**: letzte erfolgreiche Prüfung sichtbar, Warnung nach vier Tagen ohne Erfolg, tägliche Selbstprüfung des Servers mit Alarm an den Betreiber (`/api/health`) |
 
 ## Tests
@@ -35,12 +35,12 @@ es geprüft ist. Stand: 2026-10-05.
 
 ## Nachtrag: viele Nutzer
 
-- Weckrufe derselben Uhrzeit verteilt der Server gleichmäßig über 30 Minuten (am wenigsten belegte Minute), Standard ist 17:00.
-- Betreiber-Alarme gehen an Abos mit `is_admin`. Ein Gerät markiert sich über `…/#betreiber` → ⚙ mit dem Schlüssel aus `ADMIN_KEY` in `/srv/sunshine/.env`. Die Markierung überlebt ein Neuanmelden desselben Geräts.
+Weckrufe derselben Uhrzeit verteilt der Server über 30 Minuten (Morgenmeldung über 10), Betreiber-Alarme
+gehen an Abos mit `is_admin`; Einzelheiten in `docs/betrieb.md`.
 
 ## Offen
 
 - iPhone: Erinnerung über 14 Werktage, mindestens 5 davon „alles bestellt“, Abo muss gültig bleiben.
-- Impressum, Datenschutzerklärung, Verzeichnis der Verarbeitungstätigkeiten, Auftragsverarbeitungsvertrag mit Hetzner.
-- Nutzungsbedingungen von IBS5 und Sdui zu fremden Programmen prüfen, gegebenenfalls anfragen. Betrifft auch die Android-App.
+- Verzeichnis der Verarbeitungstätigkeiten, Auftragsverarbeitungsvertrag mit Hetzner. (Datenschutzerklärung erledigt, Impressum bewusst nicht, siehe F7.)
+- Nutzungsbedingungen von IBS5 und Sdui zu fremden Programmen prüfen, gegebenenfalls anfragen.
 - IBS5-Token statt Passwort: Der Token wird inzwischen zusätzlich (verschlüsselt) gespeichert, damit nicht jeder Aufruf neu anmeldet; das Passwort bleibt für den Fall nötig, dass er abläuft. Seine Laufzeit ist nicht dokumentiert.

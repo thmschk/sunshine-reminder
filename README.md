@@ -1,6 +1,6 @@
-*satt … theoretisch.*
+# theoretisch satt
 
-*(früher „immerhin.satt“ und „happy sunshine“, bis 0.1.20 „sunshine reminder“ — das Repository heißt weiter so)*
+*satt … theoretisch.*
 
 Erinnert auf dem Handy daran, wenn im Schulessen-Bestellsystem **IBS5**
 (`ibs.sunshine-catering.de`) für die nächsten Tage nichts bestellt ist — und
@@ -8,49 +8,68 @@ bestellt, bestellt um oder bestellt ab direkt aus der [Web-App](#web-version).
 Sie läuft im Browser auf iPhone und Android; für die Erinnerung weckt ein
 kleiner Server das Gerät, ohne die IBS5-Zugangsdaten zu kennen.
 
+**Adresse: <https://sunshine.thomschke.info>** · [Datenschutz](https://sunshine.thomschke.info/datenschutz.html)
+
 > **Die Android-App ist eingestellt.** Es gab bis Oktober 2026 eine eigene
 > Android-App. Sie wird nicht mehr weiterentwickelt, ihr Code liegt in der
 > Git-Historie (zuletzt in Commit `6160aed`), die letzte Fassung unter
-> [Releases](../../releases/latest). Installierte Apps laufen weiter, bekommen
-> aber keine Updates mehr.
+> [Releases](../../releases/latest). Sie funktioniert womöglich nicht mehr
+> richtig, seit IBS5 am 09.10.2026 sein Layout geändert hat — bitte die
+> Web-Version nehmen.
 
 > **Kein offizielles Produkt.** Dieses Projekt steht in keinerlei Verbindung zu
 > Sunshine Catering, zum Hersteller von IBS5 oder zur Sdui GmbH. Es benutzt
-> dieselben Schnittstellen wie deren Webseiten, mit den Zugangsdaten des
-> jeweiligen Nutzers. Bestellt wird nur, wenn man ausdrücklich Gerichte wählt
-> und bestätigt — von selbst bestellt oder ändert nichts.
-> Sdui wird nur gelesen. Die Anbieter können ihre Webseiten jederzeit ändern;
-> dann funktioniert es nicht mehr. Nutzung auf eigene Verantwortung.
+> dieselben Schnittstellen wie deren Webseiten, mit deinen Zugangsdaten.
+> Bestellt wird nur, wenn du ausdrücklich Gerichte wählst und bestätigst — von
+> selbst bestellt oder ändert die App nichts. Sdui wird nur gelesen. Die
+> Anbieter können ihre Webseiten jederzeit ändern; dann funktioniert es nicht
+> mehr. Nutzung auf eigene Verantwortung.
+
+## Was du wissen solltest
+
+* **Dein IBS5-Passwort liegt auf dem Handy**, verschlüsselt im Browser, weil die
+  tägliche Prüfung sich ohne dich anmeldet. Den Code liefert bei jedem Öffnen
+  der Server aus — du vertraust also dem Betreiber (mir). Wie man nachprüft,
+  was ausgeliefert wird, steht unter [Integrität](#integrität).
+* **Bestellungen kosten Geld.** Maßgeblich ist, was in IBS5 steht. Meldet die
+  App „nicht bestätigt“, bitte auf der Bestellseite von IBS5 nachsehen.
+* **Zu viele Abfragen kann IBS5 mit einer Sperre deiner IP-Adresse
+  beantworten**; dann geht auch die normale Bestellseite eine Weile nicht. Die
+  App fragt deshalb sparsam und hält bei Verdacht von selbst inne.
+* **Meldungen erscheinen auf dem Sperrbildschirm** mit Vornamen, Gerichten und
+  gegebenenfalls Schulfächern. Wer das nicht will, stellt in den
+  Handy-Einstellungen die Vorschau für diese App ab.
+* **iPhone ab iOS 16.4**, und Erinnerungen dort nur in der zum Home-Bildschirm
+  hinzugefügten Fassung.
 
 ## Web-Version
 
-Die Web-Version wird gerade erprobt. Die Adresse folgt, sobald sie allgemein
-offen ist.
-
-* Übersicht von heute und den nächsten Tagen, bestellen, umbestellen, abbestellen. Sie spricht dafür **direkt aus dem Browser** mit
-  dem Bestellsystem. Heute steht abgehoben obenan, nur zum Lesen.
-* **Eigene Termine** (＋ oben): Ausflug, Sportfest … mit Erinnerung 1 bis 7 Tage
-  vorher, in derselben Meldung wie das Essen. Mit „kein Schulessen an dem Tag“
-  gilt der Tag nicht als offen, und ist dort doch bestellt, erinnert sie ans
+* Übersicht von heute und den nächsten Tagen, bestellen, umbestellen,
+  abbestellen. Sie spricht dafür **direkt aus dem Browser** mit dem
+  Bestellsystem. Heute steht abgehoben obenan, nur zum Lesen.
+* **Eigene Termine** (＋ oben): Ausflug, Sportfest … mit Erinnerung 1, 2, 3 oder
+  7 Tage vorher, in derselben Meldung wie das Essen. Mit „kein Schulessen an dem
+  Tag“ gilt der Tag nicht als offen, und ist dort doch bestellt, erinnert sie ans
   Abbestellen. Die Termine liegen nur auf dem Gerät, nicht auf dem Server.
 * **Berliner Schulferien** stehen an den Tagen dran. Kurz vor allen Ferien
-  (Vorwarnzeit plus zwei Tage) fragt ein Dialog je Kind und Ferienwoche, ob dort Essen bestellt wird
-  (etwa im Hort); in Wochen mit „nein“ ist ein offener Ferientag kein Alarm,
-  ändern unter ⚙ → Ferien. Ohne Antwort wird erinnert wie sonst. Die Bestellansicht hört an einer leeren
-  Ferienwoche nicht auf. Die Termine liefert die Seite selbst mit
-  (`web/ferien.json`, aus der OpenHolidaysAPI); fremde Dienste fragt sie dafür nicht.
-* Für die Erinnerung weckt ein kleiner Server das Gerät werktags zur gewählten
-  Uhrzeit mit einer leeren Push-Nachricht. Geprüft wird dann **auf dem Gerät**.
-  Der Server kennt weder die IBS5-Zugangsdaten noch den Bestellstand. Für die
-  Erinnerung speichert er nur das Push-Abo und die Uhrzeit. Nur wer Sdui dazunimmt,
-  schickt dessen Anmeldung und Abrufe durch ihn (siehe
-  [unten](#was-der-server-sieht-und-speichert)).
-* **Morgens, was es heute gibt** (⚙ → „Morgens: Essen von heute“, Standard 7:00 Uhr,
-  aus bis zum Einschalten): an denselben Tagen wie die Erinnerung ein zweiter
-  Weckruf, das Gerät liest dann nur die Bestellhistorie. Ist heute nichts bestellt,
-  kommt „Brot einpacken“; an Tagen ohne Schulessen (Termin, Ferienwoche ohne
-  Essen, kein Angebot) „Heute kein Schulessen“, auf Android still. Für die Ferien
-  einfach abschalten oder Tage abwählen.
+  (Vorwarnzeit plus zwei Tage) fragt ein Dialog je Kind und Ferienwoche, ob dort
+  Essen bestellt wird (etwa im Hort); in Wochen mit „nein“ ist ein offener
+  Ferientag kein Alarm, ändern unter ⚙ → Ferien. Ohne Antwort wird erinnert wie
+  sonst. Die Bestellansicht hört an einer leeren Ferienwoche nicht auf. Die
+  Termine liefert die Seite selbst mit (`web/ferien.json`, aus der
+  OpenHolidaysAPI); fremde Dienste fragt sie dafür nicht.
+* Für die **Erinnerung** weckt ein kleiner Server das Gerät werktags zur
+  gewählten Uhrzeit oder bis zu einer halben Stunde danach (verteilt, damit
+  nicht alle Geräte gleichzeitig bei IBS5 anfragen). Geprüft wird dann **auf dem
+  Gerät**; der Server kennt weder die IBS5-Zugangsdaten noch den Bestellstand
+  (siehe [unten](#was-der-server-sieht-und-speichert)).
+* **Morgens, was es heute gibt** (⚙ → „Morgens: Essen von heute“, Standard
+  7:00 Uhr, bis zu 9 Minuten später, aus bis zum Einschalten): an denselben
+  Tagen wie die Erinnerung ein zweiter Weckruf, das Gerät liest dann nur die
+  Bestellhistorie. Ist heute nichts bestellt, kommt „Brot einpacken“; an Tagen
+  ohne Schulessen (Termin, Ferienwoche ohne Essen, kein Angebot) „Heute kein
+  Schulessen“, auf Android still. Für die Ferien einfach abschalten oder Tage
+  abwählen.
 * Jeder Weckruf zeigt eine Meldung, auch wenn alles bestellt ist. Browser und
   vor allem iOS verlangen das, sonst kündigen sie das Abo. Auf Android kommt
   „alles bestellt“ still und ersetzt die Meldung vom Vortag; auf dem iPhone
@@ -59,9 +78,7 @@ offen ist.
 * Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
   Schlüssel, den der Browser erzeugt und nicht herausgibt. Das schützt davor,
   dass jemand die Speicherdatei kopiert und ausliest, etwa aus einem Backup.
-  Gegen Schadcode, der im Namen dieser Seite läuft, hilft es nicht. Das
-  IBS5-Passwort muss gespeichert bleiben, weil sich die tägliche Prüfung ohne
-  dich anmeldet.
+  Gegen Schadcode, der im Namen dieser Seite läuft, hilft es nicht.
 * Wer mag, holt sich den **Stundenplan aus Sdui** dazu — siehe
   [unten](#stundenplan-aus-sdui-in-der-web-version).
 
@@ -72,71 +89,81 @@ Was nach dem Eingeben der Zugangsdaten passiert:
 1. **Anmelden (auf dem Handy).** Die Seite schickt Kundennummer und Passwort
    direkt vom Handy an IBS5, nicht über unseren Server. IBS5 antwortet mit einem
    Token für die weiteren Abfragen. Mit „Auf diesem Gerät merken“ legt die Seite
-   die Zugangsdaten verschlüsselt im Speicher des Browsers ab (IndexedDB), mit
-   einem Schlüssel, den der Browser erzeugt und nicht herausgibt — ebenso den
-   Token, damit nicht jeder Aufruf neu anmeldet. Ist er abgelaufen, meldet sich
-   die Seite einmal neu an.
-2. **Übersicht laden (auf dem Handy).** Mit dem Token fragt die Seite den
-   Speiseplan bei IBS5 ab — auf dem Handy erst die Bestellhistorie für alle
-   bestellten Tage auf einmal, dann nur für die übrigen Tage je eine Anfrage,
-   nacheinander mit kurzen Pausen — und zeigt, welche Tage bestellt, offen oder
-   zu spät sind. Ist
-   Sdui eingerichtet, kommt der Stundenplan über unseren Server dazu, der die
-   Anfrage nur an Sdui weiterreicht.
+   Zugangsdaten und Token verschlüsselt im Speicher des Browsers ab (IndexedDB,
+   siehe oben), damit nicht jeder Aufruf neu anmeldet. Ist der Token abgelaufen,
+   meldet sich die Seite einmal neu an.
+2. **Übersicht laden (auf dem Handy).** Mit dem Token fragt die Seite bei IBS5
+   erst die Bestellhistorie für alle bestellten Tage auf einmal ab, dann nur für
+   die übrigen Tage den Speiseplan, je Tag eine Anfrage, nacheinander mit kurzen
+   Pausen — und zeigt, welche Tage bestellt, offen oder zu spät sind. Ist Sdui
+   eingerichtet, kommt der Stundenplan über unseren Server dazu, der die Anfrage
+   nur an Sdui weiterreicht.
 3. **Erinnerung einschalten (einmalig).** Der Browser erzeugt ein Push-Abo, eine
-   zufällige Adresse beim Push-Dienst von Google bzw. Apple. Die Seite schickt
-   nur dieses Abo und die Uhrzeit an unseren Server.
-4. **Jeden Werktag zur gewählten Zeit** läuft der Weckruf so (oben zur
-   Einordnung noch einmal die Anmeldung aus Schritt 3):
+   zufällige Adresse beim Push-Dienst von Google, Apple oder Mozilla. Die Seite
+   schickt nur dieses Abo und die Uhrzeit an unseren Server.
+4. **Jeden gewählten Werktag** läuft der Weckruf so (oben zur Einordnung noch
+   einmal Schritt 3):
 
    ```mermaid
    %%{init: {"sequence": {"mirrorActors": false}}}%%
    sequenceDiagram
        participant S as Unser Server
-       participant P as Push-Dienst (Google/Apple)
+       participant P as Push-Dienst (Google/Apple/Mozilla)
        participant H as Handy (Service Worker)
        participant I as IBS5
        Note over S,H: einmalig: Erinnerung einschalten
        H->>S: Push-Abo und Uhrzeit
-       Note over S,I: jeden Werktag zur gewählten Zeit
-       S->>P: leerer Weckruf an die Push-Adresse
+       Note over S,I: gewählte Uhrzeit + 0–29 min
+       S->>P: Weckruf {"t":"check"} an die Push-Adresse
        P->>H: zustellen
-       Note over H: liest die verschlüsselten<br/>Zugangsdaten vom Gerät
-       H->>I: anmelden, Speiseplan abfragen
+       Note over H: liest Zugangsdaten und Token<br/>verschlüsselt vom Gerät
+       opt nur wenn der Token nicht mehr gilt
+           H->>I: anmelden
+       end
+       H->>I: Bestellhistorie, dann Speiseplan der offenen Tage
        I-->>H: Bestellstand
-       opt nur wenn Sdui eingerichtet
-           H->>S: Stundenplan abfragen
+       Note over H: Meldung „2 Tage offen“<br/>oder still „alles bestellt“
+       opt nur wenn Sdui eingerichtet und Fächer gewählt
+           Note over H: Stundenplan meist aus dem<br/>Gerätespeicher (bis 6 h alt)
+           H->>S: sonst Stundenplan abfragen
            Note over S: reicht nur an Sdui durch
            S-->>H: Stundenplan
+           Note over H: zweite Meldung „Morgen Sport …“
        end
-       Note over H: Meldung „2 Tage offen“<br/>oder still „satt … theoretisch ✓“
+       Note over S,I: falls eingeschaltet: Morgenzeit + 0–9 min
+       S->>P: Weckruf {"t":"today"}
+       P->>H: zustellen
+       H->>I: Bestellhistorie (ggf. Speiseplan von heute)
+       Note over H: „Heute gibt's …“ oder „Brot einpacken“
    ```
 
    Der Server erfährt dabei nicht, ob bestellt ist. Er weiß nur, dass ein
    Weckruf an eine anonyme Push-Adresse ging.
 
-5. **Bestellen (nur auf Klick).** Das gewählte Essen landet bei IBS5 im
-   Warenkorb. Abgeschickt wird nur, wenn dort genau die Auswahl liegt, danach
-   prüft die Seite im Speiseplan nach. Auch das läuft direkt vom Handy zu IBS5.
-
-Kundennummer, IBS5-Passwort und Bestellungen erreichen den Server nie. Er sieht
-das Push-Abo mit Uhrzeit und, nur bei Sdui, die durchgereichten Sdui-Anfragen.
+5. **Bestellen (nur auf Klick).** Vor dem ersten Eingriff lädt die Seite die
+   betroffenen Tage frisch; hat sich dort inzwischen etwas geändert, schickt sie
+   nichts ab. Liegt im Warenkorb von IBS5 schon etwas an anderen Tagen (etwa auf
+   der Webseite hineingelegt und vergessen), zeigt die Rückfrage es an: mitbestellen
+   oder verwerfen. Dann legt die Seite die Auswahl in den Warenkorb, zählt nach,
+   ob genau das darin liegt, und schickt ab. Danach prüft sie im Speiseplan, ob
+   jeder Tag mit Menge 1 so bestellt ist wie gewählt; sonst meldet sie „nicht
+   bestätigt“. Auch das läuft direkt vom Handy zu IBS5.
 
 <details>
 <summary><b>Was ist ein Push-Abo?</b></summary>
 
-Stell es dir als Postfach für dein Handy vor, das bei Google bzw. Apple steht.
-Dein Browser richtet es beim Einschalten der Erinnerung ein und gibt unserem
-Server den Schlüssel zum Einwerfen, sonst niemandem. Was eingeworfen wird, kann
-nur dein Handy öffnen. Das Postfach verschwindet, sobald du die Erinnerung
-ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
+Stell es dir als Postfach für dein Handy vor, das bei Google, Apple oder Mozilla
+steht. Dein Browser richtet es beim Einschalten der Erinnerung ein und gibt
+unserem Server den Schlüssel zum Einwerfen, sonst niemandem. Was eingeworfen
+wird, kann nur dein Handy öffnen. Das Postfach verschwindet, sobald du die
+Erinnerung ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
 
 </details>
 
 ### Einrichten
 
 1. **Installieren**
-   * **iPhone** (Safari): Teilen → „Zum Home-Bildschirm“
+   * **iPhone** (Safari, ab iOS 16.4): Teilen → „Zum Home-Bildschirm“
    * **Android** (Chrome): Knopf „Als App installieren“ auf der Seite, sonst
      ⋮ → „App installieren“ — nicht „Verknüpfung erstellen“
    * Aus Instagram, WhatsApp & Co. geöffnet: erst „Im Browser“ bzw. „In Safari
@@ -154,9 +181,9 @@ ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
    Unter „Tage“ lassen sich Wochentage abwählen. Jeder Weckruf prüft bis zum
    nächsten, es fällt also kein Tag durch; ein offener Tag fällt nur später auf.
 5. **Ausprobieren:** ⚙ → „Jetzt testen“.
-6. **Stundenplan (freiwillig):** ⚙ → „Stundenplan (Sdui)“ → „Einrichten …“,
-   dann Schule, E-Mail und Passwort von Sdui. Danach unter „Erinnern an“ die
-   Fächer wählen, an die am Vortag erinnert werden soll.
+6. **Stundenplan (freiwillig):** ⚙ → „Stundenplan (Sdui)“ → „Stundenplan
+   einrichten“, dann Schule, E-Mail und Passwort von Sdui. Danach unter
+   „Erinnern an“ die Fächer wählen, an die am Vortag erinnert werden soll.
 
 > [!NOTE]
 > Auf dem **iPhone** gibt es Erinnerungen nur in der installierten Fassung,
@@ -164,13 +191,24 @@ ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
 > Chrome selbst erlaubt sein (Einstellungen → Apps → Chrome →
 > Benachrichtigungen), sonst fragt Chrome gar nicht erst.
 
+### Wieder entfernen
+
+1. In der App ⚙ → „Abmelden und alles löschen“. Das löscht Zugangsdaten,
+   Schlüssel, Bestellstand, Termine und Stundenplan auf dem Gerät und meldet die
+   Erinnerung beim Server ab.
+2. Dann das Symbol vom Home-Bildschirm entfernen (Android: App deinstallieren).
+3. Ist das Handy verloren oder gestohlen, das Passwort in IBS5 ändern und, falls
+   eingerichtet, auch das von Sdui: Der Sdui-Zugangsschlüssel auf dem Gerät gilt
+   sonst bis zu einem Jahr.
+
 ### Stundenplan aus Sdui in der Web-Version
 
 Mit eingerichtetem Sdui bekommt jeder Tag auf der Startseite eine Zeitleiste:
 eine Zelle je Schulstunde mit dem Fachkürzel, gewählte Fächer dunkel,
 Freistunden als Lücke. Steht am nächsten Schultag ein gewähltes Fach an, kommt
 nach der Essenserinnerung eine zweite Meldung, etwa „Morgen Sport — 1.–2. Stunde“.
-An Ferientagen gibt es weder Zeitleiste noch Fächermeldung.
+An Ferientagen gibt es weder Zeitleiste noch Fächermeldung. Sdui lässt sich nur
+für ein Kind einrichten.
 
 Anders als IBS5 lässt Sdui keine Zugriffe von fremden Webseiten zu. Anmeldung
 und Abruf laufen deshalb über den Server, der sie nur durchreicht:
@@ -178,11 +216,10 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 | | |
 |---|---|
 | Was durchläuft | beim Einrichten einmal E-Mail und Passwort, danach bei jedem Abruf der Zugangsschlüssel (Token) und der Stundenplan |
-| Was der Server speichert | nichts. Für die Begrenzung hält er die IP-Adresse bis zu zehn Minuten im Arbeitsspeicher. |
+| Was der Server speichert | nichts davon (zur Begrenzung siehe [unten](#was-der-server-sieht-und-speichert)) |
 | Was auf dem Gerät bleibt | der Token (verschlüsselt, gilt ein Jahr, danach einmal neu verbinden) sowie der Stundenplan der nächsten zwei Wochen und die Fächerliste (unverschlüsselt, wie Bestellstand und Termine). Das Passwort wird nirgends gespeichert. „Abmelden und alles löschen“ entfernt alles. |
 | Was durchgelassen wird | nur Anmeldung, eigenes Konto, Kind und Stundenplan, höchstens 20 Aufrufe in 10 Minuten je Absender |
 | Wie oft abgerufen wird | höchstens alle sechs Stunden, der Plan liegt dazwischen auf dem Gerät |
-
 
 ### Was der Server sieht und speichert
 
@@ -192,41 +229,20 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 | Anlass | sieht | speichert | wie lange |
 |---|---|---|---|
 | Seite laden | IP-Adresse, angefragte Datei | nichts; Zugriffs- und Fehlerprotokolle einzelner Anfragen sind abgeschaltet | – |
-| Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, gegebenenfalls Uhrzeit der Morgenmeldung, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs (je Art); IP nur im Arbeitsspeicher für die Begrenzung auf 10 neue Abos je Stunde | Abo bis zum Ausschalten oder bis der Push-Dienst es als ungültig meldet; IP eine Stunde |
-| Sdui (nur wenn eingerichtet) | IP-Adresse, beim Einrichten E-Mail und Passwort, danach Token, Kind-ID im Pfad, Stundenplan | nichts; IP nur im Arbeitsspeicher für die Begrenzung auf 20 Aufrufe | IP zehn Minuten |
+| Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, gegebenenfalls Uhrzeit der Morgenmeldung, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs (je Art) | bis zum Ausschalten oder bis der Push-Dienst das Abo als ungültig meldet; nächtliche Sicherungen 14 Tage |
+| Sdui (nur wenn eingerichtet) | IP-Adresse, beim Einrichten E-Mail und Passwort, danach Token, Kind-ID im Pfad, Stundenplan | nichts | – |
+| Missbrauchsschutz (neue Abos, Sdui) | IP-Adresse | IP-Adresse mit Zeitpunkten, nur im Arbeitsspeicher | höchstens bis zum nächsten Neustart des Dienstes (in der Regel wöchentlich) |
 | tägliche Selbstprüfung | – (fragt selbst bei IBS5 und Sdui an, ohne Nutzerdaten, und liest die eigene `ferien.json`) | Ergebnis unter `/api/health` | bis zur nächsten Prüfung |
 
 Name, Kundennummer, Bestellungen und das IBS5-Passwort erreichen den Server nie.
+Die Datenschutzerklärung steht unter
+[`/datenschutz.html`](https://sunshine.thomschke.info/datenschutz.html).
 
 </details>
 
-**Grenzen:** Handy-Browsern liefert IBS5 statt des Wochenplans nur eine
-Tagesansicht, also eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit
-quittiert IBS5 mit einer Sperre der IP-Adresse (dann geht auch die normale
-Bestellseite eine Weile nicht). Die Web-Version fragt deshalb sparsam: Übersicht
-und Erinnerung holen die bestellten Tage mit einer Anfrage aus der
-Bestellhistorie und laden nur Tage ohne Bestellung einzeln. Die Bestellansicht
-braucht alle Tage einzeln, lädt Woche für Woche, zeigt jede sofort und hört auf,
-wenn Montag und Dienstag einer Woche noch keinen Speiseplan haben; erst drei
-Wochen, weitere drei je Tipp auf „Weitere Wochen laden“, höchstens acht. Tage
-nacheinander mit Pausen und etwas Zufall; geladene Tage bleiben auf dem Gerät
-gespeichert (nach Bestellschluss bis zum Tag selbst, ohne Angebot eine Stunde,
-andere Tage ab nächster Woche sechs Stunden, sonst zehn Minuten; widerspricht
-die Bestellhistorie, wird neu geladen), die Erinnerung prüft höchstens die
-nächsten fünf Schultage, und insgesamt gehen höchstens 150 Anfragen je Stunde
-und Gerät an IBS5 (CORS-Vorabfragen mitgezählt). Ist das Kontingent voll, sagt die
-App, dass sie selbst bremst, nicht IBS5. Eine Bestellung prüft vorher, ob ihre
-Anfragen noch in die Stunde passen, und läuft dann ohne Bremse durch, damit der
-Warenkorb nie halb gefüllt liegen bleibt. Kommt beim Anmelden ein 429, ruht die
-App drei Stunden und sagt das, statt die Sperre durch Wiederholungen zu
-verlängern. Kommt gar keine Antwort (so sieht die Sperre im Browser aus, aber
-auch ein Aussetzer), ruht sie erst 15 Minuten, beim nächsten Mal binnen sechs
-Stunden drei. Wechselt das Gerät das Netz (WLAN ↔ Mobilfunk, auf Android
-erkennbar), endet die Pause, denn die Sperre gilt der IP-Adresse; „Trotzdem
-jetzt versuchen“ gibt es auf der Übersicht und beim Anmelden. Ein 403 beim Anmelden
-heißt „Kundennummer oder Passwort falsch“ (so antwortet IBS5 seit dem neuen Layout vom
-9. Oktober 2026), eine Weiterleitung oder 401 gilt als Störung. Die Erinnerung auf dem
-iPhone ist noch nicht ausprobiert.
+**Grenzen:** IBS5 sperrt bei zu vielen Anfragen die IP-Adresse, deshalb fragt
+die App sparsam, bremst sich selbst und sagt das auch. Einzelheiten unter
+[Technische Notizen](#grenzen-im-detail).
 
 **Damit Schweigen auffällt:** Die Startseite zeigt, wann die Erinnerung zuletzt
 erfolgreich geprüft hat, und warnt, wenn das über vier Tage her ist. Jeder
@@ -235,18 +251,22 @@ ob IBS5 und Sdui sich noch so verhalten, wie die Web-Version es braucht und ob
 die Ferientermine noch mindestens ein halbes Jahr reichen, und meldet
 Abweichungen an den Betreiber.
 
-**Integrität:** Die Web-Version lädt ihren Code bei jedem Aufruf vom Server. Wer den Server kontrolliert, könnte also anderen Code
-ausliefern. Die Seite lädt keine fremden Skripte, und eine strenge
-Content-Security-Policy erlaubt nur Code und Verbindungen der eigenen Adresse
-und von IBS5. Ob der ausgelieferte Code dem Repository entspricht, lässt sich
-nachprüfen:
+#### Integrität
+
+Die Web-Version lädt ihren Code bei jedem Aufruf vom Server. Wer den Server
+kontrolliert, könnte also anderen Code ausliefern. Die Seite lädt keine fremden
+Skripte, und eine strenge Content-Security-Policy erlaubt nur Code und
+Verbindungen der eigenen Adresse und von IBS5. Ob der ausgelieferte Code dem
+Repository entspricht, lässt sich in einem aktuellen Klon nachprüfen:
 
 ```sh
-for f in index.html app.js ibs.js idb.js guard.js session.js events.js sdui.js sw.js style.css; do
-  curl -s "https://<adresse>/$f" | cmp -s - "web/$f" && echo "ok    $f" || echo "ANDERS $f"
+git fetch
+url=https://sunshine.thomschke.info
+sha=$(curl -s "$url/version.txt")          # laufender Commit
+git ls-tree -r --name-only "$sha" web | grep -v '^web/tests/' | while read -r f; do
+  curl -s "$url/${f#web/}" | cmp -s - <(git show "$sha:$f") && echo "ok     $f" || echo "ANDERS $f"
 done
 ```
-
 
 Die Web-Version spricht direkt aus dem Browser mit IBS5. Das geht nur, weil
 IBS5 solche Zugriffe von anderen Webseiten derzeit zulässt. Ändert der
@@ -258,6 +278,45 @@ oder ausfallen. Eine Erinnerung empfangen kann das iPhone aber tadellos — nur
 auslösen muss sie jemand anders. Das übernimmt hier der Server.
 
 ## Technische Notizen
+
+Betrieb und Server: [`docs/betrieb.md`](docs/betrieb.md), Sicherheitsprüfung:
+[`docs/sicherheit-web.md`](docs/sicherheit-web.md).
+
+### Grenzen im Detail
+
+Handy-Browsern liefert IBS5 statt des Wochenplans nur eine Tagesansicht, also
+eine Anfrage je Tag. Zu viele Anfragen in kurzer Zeit quittiert IBS5 mit einer
+Sperre der IP-Adresse (dann geht auch die normale Bestellseite eine Weile
+nicht). Die Web-Version fragt deshalb sparsam:
+
+* Übersicht und Erinnerung holen die bestellten Tage mit einer Anfrage aus der
+  Bestellhistorie und laden nur Tage ohne Bestellung einzeln.
+* Die Bestellansicht braucht alle Tage einzeln, lädt Woche für Woche, zeigt jede
+  sofort und hört auf, wenn Montag und Dienstag einer Woche noch keinen
+  Speiseplan haben; erst drei Wochen, weitere drei je Tipp auf „Weitere Wochen
+  laden“, höchstens acht.
+* Tage nacheinander mit Pausen und etwas Zufall. Geladene Tage bleiben auf dem
+  Gerät gespeichert: ohne Angebot eine Stunde, Tage ab nächster Woche sechs
+  Stunden, sonst zehn Minuten (auch nach Bestellschluss, weil IBS5 Tage
+  zeitweise sperrt). Widerspricht die Bestellhistorie, wird neu geladen.
+* Die Erinnerung prüft höchstens die nächsten fünf Schultage.
+* Insgesamt gehen höchstens 150 Anfragen je Stunde und Gerät an IBS5
+  (CORS-Vorabfragen mitgezählt). Ist das Kontingent voll, sagt die App, dass sie
+  selbst bremst, nicht IBS5. Eine Bestellung prüft vorher, ob ihre Anfragen noch
+  in die Stunde passen, und läuft dann ohne Bremse durch, damit der Warenkorb nie
+  halb gefüllt liegen bleibt.
+* Kommt ein 429, ruht die App drei Stunden und sagt das, statt die Sperre durch
+  Wiederholungen zu verlängern. Kommt beim Anmelden gar keine Antwort (so sieht
+  die Sperre im Browser aus, aber auch ein Aussetzer), ruht sie erst 15 Minuten,
+  beim nächsten Mal binnen sechs Stunden drei. Wechselt das Gerät das Netz
+  (WLAN ↔ Mobilfunk, auf Android erkennbar), endet die Pause, denn die Sperre
+  gilt der IP-Adresse; „Trotzdem jetzt versuchen“ gibt es auf der Übersicht und
+  beim Anmelden.
+* Ein 403 beim Anmelden heißt „Kundennummer oder Passwort falsch“ (so antwortet
+  IBS5 seit dem neuen Layout vom 9. Oktober 2026), eine Weiterleitung oder 401
+  gilt als Störung.
+
+### IBS5 und Sdui
 
 **Web-Version** (`web/`, Server in `server/`): Mit Handy-User-Agent liefert
 `/Mealplan/Weekplan` auch mit `year`/`week` nur die Tagesansicht von heute
@@ -285,12 +344,13 @@ POST /ibs5/Login/Login
   -> {"token": …, "name1": …, "institutionName1": …}
 
 GET  /ibs5/Mealplan/Weekplan?year=&week=     Authorization: Bearer <token>
+GET  /ibs5/Mealplan/WeekplanMobile?date=     Tagesansicht für Handy-Browser
 GET  /ibs5/Account/Orderhistory?from=&to=&search=
 ```
 
 Die Bestellhistorie filtert `from`/`to` nach **Bestelldatum**, nicht nach
 Liefertag. Ab- und Umbestellungen stehen als eigene Zeilen mit Menge −1, auch
-„Bestellungen übertragen“ des Caterers (z.B. Umbuchung auf Kaltverpflegung);
+„Bestellungen übertragen“ des Caterers (z. B. Umbuchung auf Kaltverpflegung);
 saldiert je Liefertag und Menülinie ergibt sich der Bestellstand. Desktop
 bekommt eine Tabelle (`id="order-history-table"`), Handy-Browser Karten
 (`class="rechnung"`) mit denselben Feldern. CORS ist freigegeben.
@@ -353,8 +413,14 @@ auf Geräten erprobt.
 Dass das nicht vor Fehlern schützt, hat die frühere Android-App gezeigt: Bis
 0.1.0 hat ihr Hintergrundlauf überhaupt nicht ausgelöst. Erwähnt sei die
 Entstehung, weil dieses README auch sonst sagt, worauf man sich nicht verlassen
-soll. Wer etwas findet, das daneben liegt, möge es melden; das gilt hier wie
-bei jedem anderen Code.
+soll.
+
+## Rückmeldung und Änderungen
+
+Fehler, Fragen und Wünsche bitte als
+[GitHub-Issue](https://github.com/thmschk/sunshine-reminder/issues). Was sich
+geändert hat, steht in der Commit-Historie (`git log`); ein eigenes Changelog
+gibt es nicht.
 
 ## Danke sagen
 
@@ -363,9 +429,22 @@ möchte: **[paypal.me/LorenzThomschke](https://paypal.me/LorenzThomschke)** —
 in der App liegt derselbe Link hinter dem kleinen Herz.
 
 Es ist ein Trinkgeld, keine Bezahlung: Es wird nichts freigeschaltet, und ohne
-Spende fehlt nichts. Wer die Wahl hat, schickt es als „Freunde und Familie" —
-dann bleiben die Gebühren aus, und es ist auch das, was es ist.
+Spende fehlt nichts.
+
+## Rechtliches
+
+Die Software wird unentgeltlich und ohne Gewähr bereitgestellt (siehe Lizenz).
+Soweit gesetzlich zulässig, hafte ich nicht für Fehlbestellungen, vergessene
+oder doppelte Bestellungen und deren Kosten; maßgeblich ist allein, was in IBS5
+steht. Ob die Nutzungsbedingungen von IBS5
+und Sdui den Zugriff über ein fremdes Programm erlauben, ist nicht geprüft. Die
+Anbieter könnten solche Zugriffe unterbinden oder deinen Zugang sperren.
 
 ## Lizenz
 
 MIT — siehe [LICENSE](LICENSE).
+
+## Frühere Namen
+
+„immerhin.satt“, „happy sunshine“, bis 0.1.20 „sunshine reminder“ — das
+Repository heißt weiter `sunshine-reminder`; der lokale Ordner `ibs-order-watch`.

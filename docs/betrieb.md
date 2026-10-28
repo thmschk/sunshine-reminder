@@ -46,7 +46,8 @@ steht im README unter „Architektur“.
 | Geheimnisse | `ADMIN_KEY` | `/srv/sunshine/.env` | nur auf dem Server |
 
 Der Push-Dienst nimmt Push-Abos an, verschickt jede Minute die fälligen Weckrufe, reicht Sdui durch,
-prüft um 06:30, ob IBS5 und Sdui sich noch wie erwartet verhalten, und meldet das unter `/api/health`.
+prüft bei jedem Container-Start und täglich um 06:30, ob IBS5 und Sdui sich noch wie erwartet verhalten
+und `ferien.json` noch reicht, und meldet das unter `/api/health`.
 
 Caddy schreibt keine Zugriffs- und keine Fehlerprotokolle einzelner Anfragen
 (`log default { exclude http.log.error }` im `Caddyfile`).
@@ -80,7 +81,7 @@ ssh privat 'journalctl -t docker-images -n 30'             # letzte Image-Aktual
 ssh privat 'ls -l /srv/sunshine/backup'                    # nächtliche Datenkopien
 ssh privat 'cd /srv/sunshine && docker compose logs --tail 50 push'
 ssh privat "sqlite3 -readonly -header -column /srv/sunshine/data/push.sqlite \
-  'SELECT time, offset_min, weekdays, created, last_sent, is_admin FROM subs'"
+  'SELECT id, time, offset_min, weekdays, created, last_sent, is_admin FROM subs'"
 ```
 
 Ändern an der Datenbank nur bei gestopptem Dienst (`docker compose stop push`).
@@ -88,8 +89,27 @@ ssh privat "sqlite3 -readonly -header -column /srv/sunshine/data/push.sqlite \
 ## Betreiber-Alarme
 
 Abos mit `is_admin = 1` bekommen die Alarme der Selbstprüfung. Ein Gerät markiert sich über
-`…/#betreiber` → ⚙ → Erinnerung mit dem Schlüssel aus `ADMIN_KEY`. Austauschen: neuen Wert in `.env`,
-dann `docker compose up -d`.
+`…/#betreiber` → ⚙ → Erinnerung mit dem Schlüssel aus `ADMIN_KEY`; der Betreiber-Bereich erscheint dort
+nur bei eingeschalteter Erinnerung. Die Markierung überlebt ein Neuanmelden desselben Geräts.
+
+`ADMIN_KEY` austauschen: neuen Wert in `.env`, dann `docker compose up -d`. Das verhindert nur neue
+Markierungen; bereits markierte Geräte bleiben Betreiber. Entziehen bei gestopptem Dienst (auf dem
+Server, `id` aus der Abfrage unter [Nachsehen](#nachsehen)):
+
+```sh
+cd /srv/sunshine && docker compose stop push
+sqlite3 data/push.sqlite "UPDATE subs SET is_admin = 0 WHERE id = '<id>'"
+docker compose start push
+```
+
+## Fehlersuche
+
+| Zeichen | Bedeutung, Vorgehen |
+|---|---|
+| Alarm „Selbstprüfung: Abweichung“, `selfcheck.ok: false` in `/api/health`, im Log `Selbstprüfung: …` | `problems` nennt, was abweicht: IBS5 oder Sdui verhalten sich anders (Layout, Login, CORS) oder `ferien.json` reicht keine 180 Tage mehr (siehe [Ferientermine](#ferientermine)). |
+| viele `Push abgelehnt: HTTP 403` (oder 401) im Log, `auth_rejected > 0` in `/api/health` | Push-Dienste lehnen den VAPID-Absender ab: Schlüssel gewechselt oder Uhrzeit/`VAPID_SUBJECT` falsch, siehe [VAPID-Schlüssel](#vapid-schlüssel). |
+| andere `Push fehlgeschlagen: HTTP …` | Störung beim Push-Dienst (Google, Apple, Mozilla); das Abo bleibt bestehen. Häuft es sich, Erreichbarkeit nach außen prüfen. |
+| Nutzer melden „keine Antwort“ bzw. Pause, auch die IBS5-Webseite geht nicht | IP-Sperre durch IBS5 beim jeweiligen Nutzer, nicht am Server; vergeht von selbst. Der Server fragt IBS5 nur bei der Selbstprüfung an. |
 
 ## Container-Images
 
@@ -115,6 +135,34 @@ ssh privat 'cd /srv/sunshine && docker compose stop push \
 ```
 
 Danach muss `/api/vapid` denselben Schlüssel zeigen wie vorher; Abos und Uhrzeiten bleiben dann gültig.
+
+## Server neu aufsetzen
+
+Aus dem Repo kommt per `server/deploy.sh` alles unter `/srv/sunshine` außer Daten und `.env`. Nur auf dem
+Server liegt und muss bei einem Neuaufbau von Hand (oder aus dem Hetzner-Backup) zurück:
+
+- [ ] Debian 13, Pakete `docker-ce` mit Compose-Plugin, `sqlite3`, `rsync`, `curl`, `python3`,
+      `unattended-upgrades`; Docker-CE-Quelle in den unattended-upgrades eintragen
+- [ ] SSH nur per Schlüssel, Hetzner-Firewall (eingehend TCP 22, 80, 443, ICMP), Hetzner-Backup einschalten
+- [ ] DNS bei Variomedia: A und AAAA von `sunshine.thomschke.info` auf die neue Adresse
+- [ ] `/srv/caddy/compose.yaml` (`caddy:2`, `network_mode: host`, `restart: unless-stopped`, Volume
+      `./sites:/etc/caddy/sites:ro`; den Mount von `/srv/sunshine/web` ergänzt `deploy.sh`) und
+      `/srv/caddy/Caddyfile` mit `log default { exclude http.log.error }` und dem Import von `sites/*`
+- [ ] `/usr/local/sbin/update-docker-images.sh` und `/etc/cron.d/docker-images` (sonntags 05:00)
+- [ ] `/srv/sunshine/.env` mit `ADMIN_KEY` — **wird nicht gesichert**; neu setzen, Betreiber-Geräte neu markieren
+- [ ] `server/deploy.sh`, dann `data/` aus dem jüngsten Backup zurückspielen (siehe
+      [Datensicherung](#datensicherung)) und prüfen, dass `/api/vapid` den alten Schlüssel zeigt
+
+**Restore-Probe** (gelegentlich, ohne den laufenden Dienst anzufassen):
+
+```sh
+ssh privat 'd=$(mktemp -d); f=$(ls -t /srv/sunshine/backup/sunshine-data-*.tar.gz | head -1); echo "$f"
+  tar -xzf "$f" -C "$d" && sqlite3 "$d/push.sqlite" "PRAGMA integrity_check; SELECT COUNT(*) FROM subs"
+  cmp "$d/vapid_private.pem" /srv/sunshine/data/vapid_private.pem && echo "VAPID-Schlüssel gleich"; rm -rf "$d"'
+```
+
+Erwartet: `ok`, eine plausible Zahl Abos, „VAPID-Schlüssel gleich“. Nach einem echten Wiederherstellen
+zusätzlich `/api/vapid` mit dem vorher bekannten öffentlichen Schlüssel vergleichen.
 
 ## VAPID-Schlüssel
 
