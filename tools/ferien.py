@@ -31,7 +31,7 @@ def fetch_year(year: int) -> list[dict]:
     # Die API erlaubt höchstens 1095 Tage je Abfrage, also Jahr für Jahr.
     url = (f"{URL}?countryIsoCode=DE&subdivisionCode={STATE}&languageIsoCode=DE"
            f"&validFrom={year}-01-01&validTo={year}-12-31")
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "theoretisch-satt tools/ferien.py"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "sunshine tools/ferien.py"})
     with urllib.request.urlopen(req, timeout=20) as res:
         data = json.load(res)
     return [{"start": h["startDate"], "end": h["endDate"],

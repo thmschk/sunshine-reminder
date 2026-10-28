@@ -624,7 +624,7 @@ class Handler(BaseHTTPRequestHandler):
             n = self.content_length()
         except BadRequest as exc:
             return self.reply(413 if str(exc) == "zu groß" else 400, {"error": str(exc)})
-        headers = {"Accept": "application/json", "User-Agent": "theoretisch-satt (+https://github.com/thmschk/sunshine-reminder)"}
+        headers = {"Accept": "application/json", "User-Agent": "sunshine (+https://github.com/thmschk/sunshine-reminder)"}
         if self.headers.get("Authorization", "").startswith("Bearer "):
             headers["Authorization"] = self.headers["Authorization"]
         try:

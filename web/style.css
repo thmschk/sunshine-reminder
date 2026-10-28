@@ -85,6 +85,7 @@ body {
 header {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
   width: 100%;
   max-width: 640px;
@@ -92,8 +93,7 @@ header {
   /* Querformat mit Notch: links und rechts mindestens der sichere Bereich. */
   padding: 8px max(8px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 }
-/* App-Name links, die Symbole rechts daneben. */
-header h1 { font-size: 1.125rem; font-weight: 600; margin: 0; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Die Symbole stehen rechts; der App-Name ist nur für Screenreader da. */
 /* 44 px Tippfläche, das Symbol selbst bleibt 22 px. */
 .icon {
   background: transparent;

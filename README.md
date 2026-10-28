@@ -1,4 +1,4 @@
-# theoretisch satt
+# sunshine
 
 *satt … theoretisch.*
 
@@ -446,5 +446,5 @@ MIT — siehe [LICENSE](LICENSE).
 
 ## Frühere Namen
 
-„immerhin.satt“, „happy sunshine“, bis 0.1.20 „sunshine reminder“ — das
+„theoretisch satt“, „immerhin.satt“, „happy sunshine“, bis 0.1.20 „sunshine reminder“ — das
 Repository heißt weiter `sunshine-reminder`; der lokale Ordner `ibs-order-watch`.
