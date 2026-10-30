@@ -90,9 +90,9 @@ export const De = {
 
 /**
  * Zwei Eigenheiten des Servers: ohne Accept-Language kommt
- * HTTP 500 (setzt der Browser selbst), und authentifizierte Endpunkte wollen
- * X-Requested-With. Ohne gültigen Token leitet IBS5 per 302 auf eine Fehlerseite
- * ohne CORS-Freigabe um. Der Browser prüft CORS schon an der 302-Antwort, also
+ * HTTP 500 (setzt der Browser selbst), und alle Endpunkte wollen X-Requested-With:
+ * ohne ihn bleibt schon /Login/Login unbeantwortet. Ohne gültigen Token leitet IBS5
+ * per 302 auf eine Fehlerseite ohne CORS-Freigabe um. Der Browser prüft CORS schon an der 302-Antwort, also
  * kommt dann nur ein Netzfehler an — nicht unterscheidbar von einem echten.
  * Solche Fehler bei angemeldeten Aufrufen tragen deshalb maybeAuth.
  */
@@ -108,13 +108,7 @@ export class IbsClient {
     this.signal = null;
   }
 
-  /**
-   * Wiederholt wird nur ein Netzfehler, einmal (siehe #send): die Sperrpolitik des Anbieters ist unbekannt.
-   *
-   * Ohne X-Requested-With, damit der Login eine einfache CORS-Anfrage ohne
-   * Preflight bleibt: der Service Worker schickt Preflights ohne Accept-Language,
-   * und darauf antwortet IBS5 bei /Login/Login mit 302 statt 200.
-   */
+  /** Wiederholt wird nur ein Netzfehler, einmal (siehe #send): die Sperrpolitik des Anbieters ist unbekannt. */
   async login(customerNo, password) {
     const body = new URLSearchParams({
       identifierValue: customerNo,
@@ -215,18 +209,17 @@ export class IbsClient {
 
   async #send(path, init, auth = true) {
     // Ausdrücklich gesetzt: Anfragen aus dem Service Worker tragen es sonst nicht immer.
-    const headers = { "Accept-Language": "de-DE,de;q=0.9", ...(init.headers || {}) };
+    const headers = { "Accept-Language": "de-DE,de;q=0.9", "X-Requested-With": "XMLHttpRequest", ...(init.headers || {}) };
     if (auth) {
       if (!this.token) throw new IbsAuthError("Nicht eingeloggt");
       headers.Authorization = `Bearer ${this.token}`;
-      headers["X-Requested-With"] = "XMLHttpRequest";
     }
     let resp;
     for (;;) {
       this.signal?.throwIfAborted();
-      // Mit Token schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
+      // Wegen X-Requested-With schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
       // nicht, sie zwischenzuspeichern): bei IBS5 kommen zwei Anfragen an.
-      await this.hooks.before?.({ path, weight: auth ? 2 : 1, unmetered: !!this.unmetered });
+      await this.hooks.before?.({ path, weight: 2, unmetered: !!this.unmetered });
       await pace();
       this.signal?.throwIfAborted();
       try {

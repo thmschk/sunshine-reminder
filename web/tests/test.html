@@ -733,11 +733,11 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   const net = () => new TypeError("Failed to fetch");
   await test("Netzfehler beim Login: zweiter Versuch nach Wartezeit klappt, keine Pause, beide gezählt", async () => {
     const r = await login([net(), new Response(JSON.stringify({ token: "t", name1: "" }))]);
-    eq([r.err?.message ?? null, r.calls, r.pauseMin, r.budget, r.ms >= 45], [null, 2, 0, 2, true], `${Math.round(r.ms)} ms`);
+    eq([r.err?.message ?? null, r.calls, r.pauseMin, r.budget, r.ms >= 45], [null, 2, 0, 4, true], `${Math.round(r.ms)} ms`);
   });
   await test("Netzfehler auch beim zweiten Versuch: Pause wie bisher (15 Minuten)", async () => {
     const r = await login([net(), net()]);
-    eq([r.calls, r.err?.network, r.pauseMin, r.budget], [2, true, 15, 2]);
+    eq([r.calls, r.err?.network, r.pauseMin, r.budget], [2, true, 15, 4]);
   });
   await test("Zeitüberschreitung: kein zweiter Versuch", async () => {
     const r = await login([new DOMException("timeout", "TimeoutError")]);

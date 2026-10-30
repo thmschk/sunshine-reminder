@@ -8,7 +8,7 @@
 // IP-Adresse, deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔
 // Mobilfunk, nur wo der Browser das verrät). Dazu eine Obergrenze je Stunde und
 // Gerät, die nur bremst, bis wieder Platz im Stundenfenster ist; gezählt wird, was
-// bei IBS5 ankommt (Abfragen mit Token samt CORS-Vorabfrage doppelt).
+// bei IBS5 ankommt (jede Abfrage samt CORS-Vorabfrage doppelt).
 // Seite und Service Worker teilen den Zustand über IndexedDB.
 
 import { IbsError } from "./ibs.js";
