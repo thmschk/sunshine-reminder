@@ -1,9 +1,10 @@
-/* „Papier und Sonne“: neutral (Papier, Tinte, Grau) und eine einzige Farbe, die Sonne aus dem
-   Logo, für alles, wobei man selbst dran ist (offen, Jetzt bestellen, Ladebalken). Erledigtes bleibt
-   grau, Rot steht nur für Fehler. Die Sonne trägt auf hellem Grund nie allein Schrift oder eine
-   Grenze (2:1 zu Weiß), dafür --open-text; auf Sonne steht immer dunkle Schrift. */
+/* „Papier und Sonne“: neutral (Papier, Tinte, Grau) und eine einzige Farbe, das Sonnengelb aus dem
+   Logo, für Knöpfe, aktive Reiter, Überschriften-Striche und alles, wobei man selbst dran ist (offen,
+   Ladebalken). Erledigtes bleibt grau, Rot steht nur für Fehler. Gelb trägt auf hellem Grund nie
+   Schrift oder allein eine Grenze (1,7:1 zu Papier), dafür --open-text bzw. --heading; auf Gelb steht
+   immer dunkle Schrift. */
 :root {
-  --primary: #F2A21A;
+  --primary: #F7B500;
   --on-primary: #1F1600;
   --primary-container: #FFF2DA;
   --on-primary-container: #1F1D1A;
@@ -23,7 +24,8 @@
   --ok-container: #F1EEE8;
   --open-text: #8F5300;
   --event-text: #6B665E;
-  --heart: #F2A21A;
+  --heart: #F7B500;
+  --heading: #1F1D1A;
   --strip-bg: #F1EEE8;
   --strip-text: #6B665E;
   --strip-hl: #1F1D1A;
@@ -33,7 +35,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --primary: #FFB547;
+    --primary: #FFC233;
     --on-primary: #1F1600;
     --primary-container: #3A2B12;
     --on-primary-container: #F2EEE7;
@@ -51,9 +53,10 @@
     --on-error-container: #FFDAD6;
     --ok: #8C867C;
     --ok-container: #262420;
-    --open-text: #FFB547;
+    --open-text: #FFC233;
     --event-text: #A9A398;
-    --heart: #FFB547;
+    --heart: #FFC233;
+    --heading: #FFC233;
     --strip-bg: #262420;
     --strip-text: #A9A398;
     --strip-hl: #F2EEE7;
@@ -197,7 +200,7 @@ button:disabled { opacity: .45; cursor: default; }
   font-size: .8rem;
   font-weight: 500;
   letter-spacing: .06em;
-  color: var(--on-surface-variant);
+  color: var(--heading);
   margin: 16px 2px 6px;
 }
 .muted { color: var(--on-surface-variant); }
@@ -256,9 +259,14 @@ button:disabled { opacity: .45; cursor: default; }
   font-size: .8rem;
   font-weight: 500;
   letter-spacing: .06em;
-  color: var(--secondary);
+  color: var(--heading);
   text-transform: uppercase;
   margin: 18px 0 6px;
+}
+/* Kurzer Sonnenstrich vor Abschnittsüberschriften. */
+.section::before, .settings h4::before {
+  content: ""; display: inline-block; width: 14px; height: 4px; border-radius: 2px;
+  background: var(--primary); vertical-align: middle; margin: 0 8px 2px 0;
 }
 .settings hr { border: 0; border-top: 1px solid var(--surface-variant); margin: 14px 0; }
 
@@ -344,7 +352,7 @@ pre.msg { white-space: pre-wrap; font: inherit; margin: 0; }
 .tip h3 { font-size: 1.05rem; font-weight: 500; margin: 0 0 4px; }
 .tip-focus { box-shadow: 0 0 0 2px var(--primary); }
 .tip p { margin: 0 0 8px; }
-.tip-device { font-size: .8125rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--secondary); margin: 12px 0 6px; }
+.tip-device { font-size: .8125rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--heading); margin: 12px 0 6px; }
 .tip-steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
 .tip-steps li { counter-increment: step; display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: .92rem; }
 .tip-steps li::before {
@@ -406,7 +414,7 @@ details.dropdown .subjects { border-top: 1px solid var(--surface-variant); paddi
 .s-head { display: flex; align-items: center; gap: 2px; margin: 18px 0 4px -8px; }
 .s-head h2 { font-size: 1.2rem; font-weight: 400; margin: 0; }
 .group-title { font-size: .7rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--secondary); margin: 18px 6px 6px; }
+  color: var(--heading); margin: 18px 6px 6px; }
 .group { background: var(--surface); border-radius: 16px; overflow: hidden; }
 .group-pad { padding: 4px 16px 12px 52px; }
 .srow { display: flex; align-items: center; gap: 14px; padding: 12px 16px; min-height: 56px; width: 100%;
@@ -534,7 +542,7 @@ header { min-height: 44px; }
   flex: 0 0 auto; background: transparent; color: var(--on-surface-variant);
   border: 1px solid var(--surface-variant); border-radius: 999px; padding: 6px 14px; font-weight: 500;
 }
-.kid-tab.on { background: var(--secondary); border-color: var(--secondary); color: var(--on-secondary); }
+.kid-tab.on { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .srow-x { margin-left: 6px; padding: 4px 6px; font-size: .85rem; }
 
 /* Wochentage der Erinnerung. */
@@ -544,7 +552,7 @@ header { min-height: 44px; }
   flex: 1; max-width: 56px; padding: 7px 0; font-size: .85rem; font-weight: 500; border-radius: 8px;
   background: transparent; color: var(--on-surface-variant); border: 1px solid var(--surface-variant);
 }
-.wd-btn.on { background: var(--secondary); border-color: var(--secondary); color: var(--on-secondary); }
+.wd-btn.on { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 
 /* Ferien: Frage je Woche als Dialog, nach „Später“ nur eine Zeile auf der Startseite. */
 .ferien-dialog { width: min(420px, calc(100vw - 48px)); }
