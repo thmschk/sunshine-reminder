@@ -817,6 +817,19 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   await kvDel("pushFailed");
 }
 
+// Pause: gleiche Überschrift und gleicher Satz in der App und in der Meldung.
+{
+  const { PAUSE_TITLE, friendly, pushFailure } = await import("../errors.js");
+  const { IbsPausedError } = await import("../guard.js");
+  await test("Pause: App und Meldung sagen dasselbe, Grund nur in den Details", () => {
+    const e = new IbsPausedError(Date.now() + 3600 * 1000, "HTTP 429");
+    const f = friendly(e);
+    const n = pushFailure(e);
+    eq([n.title, PAUSE_TITLE], ["Bestellsystem gerade nicht erreichbar", "Bestellsystem gerade nicht erreichbar"]);
+    eq([n.body.startsWith(f.text), /HTTP 429/.test(f.text), /HTTP 429/.test(f.detail)], [true, false, true], `${f.text} | ${n.body}`);
+  });
+}
+
 // Berliner Ferien aus ferien.json.
 {
   const Fe = await import("../holidays.js");

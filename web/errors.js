@@ -4,6 +4,10 @@
 import { IbsAuthError, IbsError } from "./ibs.js";
 import { IbsBudgetError, IbsPausedError, hhmm } from "./guard.js";
 
+/** Überschrift und Satz zur Pause (IbsPausedError), gleich in der App und in der Meldung des Weckrufs. */
+export const PAUSE_TITLE = "Bestellsystem gerade nicht erreichbar";
+export const pauseText = (e) => `Damit eine mögliche Sperre nicht länger wird, fragt die App erst ab ${hhmm(e.until)} Uhr wieder an.`;
+
 /**
  * Fehler für die Anzeige: text in Klartext, detail die technische Meldung (nur zum Aufklappen),
  * net: Netz- oder Sperrfehler, bei dem eine andere Verbindung helfen kann.
@@ -15,7 +19,7 @@ export function friendly(e) {
     return { text: "Sobald das Handy wieder Netz hat, nochmal versuchen.", detail: raw, offline: true };
   }
   // Grund der Pause in Klammern („HTTP 429“) nur in den Details.
-  if (e instanceof IbsPausedError) return { text: raw.replace(/ \([^)]*\)(?=\.)/, ""), detail: raw, net: true };
+  if (e instanceof IbsPausedError) return { text: pauseText(e), detail: raw, net: true };
   if (/^Keine Verbindung zum Bestellsystem/.test(raw)) return { text: "Das Bestellsystem ist gerade nicht erreichbar.", detail: raw, net: true };
   if (/^Bestellsystem antwortet nicht/.test(raw)) return { text: "Das Bestellsystem antwortet gerade nicht.", detail: raw, net: true };
   if (e instanceof IbsError && !(e instanceof IbsAuthError) && /HTTP \d|JSON|Token|unerwartete Antwort|geliefert wurde/.test(raw)) {
@@ -42,8 +46,8 @@ export function pushFailure(e, { rejected = false } = {}) {
   }
   if (e instanceof IbsPausedError) {
     return {
-      title: "Bestellsystem gerade nicht erreichbar",
-      body: `Damit eine mögliche Sperre nicht länger wird, fragt die App erst ab ${hhmm(e.until)} Uhr wieder an. Zum sofortigen Versuch die App öffnen.`,
+      title: PAUSE_TITLE,
+      body: `${pauseText(e)} Zum sofortigen Versuch die App öffnen.`,
       transient: true,
     };
   }

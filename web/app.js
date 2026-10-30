@@ -10,7 +10,7 @@ import {
 import * as Sdui from "./sdui.js";
 import { IbsBudgetError, IbsPausedError, budgetFor, guardHooks, resume, unmetered } from "./guard.js";
 import { login, withSession } from "./session.js";
-import { friendly } from "./errors.js";
+import { PAUSE_TITLE, friendly } from "./errors.js";
 import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
 import {
   askLater, askWithin, askedLater, holidayOn, loadHolidays, loadMealPref, nextHoliday, openWeeks, rangeText, saveMealPref, skipDates,
@@ -470,9 +470,9 @@ async function showHome(fresh = false) {
     const shown = usable || !!old?.length;
     const f = friendly(e);
     const card = `
-      <div class="card hero ${isPause && !isBudget ? "bad" : "neutral"}">
+      <div class="card hero neutral">
         <h2>${isBudget ? "Die App macht eine Pause" : f.offline ? "Du bist offline"
-          : isPause ? "Bestellsystem gesperrt oder nicht erreichbar"
+          : isPause ? PAUSE_TITLE
           : shown ? "Aktualisieren fehlgeschlagen" : "Bestellstand unbekannt"}</h2>
         <p>${esc(f.text)}</p>
         <p class="small">${shown ? `Unten steht der letzte bekannte Stand von ${esc(when(cached.at))}, er kann veraltet sein.`
