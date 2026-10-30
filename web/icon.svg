@@ -1,9 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
-  <!-- Sonne mit Haken („bestellt ✓“). -->
-  <rect width="108" height="108" rx="24" fill="#A01850"/>
-  <g transform="translate(54 54) scale(0.8) translate(-54 -54)">
-    <path stroke="#F8D800" stroke-width="6" stroke-linecap="round" d="M54,14L54,22M54,86L54,94M14,54L22,54M86,54L94,54M26,26L31,31M77,77L82,82M82,26L77,31M31,77L26,82"/>
-    <circle cx="54" cy="54" r="26" fill="#F8D800"/>
-    <path fill="none" stroke="#A01850" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" d="M42,55l8,8l16,-17"/>
+  <!-- Sonne mit ausgespartem Haken geht über dem Horizont auf („bestellt ✓“). -->
+  <defs>
+    <linearGradient id="sun" gradientUnits="userSpaceOnUse" x1="30" y1="32" x2="82" y2="72"><stop offset="0" stop-color="#FFD24A"/><stop offset="1" stop-color="#F5A01A"/></linearGradient>
+    <linearGradient id="hor" gradientUnits="userSpaceOnUse" x1="12" y1="0" x2="96" y2="0"><stop offset="0" stop-color="#F7B52A"/><stop offset=".5" stop-color="#FFD54F"/><stop offset="1" stop-color="#F5A623"/></linearGradient>
+    <clipPath id="above"><path d="M0,0 H108 V77 Q54,55.6 0,77 Z"/></clipPath>
+  </defs>
+  <rect width="108" height="108" rx="24" fill="#FFFCF0"/>
+  <g transform="translate(54 56) scale(1.12) translate(-54 -56)">
+    <circle cx="54" cy="61.3" r="28.8" fill="url(#sun)" clip-path="url(#above)"/>
+    <path fill="none" stroke="#FFFCF0" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" d="M43.9,56.6 L52.9,66.6 L73,47"/>
+    <path fill="url(#hor)" d="M12,79 Q54,57.6 96,79 Q54,66.6 12,79 Z"/>
   </g>
 </svg>

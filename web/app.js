@@ -678,7 +678,7 @@ function heroCard(days, firstName) {
   }
   if (!days.length) return `<div class="card hero ok"><h2>Keine Schultage im Prüfzeitraum</h2></div>`;
   return `<div class="card hero ok">
-    <h2>satt … theoretisch ✓</h2>
+    <h2>Alles erledigt ✓</h2>
     <p>bis ${esc(De.long(days.at(-1).date))}</p>
   </div>`;
 }
@@ -1853,7 +1853,7 @@ async function pushEnable(time) {
   if (perm !== "granted") {
     // Nach einmal "Blockieren" fragt der Browser nicht wieder; freigeben geht nur von Hand.
     throw new Error(isIos
-      ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → satt → Mitteilungen erlauben."
+      ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → sunshine order → Mitteilungen erlauben."
       : "Benachrichtigungen sind nicht erlaubt. Links neben der Adresse auf das Schloss tippen → Berechtigungen → "
         + "Benachrichtigungen → Zulassen, dann hier nochmal einschalten.");
   }

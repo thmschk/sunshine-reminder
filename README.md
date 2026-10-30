@@ -1,6 +1,4 @@
-# sunshine
-
-*satt … theoretisch.*
+# sunshine order
 
 Erinnert auf dem Handy daran, wenn im Schulessen-Bestellsystem **IBS5**
 (`ibs.sunshine-catering.de`) für die nächsten Tage nichts bestellt ist — und
@@ -446,5 +444,5 @@ MIT — siehe [LICENSE](LICENSE).
 
 ## Frühere Namen
 
-„theoretisch satt“, „immerhin.satt“, „happy sunshine“, bis 0.1.20 „sunshine reminder“ — das
+„theoretisch satt“, „immerhin.satt“, „happy sunshine“, bis 0.1.20 „sunshine reminder“, zuletzt „sunshine“ — das
 Repository heißt weiter `sunshine-reminder`; der lokale Ordner `ibs-order-watch`.

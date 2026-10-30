@@ -589,7 +589,7 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   await test("Weckruf: alles bestellt ohne Termin bleibt still", () => {
     const days = [day(addDays(t, 1), OrderState.ORDERED)];
     const m = compose({ checked: days, due: [], days, today: t });
-    eq([m.title, m.quiet], ["satt … theoretisch ✓", true]);
+    eq([m.title, m.quiet], ["Alles erledigt ✓", true]);
   });
   await test("Weckruf: Termin in derselben Meldung, laut, ohne Bestellwarnung", () => {
     const d = addDays(t, 1);
@@ -630,7 +630,7 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   });
   await test("Zwei Kinder alles bestellt: still, beide genannt", () => {
     const m = composeAll([kid("1", "Anna", [day(d1, OrderState.ORDERED)]), kid("2", "Ben", [day(d1, OrderState.ORDERED)])], t);
-    eq([m.title, m.quiet, m.url], ["satt … theoretisch ✓", true, "./"]);
+    eq([m.title, m.quiet, m.url], ["Alles erledigt ✓", true, "./"]);
     eq(m.body.includes("Anna: alles bestellt") && m.body.includes("Ben: alles bestellt"), true, m.body);
   });
   await test("Zwei Kinder, eins offen: Titel mit Namen, Tippen öffnet dieses Kind", () => {
@@ -1431,7 +1431,7 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
     eq([cacheKey(nav("/app/?order=2026-10-12&k=1000"), scope), cacheKey(nav("/app/"), scope), cacheKey(nav("/app/index.html?x=1"), scope)], ["./", "./", "./"]);
     const other = nav("/app/tests/test.html");
     eq(cacheKey(other, scope) === other, true, "andere Seite bleibt eigene Anfrage");
-    const icon = { mode: "no-cors", url: "https://satt.example/app/icon.svg?v=2" };
+    const icon = { mode: "no-cors", url: "https://satt.example/app/icon.svg?v=3" };
     eq(cacheKey(icon, scope) === icon, true, "Dateien unverändert");
   });
   const push = { id: "a".repeat(24), secret: "s", time: "07:30", created: 1 };

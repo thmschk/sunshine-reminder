@@ -1,61 +1,63 @@
-/* Farben der Android-Fassung (bis 6160aed, hell), dazu ein dunkler Satz. Gelb (--primary) trägt nie
-   allein eine Grenze oder einen Zustand auf hellem Grund (1,4:1 zu Weiß), dafür --secondary. */
+/* „Papier und Sonne“: neutral (Papier, Tinte, Grau) und eine einzige Farbe, die Sonne aus dem
+   Logo, für alles, wobei man selbst dran ist (offen, Jetzt bestellen, Ladebalken). Erledigtes bleibt
+   grau, Rot steht nur für Fehler. Die Sonne trägt auf hellem Grund nie allein Schrift oder eine
+   Grenze (2:1 zu Weiß), dafür --open-text; auf Sonne steht immer dunkle Schrift. */
 :root {
-  --primary: #F8D800;
-  --on-primary: #2A2100;
-  --primary-container: #FFF3B0;
-  --on-primary-container: #241C00;
-  --secondary: #A01850;
-  --on-secondary: #FFFFFF;
-  --bg: #FFFCF0;
+  --primary: #F2A21A;
+  --on-primary: #1F1600;
+  --primary-container: #FFF2DA;
+  --on-primary-container: #1F1D1A;
+  --secondary: #1F1D1A;
+  --on-secondary: #FAF8F3;
+  --bg: #FAF8F3;
   --surface: #FFFFFF;
-  --text: #1E1B13;
-  --surface-variant: #EAE3C8;
-  --on-surface-variant: #4A4632;
-  --outline: #7B7761;
+  --text: #1F1D1A;
+  --surface-variant: #ECE8E0;
+  --on-surface-variant: #6B665E;
+  --outline: #8E887E;
   --error: #B3261E;
   --on-error: #FFFFFF;
   --error-container: #F9DEDC;
   --on-error-container: #410E0B;
-  --ok: #2A6B2E;
-  --ok-container: #DDF0DC;
-  --open-text: #7A5D00;
-  --event-text: #7A5D00;
-  --heart: #B4527A;
-  --strip-bg: #EEF1F5;
-  --strip-text: #4D5968;
-  --strip-hl: #14304F;
-  --strip-hl-text: #FFFFFF;
+  --ok: #8E887E;
+  --ok-container: #F1EEE8;
+  --open-text: #8F5300;
+  --event-text: #6B665E;
+  --heart: #F2A21A;
+  --strip-bg: #F1EEE8;
+  --strip-text: #6B665E;
+  --strip-hl: #1F1D1A;
+  --strip-hl-text: #FAF8F3;
   --scrim: rgba(0, 0, 0, .32);
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --primary: #F8D800;
-    --on-primary: #2A2100;
-    --primary-container: #4A3F00;
-    --on-primary-container: #FFF0A8;
-    --secondary: #FFB0CB;
-    --on-secondary: #5E0A2E;
-    --bg: #15130C;
-    --surface: #221F17;
-    --text: #ECE6D6;
-    --surface-variant: #3B3729;
-    --on-surface-variant: #CEC7AF;
-    --outline: #979179;
+    --primary: #FFB547;
+    --on-primary: #1F1600;
+    --primary-container: #3A2B12;
+    --on-primary-container: #F2EEE7;
+    --secondary: #F2EEE7;
+    --on-secondary: #151412;
+    --bg: #151412;
+    --surface: #1F1D1A;
+    --text: #F2EEE7;
+    --surface-variant: #34312C;
+    --on-surface-variant: #A9A398;
+    --outline: #7F796F;
     --error: #FFB4AB;
     --on-error: #690005;
     --error-container: #8C1D18;
     --on-error-container: #FFDAD6;
-    --ok: #B8CC94;
-    --ok-container: #2F3424;
-    --open-text: #EBC54D;
-    --event-text: #EBC54D;
-    --heart: #E79BB8;
-    --strip-bg: #2B323C;
-    --strip-text: #B9C3CF;
-    --strip-hl: #9EC2EC;
-    --strip-hl-text: #0D2236;
+    --ok: #8C867C;
+    --ok-container: #262420;
+    --open-text: #FFB547;
+    --event-text: #A9A398;
+    --heart: #FFB547;
+    --strip-bg: #262420;
+    --strip-text: #A9A398;
+    --strip-hl: #F2EEE7;
+    --strip-hl-text: #151412;
     --scrim: rgba(0, 0, 0, .6);
   }
 }
@@ -170,7 +172,7 @@ button:disabled { opacity: .45; cursor: default; }
 .err-detail { font-size: .8125rem; margin-top: 4px; }
 .err-detail summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; text-decoration: underline; }
 .err-detail code { display: block; font-size: .8125rem; overflow-wrap: anywhere; margin-bottom: 4px; }
-.hero.ok { background: var(--ok-container); color: var(--text); }
+.hero.ok { background: var(--surface); color: var(--text); }
 .hero.open { background: var(--primary-container); color: var(--on-primary-container); }
 .hero.bad { background: var(--error-container); color: var(--on-error-container); }
 .hero.neutral { background: var(--surface-variant); color: var(--on-surface-variant); }
@@ -184,7 +186,7 @@ button:disabled { opacity: .45; cursor: default; }
 .hero.open h2 { font-size: 1rem; margin: 0; }
 .hero.open p { display: none; }
 /* Gelber Knopf auf hellgelber Karte hebt sich nicht ab (1,3:1): hier in --secondary. */
-.hero.open button.block { grid-column: 2; grid-row: 1 / span 2; margin: 0; background: var(--secondary); color: var(--on-secondary); }
+.hero.open button.block { grid-column: 2; grid-row: 1 / span 2; margin: 0; background: var(--primary); color: var(--on-primary); }
 /* Einleitung beim ersten Start: schlichte Karte, alle Absätze sichtbar. */
 .intro h2 { font-size: 1.15rem; font-weight: 600; margin: 0 0 2px; line-height: 1.25; }
 .intro p { margin: 8px 0; font-size: .92rem; }

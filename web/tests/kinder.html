@@ -44,7 +44,7 @@ const tabs = () => [...document.querySelectorAll(".kid-tab")].map((b) => b.textC
 // Bens Name kennt das Gerät erst nach seiner ersten Anmeldung (sonst schon beim Hinzufügen).
 await until(() => document.querySelector(".days") && !document.getElementById("refresh") && tabs()[0] === "Mia*");
 check(tabs().join() === "Mia*,Kd. 2000", `Reiter, Name aus IBS5 nach dem Laden: ${tabs()}`);
-check(hero().startsWith("satt"), `Mia: alles bestellt (${hero()})`);
+check(hero().startsWith("Alles erledigt"), `Mia: alles bestellt (${hero()})`);
 check(seen.length && seen.every((n) => n === "1000"), "nur Mias Token benutzt");
 
 seen.length = 0;
@@ -78,7 +78,7 @@ await until(() => !document.querySelector("[data-remove]"));
 check(!document.querySelector("[data-remove]"), "Ben entfernt, bei einem Kind kein Entfernen mehr");
 document.getElementById("b-back").click();
 await until(() => document.querySelector(".hero") && !document.getElementById("refresh"));
-check(!document.querySelector(".kids") && hero().startsWith("satt"), `ein Kind: keine Reiter, Mia aktiv (${hero()})`);
+check(!document.querySelector(".kids") && hero().startsWith("Alles erledigt"), `ein Kind: keine Reiter, Mia aktiv (${hero()})`);
 
 document.getElementById("out").textContent = `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
 </script>

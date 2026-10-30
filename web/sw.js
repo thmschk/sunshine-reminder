@@ -16,12 +16,12 @@ import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
 
-const VERSION = "v69";
+const VERSION = "v70";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
 // Jedes Modul, das app.js oder sw.js per import erreicht, muss hier stehen (Test in tests/test.html).
-export const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=2", "icon-192.png?v=2", "badge-96.png?v=2", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "errors.js", "base64.js", "ferien.json"];
+export const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=3", "icon-192.png?v=3", "badge-96.png?v=3", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "errors.js", "base64.js", "ferien.json"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -167,8 +167,8 @@ async function subjectReminder(isTest) {
     const lines = found.map((m) => m.subject + (m.label ? ` — ${m.label}` : "") + (m.notes.length ? ` (${m.notes.join("; ")})` : ""));
     await self.registration.showNotification(`${when} ${found.map((m) => m.subject).join(" und ")}`, {
       body: lines.join("\n") + (cfg.childName ? `\nfür ${cfg.childName}` : ""),
-      icon: "icon-192.png?v=2",
-      badge: "badge-96.png?v=2",
+      icon: "icon-192.png?v=3",
+      badge: "badge-96.png?v=3",
       tag: "hs-sdui",
       data: { url: "./" },
     });
@@ -410,7 +410,7 @@ export function compose({ checked, due, days, today, firstName = "" }) {
 
   if (alarm.kind === "ok") {
     const until = checked.length ? `bis ${De.long(checked.at(-1).date)}` : "Keine Schultage im Prüfzeitraum";
-    if (!due.length) return { title: "satt … theoretisch ✓", body: until, url: "./", keys, quiet: true };
+    if (!due.length) return { title: "Alles erledigt ✓", body: until, url: "./", keys, quiet: true };
     return {
       title: cancel ? `Essen abbestellen: ${cancel.title}` : due.length === 1 ? `Termin: ${due[0].title}` : `${due.length} Termine`,
       body: `${evText}\n\nSchulessen: alles bestellt ${until}`,
@@ -492,7 +492,7 @@ export function composeAll(kids, today) {
     : firstCancel ? `Essen abbestellen: ${firstCancel.e.title}`
     : due.length === 1 ? `Termin: ${due[0].e.title}`
     : due.length ? `${due.length} Termine`
-    : "satt … theoretisch ✓";
+    : "Alles erledigt ✓";
   return {
     title,
     body: [...sections, evText].filter(Boolean).join("\n\n"),
@@ -507,9 +507,9 @@ export async function notify(title, body, { silent = false, url = "./", tag = "h
   signal?.throwIfAborted();
   return self.registration.showNotification(title, {
     body,
-    icon: "icon-192.png?v=2",
+    icon: "icon-192.png?v=3",
     // Kleines Symbol in Statusleiste und Kopf der Meldung; ohne zeigt Android das Chrome-Logo.
-    badge: "badge-96.png?v=2",
+    badge: "badge-96.png?v=3",
     tag,
     renotify: !silent,
     silent,
@@ -587,8 +587,8 @@ self.addEventListener("pushsubscriptionchange", (ev) => {
       await self.registration.showNotification("Erinnerung bitte neu einschalten", {
         body: `Das Abo für die Erinnerung ließ sich nicht erneuern (${e?.message || e}). `
           + "Bitte die App öffnen und unter ⚙ die Erinnerung aus- und wieder einschalten.",
-        icon: "icon-192.png?v=2",
-        badge: "badge-96.png?v=2",
+        icon: "icon-192.png?v=3",
+        badge: "badge-96.png?v=3",
         tag: "hs-push",
         data: { url: "./" },
       }).catch(() => {});
