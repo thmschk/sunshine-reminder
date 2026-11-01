@@ -257,7 +257,7 @@ function landingHtml(msg, retry, prefill, direct) {
       </div>
       <div class="land-hero">
         <div class="intro">
-          <span class="land-tag">Für das Schulessen-Bestellsystem <b>IBS5</b></span>
+          <span class="land-tag">Für das Berliner Schulessen-Bestellsystem <b>IBS5</b></span>
           <h2 class="land-title">Schulessen vergessen?<span>Muss doch nicht sein.</span></h2>
           <p class="land-lead">Die App schaut für dich ins Bestellsystem und meldet sich, wenn noch etwas offen ist.
             Bestellen, umbestellen und abbestellen geht direkt hier.</p>
