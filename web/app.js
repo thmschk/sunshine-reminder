@@ -254,7 +254,6 @@ function landingHtml(msg, retry, prefill, direct) {
     <div class="landing">
       <div class="land-top">
         <span class="land-brand"><img src="icon.svg?v=3" alt="">sunshine order</span>
-        <button type="button" class="land-go" data-scroll="anmelden">Loslegen</button>
       </div>
       <div class="land-hero">
         <div class="intro">
@@ -263,7 +262,6 @@ function landingHtml(msg, retry, prefill, direct) {
           <p class="land-lead">Die App schaut für dich ins Bestellsystem und meldet sich, wenn noch etwas offen ist.
             Bestellen, umbestellen und abbestellen geht direkt hier.</p>
           <div class="land-cta">
-            <button type="button" data-scroll="anmelden">Loslegen</button>
             <button type="button" class="land-outline" data-scroll="ablauf">So funktioniert es</button>
           </div>
           <ul class="land-checks"><li>Daten bleiben auf deinem Handy</li><li>Keine Werbung</li><li>Kostenlos</li></ul>
@@ -311,6 +309,8 @@ function landingHtml(msg, retry, prefill, direct) {
         </div>
       </div>
 
+      <div class="land-end"><button type="button" data-scroll="anmelden">Jetzt anmelden</button></div>
+
       <div class="land-foot">
         <span class="land-brand"><img src="icon.svg?v=3" alt="">sunshine order</span>
         <span>Privates Projekt · kein Angebot von Sunshine Catering, IBS5 oder Sdui</span>
@@ -344,8 +344,13 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false, d
       </form>
     </div>` : landingHtml(msg, retry, prefill, !!(message || retry));
   wireInstallTip();
+  // Zur Anmeldung: Eingabemarke gleich ins Feld, sofern das Formular sichtbar ist (iPhone in Safari: erst installieren).
   for (const b of document.querySelectorAll("[data-scroll]")) {
-    b.onclick = () => document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    b.onclick = () => {
+      document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const cn = document.getElementById("cn");
+      if (b.dataset.scroll === "anmelden" && cn?.offsetParent) cn.focus({ preventScroll: true });
+    };
   }
   const showLogin = document.getElementById("b-show-login");
   if (showLogin) showLogin.onclick = () => { document.getElementById("land-form").hidden = false; showLogin.hidden = true; };
@@ -1293,7 +1298,7 @@ function showAbout() {
   dlg.innerHTML = `
     <svg class="about-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART}"/></svg>
     <h3>Über diese App</h3>
-    <p>Diese App wurde mithilfe eines KI-Agenten in meiner Freizeit entwickelt. Ich freue mich über Feedback.
+    <p>Diese App wurde mithilfe einer KI-Agentin in meiner Freizeit entwickelt. Ich freue mich über Feedback.
       Wer will, darf gerne auch <a href="${REPO_URL}" target="_blank" rel="noopener">mitcoden</a>.
       Wer mir unbedingt einen Espresso spendieren möchte, darf das per
       <a href="${DONATE_URL}" target="_blank" rel="noopener">PayPal.Me</a> machen.</p>

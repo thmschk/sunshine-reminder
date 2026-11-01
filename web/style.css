@@ -573,19 +573,18 @@ header { min-height: 44px; }
 /* Startseite ohne Konto: Kopf mit Anmeldung, Ablauf, Funktionen, Datenschutz. Am Rechner breiter und
    zweispaltig, sonst untereinander. */
 main:has(.landing) { max-width: 1040px; }
-.landing { --land-dark: #1F1D1A; --land-dark-card: #2E2B27; --land-on-dark: #F2EEE7; --land-on-dark-muted: #A9A398; }
-@media (prefers-color-scheme: dark) { .landing { --land-dark: #2A2824; --land-dark-card: #34312C; } }
+.landing { --land-dark: #1F1D1A; --land-dark-card: #2E2B27; --land-on-dark: #F2EEE7; --land-on-dark-muted: #A9A398; --land-quiet: #8E887E; }
+@media (prefers-color-scheme: dark) { .landing { --land-dark: #2A2824; --land-dark-card: #34312C; --land-quiet: #8C867C; } }
 .land-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
 .land-brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; }
 .land-brand img { width: 32px; height: 32px; border-radius: 8px; }
-.land-go { min-height: 38px; padding: 6px 14px; }
 .land-hero { display: grid; gap: 24px; padding: 16px 0 36px; }
 @media (min-width: 880px) { .land-hero { grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: center; padding: 40px 0 64px; } }
 .land-tag { display: inline-block; border: 1px solid var(--surface-variant); background: var(--surface); border-radius: 999px;
   padding: 4px 12px; font-size: .8rem; color: var(--on-surface-variant); }
 .land-tag b { color: var(--text); font-weight: 600; }
 .intro .land-title { font-size: clamp(2rem, 6.5vw, 3.1rem); line-height: 1.08; letter-spacing: -.025em; margin: 16px 0 14px; font-weight: 700; }
-.land-title span { display: block; color: var(--open-text); }
+.land-title span { display: block; color: var(--land-quiet); }
 .intro .land-lead { font-size: 1.05rem; color: var(--on-surface-variant); margin: 0 0 20px; max-width: 32em; }
 .land-cta { display: flex; flex-wrap: wrap; gap: 10px; }
 .land-cta button { padding: 10px 18px; }
@@ -622,6 +621,8 @@ button.land-outline { background: var(--surface); color: var(--text); border: 1p
 .land-privacy li::before { content: "0" counter(land); color: var(--primary); font-weight: 700; font-size: .85rem; }
 .land-privacy li b { display: block; }
 .land-privacy li span { color: var(--land-on-dark-muted); font-size: .88rem; }
+.land-end { text-align: center; padding: 8px 0 32px; }
+.land-end button { padding: 10px 22px; }
 .land-foot { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; align-items: center;
   border-top: 1px solid var(--surface-variant); padding: 18px 0 8px; font-size: .82rem; color: var(--on-surface-variant); }
 .land-foot a { color: inherit; }
