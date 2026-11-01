@@ -149,7 +149,7 @@ async function rememberName(creds) {
 
 /**
  * fn(client) mit angemeldetem Client des Kontos. Token nur speichern, wenn auch
- * die Zugangsdaten gespeichert sind („Auf diesem Gerät merken“).
+ * die Zugangsdaten gespeichert sind (scheitert etwa im privaten Modus).
  */
 const withLogin = (creds, fn) => {
   const c = clientFor(creds.customerNo);
@@ -192,6 +192,133 @@ function nextView() {
 /** Zuletzt gezeichnete Startseite; der Ferien-Dialog überlebt das zweite Zeichnen und zeichnet danach damit neu. */
 let homeState = null;
 
+/** Anmeldeformular der Startseite. */
+function loginForm(msg, retry, prefill) {
+  return `
+    ${msg}
+    ${retry ? `<div class="row"><button id="b-resume" type="button" class="block">Trotzdem jetzt versuchen</button></div>` : ""}
+    <form id="f-login" autocomplete="on">
+      <label for="cn">Kundennummer</label>
+      <input id="cn" name="username" type="text" inputmode="numeric" autocomplete="username" required value="${esc(prefill.customerNo)}">
+      <label for="pw">Passwort</label>
+      ${passwordField("pw", 'name="password"')}
+      ${pushSupported ? `<label class="check"><input id="want-push" type="checkbox" checked> Werktags um ${DEFAULT_PUSH_TIME} Uhr erinnern</label>` : ""}
+      <div class="row"><button type="submit" class="block">Anmelden und prüfen</button></div>
+    </form>
+    <p class="small muted">Die Zugangsdaten bleiben verschlüsselt auf diesem Gerät und gehen nur an IBS5.</p>`;
+}
+
+/** Installieren unter der Anmeldung (Android): Knopf, solange Chrome ihn anbietet, sonst der Weg übers Menü. */
+function landInstall() {
+  return `<div id="land-install" class="land-install">${installPrompt
+    ? `<button id="b-install" type="button">Als App installieren</button><span class="small muted">Eigenes Symbol, öffnet sich wie eine App.</span>`
+    : `<span class="small muted">Als App: in Chrome oben rechts auf <b>⋮</b> → <b>App installieren</b>.</span>`}</div>`;
+}
+
+/**
+ * Anmelde-Karte je Gerät: iPhone in Safari erst installieren (nur die installierte App bekommt
+ * Erinnerungen und hat einen eigenen Speicher), eingebauter Browser erst im Browser öffnen,
+ * Android mit Installieren darunter. direct: Formular sofort zeigen (Fehler, erneuter Versuch).
+ */
+function landingCard(form, direct) {
+  const android = /Android/.test(navigator.userAgent);
+  const gate = direct || standalone ? ""
+    : inAppBrowser ? `
+      <h2>Im Browser öffnen</h2>
+      <p class="small muted">Die Seite ist gerade in einer anderen App geöffnet (etwa aus WhatsApp). Von hier lässt sie
+        sich nicht installieren, und Erinnerungen kommen nicht an.</p>
+      <p>Im Menü dieser App <b>${isIos ? "In Safari öffnen" : "Im Browser öffnen"}</b> wählen.</p>`
+    : isIos ? `
+      <h2>Erst zum Home-Bildschirm</h2>
+      <p class="small muted">Nur als App auf dem Startbildschirm kommen auf dem iPhone Erinnerungen an. Die App merkt
+        sich die Anmeldung getrennt von Safari, deshalb zuerst installieren und dort anmelden.</p>
+      <ol class="tip-steps">
+        <li><span>Unten auf <b>Teilen</b> tippen (ggf. hinter „⋯“)</span></li>
+        <li><span><b>Zum Home-Bildschirm</b> wählen</span></li>
+        <li><span>Über das neue Symbol öffnen und anmelden</span></li>
+      </ol>`
+    : "";
+  const after = standalone || isIos ? ""
+    : android ? landInstall()
+    : `<p class="small muted">Gedacht fürs Handy: Die Erinnerung kommt dort an, wo du dich anmeldest.</p>`;
+  const login = `<h2>Anmelden</h2><p class="small muted">Mit Kundennummer und Passwort aus IBS5.</p>${form}${after}`;
+  return `<div class="card land-login" id="anmelden">${gate ? `${gate}
+      <button type="button" class="text" id="b-show-login">Trotzdem hier anmelden</button>
+      <div id="land-form" hidden>${login}</div>` : login}</div>`;
+}
+
+/** Startseite für Besucher ohne gespeichertes Konto. */
+function landingHtml(msg, retry, prefill, direct) {
+  const ico = (d) => `<span class="land-ico"><svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg></span>`;
+  return `
+    <div class="landing">
+      <div class="land-top">
+        <span class="land-brand"><img src="icon.svg?v=3" alt="">sunshine order</span>
+        <button type="button" class="land-go" data-scroll="anmelden">Loslegen</button>
+      </div>
+      <div class="land-hero">
+        <div class="intro">
+          <span class="land-tag">Für das Schulessen-Bestellsystem <b>IBS5</b></span>
+          <h2 class="land-title">Schulessen vergessen?<span>Muss doch nicht sein.</span></h2>
+          <p class="land-lead">Die App schaut für dich ins Bestellsystem und meldet sich, wenn noch etwas offen ist.
+            Bestellen, umbestellen und abbestellen geht direkt hier.</p>
+          <div class="land-cta">
+            <button type="button" data-scroll="anmelden">Loslegen</button>
+            <button type="button" class="land-outline" data-scroll="ablauf">So funktioniert es</button>
+          </div>
+          <ul class="land-checks"><li>Daten bleiben auf deinem Handy</li><li>Keine Werbung</li><li>Kostenlos</li></ul>
+        </div>
+        ${landingCard(loginForm(msg, retry, prefill), direct)}
+      </div>
+
+      <div class="land-sec" id="ablauf">
+        <p class="land-kicker">Ablauf</p>
+        <h3 class="land-h">So funktioniert es</h3>
+        <p class="land-sub">Einmal anmelden, Uhrzeit wählen, den Rest erledigt die Erinnerung.</p>
+        <div class="land-grid">
+          <div class="card"><span class="land-num">1</span><h4>Anmelden</h4><p>Mit den Zugangsdaten aus IBS5. Sie bleiben verschlüsselt auf deinem Handy.</p></div>
+          <div class="card"><span class="land-num">2</span><h4>Uhrzeit wählen</h4><p>An welchen Tagen und wann du erinnert werden willst, auch für mehrere Kinder.</p></div>
+          <div class="card"><span class="land-num">3</span><h4>Erinnert werden</h4><p>Ist etwas offen, kommt eine Meldung. Antippen, Gericht wählen, fertig.</p></div>
+        </div>
+      </div>
+
+      <div class="land-sec">
+        <h3 class="land-h">Funktionen</h3>
+        <div class="land-grid">
+          <div class="card">${ico('<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>')}<h4>Erinnerung</h4>
+            <p>Werktags zur gewählten Zeit, auf Wunsch morgens „Heute gibt's …“.</p></div>
+          <div class="card">${ico('<path d="M20 6 9 17l-5-5"/>')}<h4>Überblick</h4>
+            <p>Welche Tage bestellt sind und welche offen, dazu eigene Termine und die Ferien.</p></div>
+          <div class="card">${ico('<path d="M3 11h18M5 11a7 7 0 0 1 14 0M12 4V2M4 15h16l-1 4H5z"/>')}<h4>Direkt bestellen</h4>
+            <p>Gericht wählen, umbestellen oder abbestellen, ohne Umweg über die Website.</p></div>
+        </div>
+      </div>
+
+      <div class="land-sec">
+        <div class="land-privacy">
+          <div>
+            <p class="land-kicker">Datenschutz</p>
+            <h3 class="land-h">Deine Daten bleiben bei dir</h3>
+            <p>Zugangsdaten und Bestellungen liegen verschlüsselt auf deinem Gerät und gehen nur an das Bestellsystem.
+              Unser Server weckt das Handy nur zur Erinnerung. Nimmst du freiwillig den Stundenplan aus Sdui dazu, laufen
+              dessen Anmeldung und Abruf durch ihn, weil Sdui direkte Zugriffe sperrt; gespeichert wird dabei nichts.</p>
+          </div>
+          <ol>
+            <li><div><b>Kein Konto</b><span>Keine E-Mail, keine Registrierung bei uns.</span></div></li>
+            <li><div><b>Server sieht nichts</b><span>Weder IBS5-Zugangsdaten noch Bestellungen.</span></div></li>
+            <li><div><b>Ohne Tracker</b><span>Keine Werbung, keine Analyse-Dienste, keine fremden Skripte.</span></div></li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="land-foot">
+        <span class="land-brand"><img src="icon.svg?v=3" alt="">sunshine order</span>
+        <span>Privates Projekt · kein Angebot von Sunshine Catering, IBS5 oder Sdui</span>
+        <span><a href="datenschutz.html">Datenschutz</a> · <a href="${REPO_URL}#architektur" target="_blank" rel="noopener">So funktioniert's (GitHub)</a></span>
+      </div>
+    </div>`;
+}
+
 /**
  * retry: Zugangsdaten für „Trotzdem jetzt versuchen“, wenn die Anmeldung an einer Pause hing.
  * adding: weiteres Kind zu gespeicherten Konten; dann ohne Einleitung und immer gemerkt
@@ -215,38 +342,13 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false, d
         <div class="row"><button type="submit" class="block">Hinzufügen und prüfen</button></div>
         <div class="row u-mt4"><button type="button" id="b-add-cancel" class="text">Abbrechen</button></div>
       </form>
-    </div>` : `
-    ${wantInstall ? installTip() : ""}
-    <div class="card intro">
-      <h2>Nie wieder Schulessen vergessen</h2>
-      <p>Zeigt, für welche Tage im Bestellsystem IBS5 noch nichts bestellt ist, und bestellt, bestellt um
-        oder bestellt ab. Wer mag, wird werktags zur gewählten Zeit erinnert, auf Wunsch auch morgens mit dem
-        Essen des Tages.</p>
-      <h3>Deine Daten</h3>
-      <p class="small">Zugangsdaten und Bestellungen bleiben verschlüsselt auf diesem Gerät und gehen nur an das
-        Bestellsystem. Unser Server weckt das Gerät nur zur Erinnerung und sieht weder Zugangsdaten noch
-        Bestellungen. Nimmst du freiwillig den Stundenplan aus Sdui dazu, laufen dessen Anmeldung und Abruf durch
-        ihn, weil Sdui direkte Zugriffe sperrt. Gespeichert wird dabei nichts.</p>
-      <p class="small muted">Kein Angebot von Sunshine Catering, IBS5 oder Sdui ·
-        <a href="datenschutz.html">Datenschutz</a></p>
-    </div>
-    ${wantInstall ? "" : installTip()}
-    <div class="card">
-      <h2 class="u-mt0">Anmelden</h2>
-      <p class="small muted">Mit Kundennummer und Passwort des Schulessen-Bestellsystems (IBS5).</p>
-      ${msg}
-      ${retry ? `<div class="row"><button id="b-resume" type="button" class="block">Trotzdem jetzt versuchen</button></div>` : ""}
-      <form id="f-login" autocomplete="on">
-        <label for="cn">Kundennummer</label>
-        <input id="cn" name="username" type="text" inputmode="numeric" autocomplete="username" required value="${esc(prefill.customerNo)}">
-        <label for="pw">Passwort</label>
-        ${passwordField("pw", 'name="password"')}
-        <label class="check"><input id="remember" type="checkbox" checked> Auf diesem Gerät merken</label>
-        ${pushSupported ? `<label class="check"><input id="want-push" type="checkbox" checked> Werktags um ${DEFAULT_PUSH_TIME} Uhr erinnern</label>` : ""}
-        <div class="row"><button type="submit" class="block">Speichern und prüfen</button></div>
-      </form>
-    </div>`;
+    </div>` : landingHtml(msg, retry, prefill, !!(message || retry));
   wireInstallTip();
+  for (const b of document.querySelectorAll("[data-scroll]")) {
+    b.onclick = () => document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  const showLogin = document.getElementById("b-show-login");
+  if (showLogin) showLogin.onclick = () => { document.getElementById("land-form").hidden = false; showLogin.hidden = true; };
   // perm: bereits gestartete Abfrage der Benachrichtigungs-Erlaubnis, wenn die Erinnerung gleich mit an soll.
   const attempt = async (creds, remember, perm = null) => {
     if (adding && store.accounts.some((a) => a.customerNo === creds.customerNo)) {
@@ -283,13 +385,10 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false, d
     showHome();
   };
   document.getElementById("b-add-cancel")?.addEventListener("click", () => showSettings());
-  // Erinnerung braucht gespeicherte Zugangsdaten.
-  const rememberBox = document.getElementById("remember");
-  const pushBox = document.getElementById("want-push");
-  if (rememberBox && pushBox) rememberBox.onchange = () => { pushBox.disabled = !rememberBox.checked; };
   document.getElementById("f-login").addEventListener("submit", (ev) => {
     ev.preventDefault();
-    const remember = adding || document.getElementById("remember").checked;
+    // Gespeichert wird immer: die Erinnerung prüft nur gespeicherte Konten.
+    const remember = true;
     // Die Erlaubnis muss noch im Klick erfragt werden (iOS verlangt das), also vor der Anmeldung.
     const wantPush = !adding && remember && !store.push && !!document.getElementById("want-push")?.checked;
     const perm = wantPush ? Notification.requestPermission().catch(() => "denied") : null;
@@ -369,6 +468,8 @@ function wireInstallTip() {
 /** Steht die Karte schon auf der Seite, mit dem aktuellen Stand neu zeichnen. */
 function refreshInstallTip() {
   for (const el of document.querySelectorAll(".tip")) el.outerHTML = installTip();
+  const land = document.getElementById("land-install");
+  if (land) land.outerHTML = landInstall();
   wireInstallTip();
 }
 
