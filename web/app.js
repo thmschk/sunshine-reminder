@@ -813,7 +813,7 @@ function heroCard(days, firstName) {
   }
   if (!days.length) return `<div class="card hero ok"><h2>Keine Schultage im Prüfzeitraum</h2></div>`;
   return `<div class="card hero ok">
-    <h2>Alles erledigt ✓</h2>
+    <h2>Alles erledigt ${MARK.ok}</h2>
     <p>bis ${esc(De.long(days.at(-1).date))}</p>
   </div>`;
 }
@@ -933,6 +933,13 @@ async function showFerien(creds, h, onDone, { fromSettings = false } = {}) {
 
 // Statussymbol der Tageszeile als Text für Screenreader.
 const SYM_TEXT = { ok: "Status: in Ordnung", open: "Status: offen", bad: "Status: Achtung" };
+/** Gezeichnete Symbole statt Schriftzeichen: sehen auf jedem Gerät gleich aus, Strich wie der Haken im Logo. */
+const icon = (d) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
+const MARK = {
+  ok: icon('<path d="M6.5 12.5l3.5 3.5 7.5-8"/>'),
+  open: icon('<path d="M12 7v6"/><path d="M12 16.8v.2"/>'),
+  bad: icon('<path d="M8 8l8 8M16 8l-8 8"/>'),
+};
 
 /**
  * Zeile der Startseite: Wochentag/Tag, Gericht einzeilig + Status, Symbol rechts;
@@ -945,17 +952,17 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
   let [sub, subCls] = SUB[d.state];
   // In den Ferien gilt der Stundenplan nicht.
   const timeline = holiday ? "" : strip?.(d.date) || "";
-  let [sym, symCls] = d.state === OrderState.ORDERED ? ["✓", "ok"] : d.isActionable ? ["!", "open"] : ["✕", "bad"];
+  let symCls = d.state === OrderState.ORDERED ? "ok" : d.isActionable ? "open" : "bad";
   // Heute ist nichts mehr zu ändern: ohne Bestellung nur „nicht bestellt“, ohne Aufforderung.
   if (isToday && d.state !== OrderState.ORDERED && d.state !== OrderState.NO_OFFER) {
-    [dish, sub, subCls, sym, symCls] = ["nicht bestellt", "", "", "✕", "bad"];
+    [dish, sub, subCls, symCls] = ["nicht bestellt", "", "", "bad"];
   }
   const titles = dayEvents.map((e) => e.title).join(", ");
   if (dayEvents.some((e) => e.noMeal) && !(isToday && d.state === OrderState.ORDERED)) {
-    if (d.state === OrderState.ORDERED) [sub, subCls, sym, symCls] = ["bestellt, abbestellen?", "open", "!", "open"];
-    else [dish, sub, subCls, sym, symCls] = ["kein Schulessen", "", "", "✓", "ok"];
+    if (d.state === OrderState.ORDERED) [sub, subCls, symCls] = ["bestellt, abbestellen?", "open", "open"];
+    else [dish, sub, subCls, symCls] = ["kein Schulessen", "", "", "ok"];
   } else if (holiday && (d.state === OrderState.NO_OFFER || (skip && (d.isActionable || d.state === OrderState.DEADLINE_PASSED)))) {
-    [dish, sub, subCls, sym, symCls] = [holiday, d.state === OrderState.NO_OFFER ? "kein Angebot" : "kein Essen in den Ferien", "", "✓", "ok"];
+    [dish, sub, subCls, symCls] = [holiday, d.state === OrderState.NO_OFFER ? "kein Angebot" : "kein Essen in den Ferien", "", "ok"];
   } else if (holiday) sub = `${holiday} · ${sub}`;
   // Eigene Termine vorn in der Statuszeile, farblich abgehoben.
   const subHtml = [titles && `<span class="ev">${esc(titles)}</span>`, sub && esc(sub)].filter(Boolean).join(" · ");
@@ -965,7 +972,7 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
       <span class="text"><span class="dish">${esc(dish)}</span>${
         // Mit Zeitleiste sagt der Haken rechts schon „bestellt“.
         timeline && d.state === OrderState.ORDERED && !titles ? "" : `<span class="sub ${subCls}">${subHtml}</span>`}${timeline}</span>
-      <span class="sym ${symCls}" aria-hidden="true">${sym}</span><span class="sr-only">${SYM_TEXT[symCls]}</span>`;
+      <span class="sym ${symCls}" aria-hidden="true">${MARK[symCls]}</span><span class="sr-only">${SYM_TEXT[symCls]}</span>`;
   return isToday ? `<li data-date="${d.date}">${inner}</li>`
     : `<li data-date="${d.date}"><button type="button" class="day-btn">${inner}</button></li>`;
 }
@@ -1062,7 +1069,7 @@ async function showOrder(focusDate = null) {
       .catch((e) => ({ kind: "aborted", reason: e.message }));
     working(false);
     if (outcome.kind === "done") {
-      resultDialog("done", send ? "✓ Abgeschickt" : "✓ Warenkorb verworfen",
+      resultDialog("done", send ? "Abgeschickt" : "Warenkorb verworfen",
         send ? `<ul class="entries">${cartRows(seen.others)}</ul>` : "<p>Bestellt wurde nichts.</p>");
     } else if (outcome.kind === "aborted") {
       resultDialog("error", send ? "Nichts abgeschickt" : "Nicht verworfen", `<p>${esc(outcome.reason)}</p>`);
@@ -1299,7 +1306,7 @@ async function showOrder(focusDate = null) {
       if (othersInCart) {
         rows.push(`<li>und ${othersInCart === 1 ? "1 weiterer Eintrag" : `${othersInCart} weitere Einträge`} aus dem Warenkorb</li>`);
       }
-      resultDialog("done", "✓ Erledigt", `<ul class="entries">${rows.join("")}</ul>`);
+      resultDialog("done", "Erledigt", `<ul class="entries">${rows.join("")}</ul>`);
     } else if (outcome.kind === "aborted") {
       resultDialog("error", "Nichts abgeschickt", `<p>${esc(outcome.reason)}</p>`);
     } else {
@@ -1345,7 +1352,7 @@ function resultDialog(cls, title, body) {
   const dlg = document.createElement("dialog");
   dlg.className = "dialog result-dialog";
   dlg.innerHTML = `
-    <div class="order-result ${cls}"><h3>${esc(title)}</h3>${body}</div>
+    <div class="order-result ${cls}"><h3>${cls === "done" ? MARK.ok : ""}${esc(title)}</h3>${body}</div>
     <div class="dialog-actions"><button type="button" class="text">OK</button></div>`;
   document.body.append(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
@@ -2057,7 +2064,7 @@ async function runPushTest(btn, kind = "") {
   const finish = (msg, ok) => {
     const box = document.getElementById("test-status");
     if (!box) return;
-    box.innerHTML = `<span class="small ${ok ? "ok-text" : "error"}">${esc(msg)}</span>`;
+    box.innerHTML = `<span class="small ${ok ? "ok-text" : "error"}">${ok ? MARK.ok : ""}${esc(msg)}</span>`;
     btn.disabled = false;
     setTimeout(() => box.remove(), 8000);
   };
@@ -2078,7 +2085,7 @@ async function runPushTest(btn, kind = "") {
     return finish(`Senden fehlgeschlagen: ${e.message}`, false);
   }
   const title = await shown;
-  finish(title ? `✓ Meldung angezeigt: „${title}“` : "Gesendet, aber keine Meldung bestätigt. Sind Benachrichtigungen erlaubt?", !!title);
+  finish(title ? `Meldung angezeigt: „${title}“` : "Gesendet, aber keine Meldung bestätigt. Sind Benachrichtigungen erlaubt?", !!title);
 }
 
 async function pushTest(kind = "") {

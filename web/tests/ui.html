@@ -385,7 +385,8 @@ if (!mode) {
     $('dialog [data-v="1"]').click();
     await until(() => $(".order-result"));
     const res = $(".order-result")?.textContent.replace(/\s+/g, " ") || "";
-    check(send ? /✓ Abgeschickt/.test(res) : /✓ Warenkorb verworfen/.test(res), `Ergebnis: ${res.slice(0, 80)}`);
+    check((send ? /^Abgeschickt/.test(res) : /^Warenkorb verworfen/.test(res)) && !!$(".order-result.done h3 svg.ico"),
+      `Ergebnis mit gezeichnetem Haken: ${res.slice(0, 80)}`);
     check(JSON.stringify(posts) === JSON.stringify([send ? "/Cart/Order" : "/Cart/Clear"]), `nur eine Anfrage, die richtige: ${posts.join(", ")}`);
     $(".dialog-actions button").click();
     await until(() => !$("dialog") && orderLoaded() && !$(".cart-note"));

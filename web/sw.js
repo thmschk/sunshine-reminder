@@ -19,7 +19,7 @@ import { renewPush } from "./push.js";
 
 export { renewPush };
 
-const VERSION = "v81";
+const VERSION = "v82";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -413,7 +413,7 @@ export function compose({ checked, due, days, today, firstName = "" }) {
 
   if (alarm.kind === "ok") {
     const until = checked.length ? `bis ${De.long(checked.at(-1).date)}` : "Keine Schultage im Prüfzeitraum";
-    if (!due.length) return { title: "Alles erledigt ✓", body: until, url: "./", keys, quiet: true };
+    if (!due.length) return { title: "Alles erledigt", body: until, url: "./", keys, quiet: true };
     return {
       title: cancel ? `Essen abbestellen: ${cancel.title}` : due.length === 1 ? `Termin: ${due[0].title}` : `${due.length} Termine`,
       body: `${evText}\n\nSchulessen: alles bestellt ${until}`,
@@ -495,7 +495,7 @@ export function composeAll(kids, today) {
     : firstCancel ? `Essen abbestellen: ${firstCancel.e.title}`
     : due.length === 1 ? `Termin: ${due[0].e.title}`
     : due.length ? `${due.length} Termine`
-    : "Alles erledigt ✓";
+    : "Alles erledigt";
   return {
     title,
     body: [...sections, evText].filter(Boolean).join("\n\n"),
