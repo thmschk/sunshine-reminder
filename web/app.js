@@ -2082,15 +2082,20 @@ async function runPushTest(btn, kind = "") {
 }
 
 async function pushTest(kind = "") {
+  let tried = null;
   const send = async () => {
     const p = await currentPush();
+    tried = p.id;
     await api("POST", `/subscriptions/${p.id}/test`, kind ? { kind } : null, p.secret);
   };
   try {
     await send();
   } catch (e) {
-    // Der Server kennt das Abo nicht mehr: neu anlegen und noch einmal senden.
-    if (!/HTTP 404/.test(e.message) || !(await healPush(true))) throw e;
+    // Der Server kennt das Abo nicht mehr: neu anlegen (oder die gerade laufende Reparatur
+    // abwarten) und mit der neuen Kennung noch einmal senden.
+    if (!/HTTP 404/.test(e.message)) throw e;
+    await healPush(true);
+    if ((await currentPush())?.id === tried) throw e;
     await send();
   }
 }
@@ -2101,7 +2106,16 @@ async function pushTest(kind = "") {
  * und nicht jeder Browser meldet dann pushsubscriptionchange). Beim Öffnen höchstens einmal
  * am Tag; force für „Jetzt testen“ und „Erinnerung reparieren“. true, wenn neu angelegt.
  */
-async function healPush(force = false) {
+// Reparaturen nacheinander: zwei gleichzeitige (Öffnen und „Jetzt testen“) legten zwei Abos an,
+// und das Gerät bekäme jeden Weckruf doppelt. Die zweite sieht die neue Kennung und frischt nur auf.
+let healChain = Promise.resolve();
+function healPush(force = false) {
+  const run = healChain.then(() => healPushNow(force));
+  healChain = run.catch(() => {});
+  return run;
+}
+
+async function healPushNow(force) {
   const p = await currentPush();
   if (!p || !(await swReady)) return false;
   if (!force && Date.now() - ((await kvGet("pushHealAt")) || 0) < 86400000) return false;

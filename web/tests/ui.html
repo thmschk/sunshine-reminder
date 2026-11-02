@@ -561,6 +561,44 @@ if (!mode) {
     await until(() => /Erinnerung repariert/.test($("#app").textContent));
     check(asked === before + 1 && calls.includes("PUT /subscriptions/s1") && calls.includes("POST /subscriptions/s1/test"),
       `Knopf fragt nach der Erlaubnis, frischt auf und testet (${calls.join(", ")})`);
+  } else if (mode === "pushrace") {
+    // Kein Browser-Abo mehr (Erlaubnis war entzogen), Server kennt das alte nicht: Öffnen repariert
+    // und gleich „Jetzt testen“. Jedes Anlegen im Browser gibt eine neue Adresse; nur eines darf entstehen.
+    await account();
+    await secretSet("push", { id: "old", secret: "x", time: "17:00", created: Date.now() });
+    await kvSet("lastPushOk", { at: Date.now() });
+    let current = null, subscribes = 0;
+    PushManager.prototype.getSubscription = async () => current;
+    PushManager.prototype.subscribe = async () => {
+      const k = ++subscribes;
+      await new Promise((r) => setTimeout(r, 300));
+      current = { toJSON: () => ({ endpoint: `https://push.example/${k}`, keys: { p256dh: "p", auth: "a" } }) };
+      return current;
+    };
+    const calls = [];
+    let n = 0;
+    hooks.api = async (url, init) => {
+      const path = url.replace(/^.*\/api/, "");
+      calls.push(`${init.method || "GET"} ${path}`);
+      if (path.startsWith("/subscriptions/old")) return new Response("{}", { status: 404 });
+      if (path === "/subscriptions" && init.method === "POST") {
+        await new Promise((r) => setTimeout(r, 400));
+        return new Response(JSON.stringify({ id: `s${++n}`, secret: "z" }));
+      }
+      return null;
+    };
+    await import("../app.js");
+    // Erst wenn die Reparatur beim Öffnen läuft (Browser-Abo und Server antworten langsam), testen.
+    await until(() => calls.includes("PUT /subscriptions/old"));
+    document.getElementById("btn-settings").click();
+    await until(() => document.getElementById("b-push-test"));
+    document.getElementById("b-push-test").click();
+    await until(() => /Meldung|fehlgeschlagen|Gesendet/.test($("#test-status")?.textContent || ""));
+    await new Promise((r) => setTimeout(r, 600));
+    const posts = calls.filter((c) => c === "POST /subscriptions").length;
+    check(posts === 1 && subscribes === 1, `nur ein neues Abo angelegt (Server ${posts}, Browser ${subscribes}): ${calls.join(", ")}`);
+    check(calls.includes("POST /subscriptions/s1/test") && (await secretGet("push"))?.id === "s1",
+      "Test geht an das neue Abo, Kennung gespeichert");
   } else if (mode === "groups") {
     // Einstellungen: Bereiche eingeklappt mit Kurzfassung, Zustand übersteht neues Zeichnen, Sprungziele offen.
     await account();
