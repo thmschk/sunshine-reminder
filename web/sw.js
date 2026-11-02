@@ -19,7 +19,7 @@ import { renewPush } from "./push.js";
 
 export { renewPush };
 
-const VERSION = "v79";
+const VERSION = "v80";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;

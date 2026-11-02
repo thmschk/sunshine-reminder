@@ -737,6 +737,13 @@ function lastOkLine() {
  */
 function pushStale() {
   if (!store.push) return "";
+  // Erlaubnis entzogen: sofort sagen, nicht erst nach verpassten Weckrufen.
+  if ("Notification" in window && Notification.permission !== "granted") {
+    const ask = Notification.permission === "default";
+    return `<div class="card hero bad" id="push-stale"><h2>Benachrichtigungen sind aus</h2>
+      <p>Die Erinnerung ist eingeschaltet, kann aber nichts anzeigen.${ask ? "" : ` ${esc(blockedText())}`}</p>
+      ${ask ? `<div class="row"><button id="b-heal" type="button" class="block">Benachrichtigungen erlauben</button></div>` : ""}</div>`;
+  }
   const since = store.lastPushOk?.at || store.push.created || 0;
   if (missedSlots(since, store.push.time, store.pushWeekdays) < 2) return "";
   return `<div class="card hero bad" id="push-stale"><h2>Erinnerung schweigt</h2>
@@ -748,6 +755,7 @@ function pushStale() {
 /** „Erinnerung reparieren“: Abo neu anlegen bzw. auffrischen und eine Test-Meldung schicken. */
 async function repairPush(btn) {
   btn.disabled = true;
+  const label = btn.textContent;
   btn.textContent = "Wird repariert …";
   const card = document.getElementById("push-stale");
   try {
@@ -756,8 +764,8 @@ async function repairPush(btn) {
     if (card) card.outerHTML = `<div class="card hero ok"><h2>Erinnerung repariert</h2><p>Gleich kommt eine Test-Meldung.</p></div>`;
   } catch (e) {
     btn.disabled = false;
-    btn.textContent = "Erinnerung reparieren";
-    btn.insertAdjacentHTML("afterend", `<p class="error">Reparieren fehlgeschlagen: ${esc(e.message)}. Bitte in den Einstellungen
+    btn.textContent = label;
+    btn.insertAdjacentHTML("afterend", `<p class="error">Reparieren fehlgeschlagen: ${esc(e.message.replace(/\.$/, ""))}. Bitte in den Einstellungen
       die Erinnerung aus- und wieder einschalten.</p>`);
   }
 }
@@ -1974,16 +1982,19 @@ function sameBytes(a, b) {
   return x.length === b.length && x.every((v, i) => v === b[i]);
 }
 
+/** Wo man Benachrichtigungen wieder erlaubt; nach einmal „Blockieren“ fragt der Browser nicht wieder. */
+function blockedText() {
+  return isIos ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → sunshine order → Mitteilungen erlauben."
+    : standalone && /Android/.test(navigator.userAgent)
+      ? "Benachrichtigungen sind nicht erlaubt. Android-Einstellungen → Apps → sunshine order → Benachrichtigungen einschalten."
+      : "Benachrichtigungen sind nicht erlaubt. Links neben der Adresse auf das Schloss tippen → Berechtigungen → "
+        + "Benachrichtigungen → Zulassen.";
+}
+
 async function pushEnable(time) {
   if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
   const perm = await Notification.requestPermission();
-  if (perm !== "granted") {
-    // Nach einmal "Blockieren" fragt der Browser nicht wieder; freigeben geht nur von Hand.
-    throw new Error(isIos
-      ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → sunshine order → Mitteilungen erlauben."
-      : "Benachrichtigungen sind nicht erlaubt. Links neben der Adresse auf das Schloss tippen → Berechtigungen → "
-        + "Benachrichtigungen → Zulassen, dann hier nochmal einschalten.");
-  }
+  if (perm !== "granted") throw new Error(`${blockedText()} Dann hier nochmal einschalten.`);
   // serviceWorker.ready käme ohne erfolgreiche Registrierung nie zurück.
   if (!(await swReady)) throw new Error("Dieser Browser kann den Hintergrunddienst für Erinnerungen nicht starten.");
   const reg = await navigator.serviceWorker.ready;
@@ -2057,11 +2068,12 @@ async function runPushTest(btn, kind = "") {
       resolve(ev.data.testShown);
     };
     navigator.serviceWorker.addEventListener("message", onMsg);
-    setTimeout(() => resolve(null), 45000);
+    // Länger als die Frist des Weckrufs im Service Worker (60 s), sonst kommt die Meldung „unbestätigt“ an.
+    setTimeout(() => resolve(null), 75000);
   });
   try {
     await pushTest(kind);
-    if (text()) text().textContent = "Gesendet, das Gerät prüft gerade beim Bestellsystem …";
+    if (text()) text().textContent = "Gesendet, das Gerät prüft gerade beim Bestellsystem (bis zu einer Minute) …";
   } catch (e) {
     return finish(`Senden fehlgeschlagen: ${e.message}`, false);
   }
@@ -2094,9 +2106,14 @@ async function healPush(force = false) {
   if (!p || !(await swReady)) return false;
   if (!force && Date.now() - ((await kvGet("pushHealAt")) || 0) < 86400000) return false;
   const reg = await navigator.serviceWorker.ready;
+  // Ohne Erlaubnis gibt es kein Abo (Chrome beendet es beim Entzug). Fragen nur auf Knopfdruck (force).
+  if (force && Notification.permission === "default") await Notification.requestPermission().catch(() => {});
+  if (Notification.permission !== "granted") {
+    if (!force) return false;
+    throw new Error(blockedText());
+  }
   let sub = await reg.pushManager.getSubscription();
   if (!sub) {
-    if (Notification.permission !== "granted") throw new Error("Benachrichtigungen sind nicht erlaubt");
     const { publicKey } = await api("GET", "/vapid");
     sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
   }
