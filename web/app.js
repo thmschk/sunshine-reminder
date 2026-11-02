@@ -2127,6 +2127,54 @@ const swReady = "serviceWorker" in navigator
   ? navigator.serviceWorker.register("sw.js", { type: "module" }).then(() => true, () => false)
   : Promise.resolve(false);
 
+// Neue Version ohne Zutun: Installierte Web-Apps bleiben tagelang im Speicher und laden beim
+// Zurückwechseln nicht neu. Beim Zurückkehren nach einer neuen Version fragen; übernimmt ein neuer
+// Service Worker (skipWaiting/clients.claim), still neu laden, sobald nichts in Arbeit ist.
+let updatePending = false;
+const hadController = !!navigator.serviceWorker?.controller;
+const UPDATED_KEY = "sunshine-updated";
+
+/** Etwas in Arbeit, das ein Neuladen verlöre: Dialog, angefangene Bestellung, Eingabe, laufender Vorgang. */
+function inProgress() {
+  const el = document.activeElement;
+  return !!document.querySelector("dialog[open]")
+    || document.getElementById("o-bar")?.hidden === false
+    || !!el?.matches?.("input, textarea, select")
+    || !!document.querySelector('#app > p[role="status"]');
+}
+
+function reloadWhenIdle() {
+  if (!updatePending || document.visibilityState !== "visible" || inProgress()) return;
+  try { sessionStorage.setItem(UPDATED_KEY, "1"); } catch { /* ohne Hinweis */ }
+  location.reload();
+}
+
+navigator.serviceWorker?.addEventListener("controllerchange", () => {
+  // Die allererste Installation übernimmt die Seite nur, eine neue Version gibt es dabei nicht.
+  if (!hadController) return;
+  updatePending = true;
+  reloadWhenIdle();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  // Aufgeschoben, weil etwas in Arbeit war: beim nächsten Zurückkehren nachholen.
+  if (updatePending) return reloadWhenIdle();
+  navigator.serviceWorker?.getRegistration().then((reg) => reg?.update()).catch(() => {});
+});
+
+/** Nach dem Neuladen einer neuen Version kurz Bescheid geben. */
+(() => {
+  let updated = false;
+  try { updated = sessionStorage.getItem(UPDATED_KEY) === "1"; sessionStorage.removeItem(UPDATED_KEY); } catch { /* ohne Hinweis */ }
+  if (!updated) return;
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.setAttribute("role", "status");
+  t.textContent = "App wurde aktualisiert";
+  document.body.append(t);
+  setTimeout(() => t.remove(), 4000);
+})();
+
 // Antippen einer Meldung bei offener Seite: der Service Worker lädt sie nicht neu,
 // sondern schickt {open: "?order=<Tag>[&k=<Kundennummer>]"}. Während einer
 // Bestellung bleibt die Ansicht stehen.

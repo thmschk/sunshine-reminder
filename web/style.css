@@ -628,3 +628,9 @@ button.land-outline { background: var(--surface); color: var(--text); border: 1p
 .land-foot a { color: inherit; }
 .land-foot .land-brand { font-size: .9rem; color: var(--text); }
 .land-foot .land-brand img { width: 22px; height: 22px; border-radius: 6px; }
+
+/* Kurzer Hinweis unten, z. B. „App wurde aktualisiert“. */
+.toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: .9rem; z-index: 50;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .2); animation: toast-in .25s ease-out; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
