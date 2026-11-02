@@ -830,6 +830,23 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   });
 }
 
+// Verpasste Weckrufe (Warnung „Erinnerung schweigt“).
+{
+  const { missedSlots } = await import("../push.js");
+  const at = (d, hm = "00:00") => new Date(`${d}T${hm}:00`).getTime();
+  await test("Verpasste Weckrufe: Wochenende zählt nicht, Spielraum 30 min", () => {
+    // Do 29.10. 17:32 zuletzt, Erinnerung 17:00 Mo–Fr: Fr 30.10. 17:30 fehlt, Mo 02.11. früh noch nichts weiter.
+    eq(missedSlots(at("2026-10-29", "17:32"), "17:00", [1, 2, 3, 4, 5], at("2026-11-02", "07:41")), 1);
+    eq(missedSlots(at("2026-10-29", "17:32"), "17:00", [1, 2, 3, 4, 5], at("2026-11-02", "17:31")), 2);
+    eq(missedSlots(at("2026-10-29", "17:32"), "17:00", [1, 2, 3, 4, 5], at("2026-11-02", "17:29")), 1);
+  });
+  await test("Verpasste Weckrufe: nur gewählte Tage, ohne Zeitpunkt nichts", () => {
+    eq(missedSlots(at("2026-10-26", "18:00"), "17:00", [1], at("2026-11-09", "18:00")), 2);
+    eq(missedSlots(0, "17:00", [1, 2, 3, 4, 5], at("2026-11-09")), 0);
+    eq(missedSlots(at("2026-10-26"), "", [1], at("2026-11-09")), 0);
+  });
+}
+
 // Berliner Ferien aus ferien.json.
 {
   const Fe = await import("../holidays.js");

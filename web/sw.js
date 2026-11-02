@@ -15,13 +15,16 @@ import { pushFailure } from "./errors.js";
 import { withSession } from "./session.js";
 import { dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates } from "./events.js";
 import { holidayOn, loadHolidays, loadMealPref, skipDates } from "./holidays.js";
+import { renewPush } from "./push.js";
 
-const VERSION = "v77";
+export { renewPush };
+
+const VERSION = "v78";
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
 // Jedes Modul, das app.js oder sw.js per import erreicht, muss hier stehen (Test in tests/test.html).
-export const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=3", "icon-192.png?v=3", "badge-96.png?v=3", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "errors.js", "base64.js", "ferien.json"];
+export const SHELL = ["./", "index.html", "app.js", "ibs.js", "idb.js", "style.css", "icon.svg?v=3", "icon-192.png?v=3", "badge-96.png?v=3", "manifest.webmanifest", "sdui.js", "guard.js", "session.js", "events.js", "accounts.js", "holidays.js", "errors.js", "push.js", "base64.js", "ferien.json"];
 
 self.addEventListener("install", (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -536,30 +539,6 @@ export async function openTarget(url, clients, scope) {
   if (!win) return clients.openWindow(target.href);
   win.postMessage({ open: target.search });
   return win.focus().catch(() => {});
-}
-
-/**
- * Neue Abo-Adresse dem Server melden. Kennt der Server das Abo nicht mehr (404),
- * wird es mit den gespeicherten Einstellungen neu angelegt und Kennung samt
- * Geheimnis ersetzt. Wirft, wenn das nicht gelingt.
- */
-export async function renewPush(push, subscription, { fetch: f = fetch, weekdays } = {}) {
-  const put = await f(`/api/subscriptions/${push.id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${push.secret}` },
-    body: JSON.stringify({ subscription }),
-  });
-  if (put.ok) return push;
-  if (put.status !== 404) throw new Error(`Server: HTTP ${put.status}`);
-  const post = await f("/api/subscriptions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ subscription, time: push.time, morning_time: push.morning || null, weekdays, tz: "Europe/Berlin" }),
-  });
-  if (!post.ok) throw new Error(`Server: HTTP ${post.status}`);
-  const { id, secret } = await post.json();
-  if (!id || !secret) throw new Error("Server: Antwort ohne Kennung");
-  return { ...push, id, secret };
 }
 
 // Der Browser hat das Abo erneuert: dem Server die neue Adresse melden. Scheitert

@@ -506,6 +506,34 @@ if (!mode) {
     check(posted.length === 1, "Erinnerung eingeschaltet über die Zeile");
     check(same ? !unsubscribed && !subscribed : unsubscribed === 1 && JSON.stringify(subscribed) === "[0,0,0]",
       same ? "passendes Abo übernommen" : `altes Abo abgemeldet, neu mit Server-Schlüssel (${subscribed})`);
+  } else if (mode === "pushheal") {
+    // Der Server hat das Abo gelöscht (404), seit Tagen kam nichts: beim Öffnen neu anlegen,
+    // Warnung „Erinnerung schweigt“ mit „Erinnerung reparieren“ (auffrischen und Test-Meldung).
+    await account();
+    const day = 86400000;
+    await secretSet("push", { id: "old", secret: "x", time: "17:00", created: Date.now() - 20 * day });
+    await kvSet("pushWeekdays", [1, 2, 3, 4, 5]);
+    await kvSet("lastPushOk", { at: Date.now() - 8 * day });
+    PushManager.prototype.getSubscription = async () => fakeSub;
+    const calls = [];
+    hooks.api = (url, init) => {
+      const path = url.replace(/^.*\/api/, "");
+      calls.push(`${init.method || "GET"} ${path}`);
+      if (path === "/subscriptions/old") return new Response("{}", { status: 404 });
+      return null;
+    };
+    await import("../app.js");
+    await until(() => homeLoaded() && posted.length);
+    for (let i = 0; i < 200 && (await secretGet("push"))?.id !== "s1"; i++) await new Promise((r) => setTimeout(r, 20));
+    check(posted.length === 1 && posted[0].time === "17:00" && posted[0].subscription?.endpoint === "https://push.example/x",
+      "beim Öffnen: unbekanntes Abo neu angelegt, mit Uhrzeit und aktueller Adresse");
+    check((await secretGet("push"))?.id === "s1", "neue Kennung gespeichert");
+    check(!!$("#b-heal") && /Erinnerung schweigt/.test($("#push-stale")?.textContent || ""), "Warnung mit „Erinnerung reparieren“");
+    calls.length = 0;
+    $("#b-heal").click();
+    await until(() => /Erinnerung repariert/.test($("#app").textContent));
+    check(calls.includes("PUT /subscriptions/s1") && calls.includes("POST /subscriptions/s1/test"),
+      `Reparieren: auffrischen und Test-Meldung (${calls.join(", ")})`);
   } else if (mode === "groups") {
     // Einstellungen: Bereiche eingeklappt mit Kurzfassung, Zustand übersteht neues Zeichnen, Sprungziele offen.
     await account();

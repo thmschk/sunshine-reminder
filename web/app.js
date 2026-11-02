@@ -1,6 +1,6 @@
 import {
   DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, clampDaysAhead,
-  addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, longestGap, placeOrders, submitCartAsSeen, targetDates, todayBerlin, weekdayNo,
+  addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, placeOrders, submitCartAsSeen, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
 import { freezeWrites, kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
 import { b64ToBytes } from "./base64.js";
@@ -11,6 +11,7 @@ import * as Sdui from "./sdui.js";
 import { IbsBudgetError, IbsPausedError, budgetFor, guardHooks, resume, unmetered } from "./guard.js";
 import { login, withSession } from "./session.js";
 import { PAUSE_TITLE, friendly } from "./errors.js";
+import { missedSlots, renewPush } from "./push.js";
 import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
 import {
   askLater, askWithin, askedLater, holidayOn, loadHolidays, loadMealPref, nextHoliday, openWeeks, rangeText, saveMealPref, skipDates,
@@ -694,6 +695,10 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   if (my !== viewSeq) return;
   const stale = pushStale();
   if (stale) document.querySelector(".hero")?.insertAdjacentHTML("beforebegin", stale);
+  const heal = document.getElementById("b-heal");
+  if (heal) heal.onclick = () => repairPush(heal);
+  // Einmal am Tag: verlorenes Abo beim Server unbemerkt neu anlegen.
+  healPush().catch(() => {});
 
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
     .format(new Date(staleAt || Date.now()));
@@ -726,19 +731,35 @@ function lastOkLine() {
 }
 
 /**
- * Kam seit mindestens vier Tagen (bei seltenen Weckrufen länger) keine Erinnerung mehr an,
- * obwohl sie eingeschaltet ist? Schweigen ist der gefährliche Zustand. Dass ein Kind nicht
- * prüfbar war, sagt die Meldung selbst; das zählt hier nicht als Schweigen.
+ * Blieben seit der letzten Erinnerung mindestens zwei fällige Weckrufe aus, obwohl sie
+ * eingeschaltet ist? Schweigen ist der gefährliche Zustand. Dass ein Kind nicht prüfbar
+ * war, sagt die Meldung selbst; das zählt hier nicht als Schweigen.
  */
 function pushStale() {
   if (!store.push) return "";
   const since = store.lastPushOk?.at || store.push.created || 0;
-  // Mindestens vier Tage, bei seltenen Weckrufen die längste Lücke plus einen Tag.
-  const days = Math.max(4, longestGap(store.pushWeekdays) + 1);
-  if (!since || Date.now() - since < days * 86400000) return "";
-  return `<div class="card hero bad"><h2>Erinnerung schweigt</h2>
+  if (missedSlots(since, store.push.time, store.pushWeekdays) < 2) return "";
+  return `<div class="card hero bad" id="push-stale"><h2>Erinnerung schweigt</h2>
     <p>${since === store.lastPushOk?.at ? `Die letzte Erinnerung kam am ${esc(when(since))}.` : "Bisher kam keine Erinnerung an."}
-      Probier in den Einstellungen „Jetzt testen“, sonst schalte sie dort aus und wieder ein.</p></div>`;
+      Meist hilft es, das Abo beim Server neu anzulegen.</p>
+    <div class="row"><button id="b-heal" type="button" class="block">Erinnerung reparieren</button></div></div>`;
+}
+
+/** „Erinnerung reparieren“: Abo neu anlegen bzw. auffrischen und eine Test-Meldung schicken. */
+async function repairPush(btn) {
+  btn.disabled = true;
+  btn.textContent = "Wird repariert …";
+  const card = document.getElementById("push-stale");
+  try {
+    await healPush(true);
+    await pushTest();
+    if (card) card.outerHTML = `<div class="card hero ok"><h2>Erinnerung repariert</h2><p>Gleich kommt eine Test-Meldung.</p></div>`;
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Erinnerung reparieren";
+    btn.insertAdjacentHTML("afterend", `<p class="error">Reparieren fehlgeschlagen: ${esc(e.message)}. Bitte in den Einstellungen
+      die Erinnerung aus- und wieder einschalten.</p>`);
+  }
 }
 
 /** Tage nach Kalenderwoche gruppiert: jede Woche eine eigene Karte, damit der Montag sich absetzt. */
@@ -2049,8 +2070,43 @@ async function runPushTest(btn, kind = "") {
 }
 
 async function pushTest(kind = "") {
+  const send = async () => {
+    const p = await currentPush();
+    await api("POST", `/subscriptions/${p.id}/test`, kind ? { kind } : null, p.secret);
+  };
+  try {
+    await send();
+  } catch (e) {
+    // Der Server kennt das Abo nicht mehr: neu anlegen und noch einmal senden.
+    if (!/HTTP 404/.test(e.message) || !(await healPush(true))) throw e;
+    await send();
+  }
+}
+
+/**
+ * Abo beim Server auffrischen: meldet die aktuelle Abo-Adresse und legt das Abo neu an, wenn
+ * der Server es nicht mehr kennt (er löscht es, sobald der Push-Dienst die Adresse ablehnt,
+ * und nicht jeder Browser meldet dann pushsubscriptionchange). Beim Öffnen höchstens einmal
+ * am Tag; force für „Jetzt testen“ und „Erinnerung reparieren“. true, wenn neu angelegt.
+ */
+async function healPush(force = false) {
   const p = await currentPush();
-  await api("POST", `/subscriptions/${p.id}/test`, kind ? { kind } : null, p.secret);
+  if (!p || !(await swReady)) return false;
+  if (!force && Date.now() - ((await kvGet("pushHealAt")) || 0) < 86400000) return false;
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    if (Notification.permission !== "granted") throw new Error("Benachrichtigungen sind nicht erlaubt");
+    const { publicKey } = await api("GET", "/vapid");
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+  }
+  const renewed = await renewPush(p, sub.toJSON(), { weekdays: store.pushWeekdays });
+  await kvSet("pushHealAt", Date.now());
+  // Inzwischen ausgeschaltet: das neue Abo nicht wieder als eingeschaltet ablegen.
+  if (renewed === p || !(await currentPush())) return false;
+  store.push = renewed;
+  await secretSet("push", renewed);
+  return true;
 }
 
 async function pushDisable() {

@@ -79,7 +79,7 @@ curl -s https://sunshine.thomschke.info/api/health          # Selbstprüfung
 curl -s https://sunshine.thomschke.info/version.txt         # laufender Commit
 ssh privat 'journalctl -t docker-images -n 30'             # letzte Image-Aktualisierung
 ssh privat 'ls -l /srv/sunshine/backup'                    # nächtliche Datenkopien
-ssh privat 'cd /srv/sunshine && docker compose logs --tail 50 push'
+ssh privat 'journalctl -t sunshine-push -n 50'                # Push-Dienst, auch über Deploys hinweg
 ssh privat "sqlite3 -readonly -header -column /srv/sunshine/data/push.sqlite \
   'SELECT id, time, offset_min, weekdays, created, last_sent, is_admin FROM subs'"
 ```
@@ -168,7 +168,7 @@ zusätzlich `/api/vapid` mit dem vorher bekannten öffentlichen Schlüssel vergl
 
 `data/vapid_private.pem` ist der Absenderschlüssel aller Push-Abos. **Nie neu erzeugen, nie löschen.**
 Fehlt die Datei beim Start, erzeugt der Dienst still einen neuen Schlüssel und warnt im Log, wenn schon Abos
-bestehen (`docker compose logs push | grep VAPID`). Die Push-Dienste lehnen dann alle alten Abos ab
+bestehen (`journalctl -t sunshine-push | grep VAPID`). Die Push-Dienste lehnen dann alle alten Abos ab
 (`auth_rejected` in `/api/health`); nach 7 Tagen durchgehender Ablehnung löscht der Dienst sie.
 
 Vorgehen: `docker compose stop push`, Schlüssel aus dem jüngsten Backup zurückholen (siehe oben), starten,

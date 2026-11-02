@@ -25,8 +25,9 @@ services:
       - no-new-privileges:true
     mem_limit: 256m
     pids_limit: 128
+    # Ins Journal des Servers: übersteht das Neuanlegen des Containers beim Deploy
+    # (journalctl -t sunshine-push), docker compose logs liest es weiterhin.
     logging:
-      driver: json-file
+      driver: journald
       options:
-        max-size: "10m"
-        max-file: "3"
+        tag: sunshine-push
