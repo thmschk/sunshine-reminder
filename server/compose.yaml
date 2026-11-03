@@ -4,7 +4,7 @@ services:
     build: ./push
     restart: unless-stopped
     environment:
-      VAPID_SUBJECT: "https://sunshine.thomschke.info"
+      VAPID_SUBJECT: "https://sunshine-order.de"
       TZ: Europe/Berlin
     # ADMIN_KEY (Schlüssel, mit dem ein Gerät sich als Betreiber-Gerät markiert) steht nur auf dem Server.
     env_file:

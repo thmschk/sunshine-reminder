@@ -48,7 +48,7 @@ DB_PATH = os.path.join(DATA_DIR, "push.sqlite")
 KEY_PATH = os.path.join(DATA_DIR, "vapid_private.pem")
 # Pflichtangabe für VAPID: Kontakt des Absenders. Eine URL statt einer Mailadresse,
 # ohne abschließenden Schrägstrich — sonst lehnt py_vapid sie ab.
-VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://sunshine.thomschke.info")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://sunshine-order.de")
 PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY = 4096
 # Socket-Timeout je Verbindung (s) und Obergrenze gleichzeitiger Verbindungen.
@@ -396,7 +396,7 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
 # und die mitgelieferten Ferientermine laufen irgendwann aus.
 # Weicht etwas ab, geht eine Meldung an die Betreiber-Abos (is_admin).
 SELFCHECK_AT = os.environ.get("SELFCHECK_AT", "06:30")
-ORIGIN = "https://sunshine.thomschke.info"
+ORIGIN = "https://sunshine-order.de"
 # So lange vorher mahnt die Selbstprüfung, ferien.json neu zu erzeugen (tools/ferien.py).
 FERIEN_WARN_DAYS = 180
 selfcheck_state = {"at": None, "ok": None, "problems": []}

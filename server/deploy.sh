@@ -97,6 +97,6 @@ done
 echo "FEHLER: geladene Caddy-Konfiguration weicht von /etc/caddy/Caddyfile ab" >&2
 exit 1
 EOF
-live=$(curl -sf https://sunshine.thomschke.info/version.txt) || { echo "FEHLER: Seite antwortet nicht" >&2; exit 1; }
+live=$(curl -sf https://sunshine-order.de/version.txt) || { echo "FEHLER: Seite antwortet nicht" >&2; exit 1; }
 [[ $live == "$SHA" ]] || { echo "FEHLER: /version.txt zeigt ${live:0:7} statt ${SHA:0:7}" >&2; exit 1; }
-echo "deployt: ${SHA:0:7} ($REF) auf https://sunshine.thomschke.info/"
+echo "deployt: ${SHA:0:7} ($REF) auf https://sunshine-order.de/"

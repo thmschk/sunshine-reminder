@@ -1,6 +1,13 @@
 # Wird von deploy.sh nach /srv/caddy/sites/ kopiert. Die Web-App spricht direkt
 # aus dem Browser mit IBS5; connect-src erlaubt genau das und sonst nichts.
-sunshine.thomschke.info {
+# Hauptadresse ist sunshine-order.de. sunshine.thomschke.info bleibt gleichwertig in Betrieb
+# statt umzuleiten: Anmeldung, Push-Abo und installierte App hängen an der Adresse,
+# eine Weiterleitung würde bisherige Nutzer abmelden.
+www.sunshine-order.de {
+	redir https://sunshine-order.de{uri} permanent
+}
+
+sunshine-order.de, sunshine.thomschke.info {
 	root * /srv/sunshine/web
 	encode zstd gzip
 

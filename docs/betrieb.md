@@ -11,7 +11,7 @@ steht im README unter „Architektur“.
         │                                 └────────────────────────▶ /srv/sunshine  Web-Dateien + Push-Dienst (Docker)
         └──────── server/deploy.sh (ssh: Commit von main) ─────────▶ (lädt und spielt auf)
 
-  Browser/Handy ──HTTPS──▶ sunshine.thomschke.info (DNS bei Variomedia) ──▶ Caddy
+  Browser/Handy ──HTTPS──▶ sunshine-order.de / sunshine.thomschke.info ──▶ Caddy
        │                                                                      ├─ statische Seite  /srv/sunshine/web
        │                                                                      └─ /api/*  ──▶  Push-Dienst 127.0.0.1:18080
        └──direkt──▶ IBS5 (Speiseplan, Bestellen)
@@ -23,7 +23,7 @@ steht im README unter „Architektur“.
 |---|---|
 | Server | Hetzner Cloud CPX12 „privat“, eigenes privates Hetzner-Projekt, Debian 13 |
 | Firewall | Hetzner-Firewall: eingehend nur TCP 22, 80, 443 und ICMP |
-| Domain | `sunshine.thomschke.info`, A- und AAAA-Eintrag bei Variomedia |
+| Domain | `sunshine-order.de` (Hauptadresse, `www.` leitet dorthin um) und `sunshine.thomschke.info` (frühere Adresse, bei Variomedia), beide gleichwertig in Betrieb, je A- und AAAA-Eintrag auf den Server |
 | Zugang | `ssh privat` (Eintrag in `~/.ssh/config`), nur per Schlüssel, Passwort-Login aus |
 | Updates | `unattended-upgrades` für Debian und Docker CE |
 
@@ -75,8 +75,8 @@ Auf dem Handy erscheint eine neue Fassung, sobald die App einmal ganz geschlosse
 ## Nachsehen
 
 ```sh
-curl -s https://sunshine.thomschke.info/api/health          # Selbstprüfung
-curl -s https://sunshine.thomschke.info/version.txt         # laufender Commit
+curl -s https://sunshine-order.de/api/health                # Selbstprüfung
+curl -s https://sunshine-order.de/version.txt               # laufender Commit
 ssh privat 'journalctl -t docker-images -n 30'             # letzte Image-Aktualisierung
 ssh privat 'ls -l /srv/sunshine/backup'                    # nächtliche Datenkopien
 ssh privat 'journalctl -t sunshine-push -n 50'                # Push-Dienst, auch über Deploys hinweg
@@ -144,7 +144,7 @@ Server liegt und muss bei einem Neuaufbau von Hand (oder aus dem Hetzner-Backup)
 - [ ] Debian 13, Pakete `docker-ce` mit Compose-Plugin, `sqlite3`, `rsync`, `curl`, `python3`,
       `unattended-upgrades`; Docker-CE-Quelle in den unattended-upgrades eintragen
 - [ ] SSH nur per Schlüssel, Hetzner-Firewall (eingehend TCP 22, 80, 443, ICMP), Hetzner-Backup einschalten
-- [ ] DNS bei Variomedia: A und AAAA von `sunshine.thomschke.info` auf die neue Adresse
+- [ ] DNS: A und AAAA von `sunshine-order.de`, `www.sunshine-order.de` und `sunshine.thomschke.info` (Variomedia) auf die neue Adresse
 - [ ] `/srv/caddy/compose.yaml` (`caddy:2`, `network_mode: host`, `restart: unless-stopped`, Volume
       `./sites:/etc/caddy/sites:ro`; den Mount von `/srv/sunshine/web` ergänzt `deploy.sh`) und
       `/srv/caddy/Caddyfile` mit `log default { exclude http.log.error }` und dem Import von `sites/*`

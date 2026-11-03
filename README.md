@@ -6,7 +6,8 @@ bestellt, bestellt um oder bestellt ab direkt aus der [Web-App](#web-version).
 Sie läuft im Browser auf iPhone und Android; für die Erinnerung weckt ein
 kleiner Server das Gerät, ohne die IBS5-Zugangsdaten zu kennen.
 
-**Adresse: <https://sunshine.thomschke.info>** · [Datenschutz](https://sunshine.thomschke.info/datenschutz.html)
+**Adresse: <https://sunshine-order.de>** · [Datenschutz](https://sunshine-order.de/datenschutz.html)
+(die frühere Adresse <https://sunshine.thomschke.info> läuft weiter)
 
 > **Die Android-App ist eingestellt.** Es gab bis Oktober 2026 eine eigene
 > Android-App. Sie wird nicht mehr weiterentwickelt, ihr Code liegt in der
@@ -234,7 +235,7 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 
 Name, Kundennummer, Bestellungen und das IBS5-Passwort erreichen den Server nie.
 Die Datenschutzerklärung steht unter
-[`/datenschutz.html`](https://sunshine.thomschke.info/datenschutz.html).
+[`/datenschutz.html`](https://sunshine-order.de/datenschutz.html).
 
 </details>
 
@@ -259,7 +260,7 @@ Repository entspricht, lässt sich in einem aktuellen Klon nachprüfen:
 
 ```sh
 git fetch
-url=https://sunshine.thomschke.info
+url=https://sunshine-order.de
 sha=$(curl -s "$url/version.txt")          # laufender Commit
 git ls-tree -r --name-only "$sha" web | grep -v '^web/tests/' | while read -r f; do
   curl -s "$url/${f#web/}" | cmp -s - <(git show "$sha:$f") && echo "ok     $f" || echo "ANDERS $f"
