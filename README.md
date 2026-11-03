@@ -446,4 +446,4 @@ MIT — siehe [LICENSE](LICENSE).
 ## Frühere Namen
 
 „theoretisch satt“, „immerhin.satt“, „happy sunshine“, bis 0.1.20 „sunshine reminder“, zuletzt „sunshine“ — das
-Repository heißt weiter `sunshine-reminder`; der lokale Ordner `ibs-order-watch`.
+Repository heißt weiter `sunshine-reminder`.

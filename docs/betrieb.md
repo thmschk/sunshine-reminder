@@ -5,8 +5,8 @@ steht im README unter „Architektur“.
 
 ```
   Arbeitskopie                          GitHub                       Hetzner Cloud: Server „privat“
-  ~/cloud_privat/Apps/             thmschk/sunshine-reminder         Debian 13, CPX12
-  ibs-order-watch  ── git push ──▶ (öffentlich, main)
+                                   thmschk/sunshine-reminder         Debian 13, CPX12
+  lokaler Klon     ── git push ──▶ (öffentlich, main)
         │                                 │ Tarball des Commits      /srv/caddy     Caddy (Docker)
         │                                 └────────────────────────▶ /srv/sunshine  Web-Dateien + Push-Dienst (Docker)
         └──────── server/deploy.sh (ssh: Commit von main) ─────────▶ (lädt und spielt auf)
