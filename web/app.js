@@ -1371,7 +1371,7 @@ const cartRows = (items) => items.map((i) => entryRow(i.date, i.kind, i.name)).j
  * Rückfrage mit fertigem HTML; true = okLabel. Knöpfe untereinander: die Aktion gefüllt,
  * bei danger (Löschen, Verwerfen) in Fehlerfarbe, „Abbrechen“ neutral darunter.
  */
-function askDialog(title, body, okLabel, { danger = false } = {}) {
+function askDialog(title, body, okLabel, { danger = false, cancelLabel = "Abbrechen" } = {}) {
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");
     dlg.className = "dialog result-dialog";
@@ -1380,7 +1380,7 @@ function askDialog(title, body, okLabel, { danger = false } = {}) {
       ${body}
       <div class="dialog-actions stacked">
         <button type="button" class="${danger ? "btn-danger" : "btn-fill"}" data-v="1">${esc(okLabel)}</button>
-        <button type="button" class="text btn-neutral" data-v="">Abbrechen</button>
+        <button type="button" class="text btn-neutral" data-v="">${esc(cancelLabel)}</button>
       </div>`;
     document.body.append(dlg);
     const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
@@ -1645,13 +1645,16 @@ function showSettings(message = "", { open = [] } = {}) {
   document.getElementById("b-logout").onclick = async () => {
     const ok = await askDialog("Abmelden und alles löschen?",
       "<p>Gelöscht werden auf diesem Gerät Zugangsdaten, Termine, Sdui, Einstellungen und die Erinnerung.</p>", "Alles löschen", { danger: true });
-    if (!ok) return;
-    await pushDisable().catch(() => {});
-    // Ein Fehler wird nur gemeldet: nach freezeWrites kann die Seite ohnehin nichts mehr ablegen.
-    await clearCreds().catch((e) => alert(`Löschen fehlgeschlagen, auf dem Gerät kann noch etwas liegen: ${e.message}`));
-    // Neu laden beendet alle noch laufenden Abfragen dieser Seite.
-    location.replace(location.pathname);
+    if (ok) await logoutAll(location.pathname);
   };
+}
+
+/** Erinnerung beim Server abmelden, alles auf dem Gerät löschen, dann nach target (neu laden beendet laufende Abfragen). */
+async function logoutAll(target) {
+  await pushDisable().catch(() => {});
+  // Ein Fehler wird nur gemeldet: nach freezeWrites kann die Seite ohnehin nichts mehr ablegen.
+  await clearCreds().catch((e) => alert(`Löschen fehlgeschlagen, auf dem Gerät kann noch etwas liegen: ${e.message}`));
+  location.replace(target);
 }
 
 /**
@@ -2230,6 +2233,19 @@ navigator.serviceWorker?.addEventListener("message", (ev) => {
 
 // Antippen der Erinnerung öffnet ./?order=<Tag>[&k=<Kundennummer>] → direkt in die Bestellansicht.
 await loadStore();
+// Umzug: unter der alten Adresse ohne Konto gleich weiter, mit Konto einmal je Gerät das Popup.
+// Anmeldung und Erinnerung hängen an der Adresse, deshalb abmelden statt umleiten.
+const MOVED_TO = "https://sunshine-order.de/";
+const movedHere = location.hostname === "sunshine.thomschke.info";
+if (movedHere && !store.accounts.length) location.replace(MOVED_TO);
+else if (movedHere && !(await kvGet("movedShown").catch(() => false))) {
+  kvSet("movedShown", true).catch(() => {});
+  askDialog("Die App ist umgezogen!", `
+    <p>Bitte hier die Zugangsdaten löschen und die App vom Startbildschirm entfernen.</p>
+    <p>Dann unter <b>sunshine-order.de</b> loslegen.</p>`,
+  "Abmelden und alles löschen", { danger: true, cancelLabel: "Später" })
+    .then((ok) => ok && logoutAll(MOVED_TO));
+}
 const orderDate = new URLSearchParams(location.search).get("order");
 const orderKid = new URLSearchParams(location.search).get("k");
 if (orderKid && store.accounts.some((a) => a.customerNo === orderKid)) selectAccount(orderKid);
