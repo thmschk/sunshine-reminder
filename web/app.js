@@ -1613,7 +1613,7 @@ function showSettings(message = "", { open = [] } = {}) {
       ${accountRows(creds)}
       ${srow("logout", "Abmelden und alles löschen", { tag: "button", id: "b-logout", cls: "danger-row" })}`)}
 
-    <p class="foot-note">Testversion · <a href="https://github.com/thmschk/sunshine-reminder#architektur" target="_blank" rel="noopener">So funktioniert's</a> · <a href="datenschutz.html">Datenschutz</a>
+    <p class="foot-note"><a href="https://github.com/thmschk/sunshine-reminder#architektur" target="_blank" rel="noopener">So funktioniert's</a> · <a href="datenschutz.html">Datenschutz</a>
       · <button id="b-about" class="linklike">Über die App</button></p>`;
   document.getElementById("b-back").onclick = () => showHome();
   document.getElementById("b-about").onclick = showAbout;
