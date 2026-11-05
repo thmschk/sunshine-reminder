@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>Statistik · sunshine order</title>
+  <link rel="icon" href="icon.svg?v=3" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="stats.js"></script>
+</head>
+<body>
+  <main class="legal stats">
+    <p><a href="./">← zurück zur App</a></p>
+    <div class="card">
+      <h1>Statistik</h1>
+      <p class="stats-note">Gezählt werden Geräte mit eingeschalteter Erinnerung – nur sie kennt der Server.
+        Wer die App ohne Erinnerung nutzt, taucht hier nicht auf. <span id="st-date"></span></p>
+      <p id="st-error" class="stats-note" hidden>Die Zahlen sind gerade nicht abrufbar.</p>
+
+      <div id="st-body" hidden>
+        <div class="stat-tiles">
+          <div class="stat-tile"><div class="stat-num" id="st-subs">–</div><div class="stat-lbl">Geräte mit Erinnerung</div></div>
+          <div class="stat-tile"><div class="stat-num" id="st-new7">–</div><div class="stat-lbl">neu in 7 Tagen</div></div>
+          <div class="stat-tile"><div class="stat-num" id="st-new30">–</div><div class="stat-lbl">neu in 30 Tagen</div></div>
+          <div class="stat-tile"><div class="stat-num" id="st-morning">–</div><div class="stat-lbl">mit Morgenmeldung</div></div>
+        </div>
+
+        <h2>Verlauf</h2>
+        <div id="st-chart" class="stat-chart"></div>
+
+        <h2>Nach Push-Dienst</h2>
+        <table class="stat-table" id="st-services"></table>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

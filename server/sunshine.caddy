@@ -38,5 +38,8 @@ sunshine-order.de, sunshine.thomschke.info {
 		reverse_proxy 127.0.0.1:18080
 	}
 
+	# Kurze Adresse der Statistikseite.
+	rewrite /stats /stats.html
+
 	file_server
 }

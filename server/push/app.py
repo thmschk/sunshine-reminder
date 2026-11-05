@@ -9,6 +9,9 @@ Zur gewählten Zeit geht ein Push mit {"t": "check"} hinaus, zur Morgenzeit
 (falls gewählt) {"t": "today"}; was gemeldet wird, entscheidet der Service Worker
 auf dem Gerät, der IBS5 selbst abfragt.
 
+Öffentlich unter /api/stats: nur Summen über alle Abos (Anzahl, Push-Dienst, neu in
+7/30 Tagen) und deren Tagesverlauf (stats_daily).
+
 Die id ist öffentlich, ändern oder löschen darf nur, wer das beim Anlegen
 ausgegebene Geheimnis kennt (gespeichert wird nur dessen SHA-256).
 
@@ -210,6 +213,14 @@ def init() -> Vapid:
             CONN.execute("ALTER TABLE subs ADD COLUMN morning_last_sent TEXT")
         if "auth_failed_since" not in cols:
             CONN.execute("ALTER TABLE subs ADD COLUMN auth_failed_since TEXT")
+        # Tagessummen für /api/stats; gelöschte Abos verschwinden aus subs, der Verlauf bleibt hier.
+        CONN.execute(
+            """CREATE TABLE IF NOT EXISTS stats_daily (
+                 day TEXT PRIMARY KEY,
+                 subs INTEGER NOT NULL,
+                 apple INTEGER NOT NULL,
+                 morning INTEGER NOT NULL)"""
+        )
         CONN.execute(f"UPDATE subs SET offset_min = abs(random()) % {MAX_OFFSET_MIN + 1} WHERE offset_min IS NULL")
         CONN.commit()
         subs = CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
@@ -516,6 +527,59 @@ def mark_sent(row, today: str, kind: str = "check") -> None:
         CONN.commit()
 
 
+# Push-Dienst je Endpoint-Host, für die Statistik (nur Summen).
+PUSH_SERVICES = [
+    ("apple", re.compile(r"(^|\.)push\.apple\.com$")),
+    ("google", re.compile(r"^(fcm|android)\.googleapis\.com$")),
+    ("mozilla", re.compile(r"^updates\.push\.services\.mozilla\.com$")),
+    ("microsoft", re.compile(r"(^|\.)notify\.windows\.com$")),
+]
+STATS_DAYS = 365
+
+
+def push_service(endpoint: str) -> str:
+    host = urlsplit(endpoint).hostname or ""
+    return next((name for name, rx in PUSH_SERVICES if rx.search(host)), "andere")
+
+
+def stats_snapshot(today: str) -> None:
+    """Tagessumme von heute fortschreiben; der letzte Durchlauf des Tages bleibt stehen."""
+    with db_lock:
+        rows = CONN.execute("SELECT endpoint, morning_time FROM subs").fetchall()
+        CONN.execute(
+            "INSERT OR REPLACE INTO stats_daily (day, subs, apple, morning) VALUES (?, ?, ?, ?)",
+            (today, len(rows), sum(push_service(r["endpoint"]) == "apple" for r in rows),
+             sum(r["morning_time"] is not None for r in rows)),
+        )
+        CONN.commit()
+
+
+def stats(today: dt.date) -> dict:
+    """Nur Summen: keine ids, Endpoints, Uhrzeiten oder Daten einzelner Abos."""
+    with db_lock:
+        rows = CONN.execute("SELECT endpoint, morning_time, created, auth_failed_since FROM subs").fetchall()
+        daily = CONN.execute(
+            "SELECT day, subs, apple, morning FROM stats_daily WHERE day >= ? ORDER BY day",
+            ((today - dt.timedelta(days=STATS_DAYS)).isoformat(),),
+        ).fetchall()
+    services = {name: 0 for name, _ in PUSH_SERVICES} | {"andere": 0}
+    for r in rows:
+        services[push_service(r["endpoint"])] += 1
+    def since(days: int) -> int:
+        return sum(r["created"] >= (today - dt.timedelta(days=days)).isoformat() for r in rows)
+
+    return {
+        "date": today.isoformat(),
+        "subs": len(rows),
+        "morning": sum(r["morning_time"] is not None for r in rows),
+        "rejected": sum(r["auth_failed_since"] is not None for r in rows),
+        "new_7d": since(7),
+        "new_30d": since(30),
+        "services": services,
+        "daily": [dict(r) for r in daily],
+    }
+
+
 def scheduler(vapid: Vapid) -> None:
     now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
     # Nach SELFCHECK_AT gestartet: die Prüfung beim Start (main) zählt für heute.
@@ -550,6 +614,7 @@ def scheduler(vapid: Vapid) -> None:
             if sent:
                 log.info("%d Weckrufe verschickt", sent)
             now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
+            stats_snapshot(now.date().isoformat())
             if selfcheck_due(now, selfcheck_last):
                 selfcheck_last = now.date()
                 run_selfcheck(vapid)
@@ -666,6 +731,8 @@ class Handler(BaseHTTPRequestHandler):
             # Öffentlich nur die Kategorie je Problem (Text vor dem ersten ":"); Details stehen im Log.
             public = {**selfcheck_state, "problems": [p.split(":")[0] for p in selfcheck_state["problems"]]}
             return self.reply(200, {"selfcheck": public, "auth_rejected": rejected})
+        if self.path.split("?")[0] == "/api/stats":
+            return self.reply(200, stats(dt.datetime.now(ZoneInfo("Europe/Berlin")).date()))
         if self.path.split("?")[0] == "/api/vapid":
             return self.reply(200, {"publicKey": public_key_b64(self.vapid)})
         self.reply(404)

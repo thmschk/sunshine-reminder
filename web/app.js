@@ -75,6 +75,7 @@ const $reload = document.getElementById("btn-reload");
 const $settings = document.getElementById("btn-settings");
 const $web = document.getElementById("btn-web");
 const $add = document.getElementById("btn-add");
+const $stats = document.getElementById("btn-stats");
 const $footer = document.getElementById("footer");
 
 const $header = document.querySelector("header");
@@ -82,7 +83,7 @@ const $header = document.querySelector("header");
 /** Kopfzeile mit App-Namen und Symbolen nur auf der Startseite; Einrichten, Bestellen und Einstellungen haben eigene Köpfe. */
 function chrome(visible) {
   $header.hidden = !visible;
-  $reload.hidden = $settings.hidden = $web.hidden = $add.hidden = !visible;
+  $reload.hidden = $settings.hidden = $web.hidden = $add.hidden = $stats.hidden = !visible;
   if (!visible) $footer.hidden = true;
 }
 

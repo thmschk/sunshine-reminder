@@ -637,3 +637,22 @@ button.land-outline { background: var(--surface); color: var(--text); border: 1p
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: .9rem; z-index: 50;
   box-shadow: 0 4px 16px rgba(0, 0, 0, .2); animation: toast-in .25s ease-out; }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* Statistikseite (stats.html): Kacheln, Verlaufslinie, Tabelle. */
+.stats-note { color: var(--on-surface-variant); font-size: .9rem; }
+.stat-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 14px 0 6px; }
+@media (min-width: 560px) { .stat-tiles { grid-template-columns: repeat(4, 1fr); } }
+.stat-tile { background: var(--ok-container); border-radius: 14px; padding: 12px; }
+.stat-num { font-size: 1.7rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-lbl { color: var(--on-surface-variant); font-size: .85rem; }
+.stat-chart svg { width: 100%; height: auto; display: block; }
+.stat-chart .grid { stroke: var(--surface-variant); stroke-width: 1; }
+.stat-chart .axis { fill: var(--on-surface-variant); font-size: 11px; }
+.stat-chart .label { fill: var(--text); font-size: 12px; font-weight: 600; }
+.stat-chart .line { fill: none; stroke: var(--open-text); stroke-width: 2; stroke-linejoin: round; }
+.stat-chart .dot { fill: var(--open-text); stroke: var(--surface); stroke-width: 2; opacity: 0; }
+.stat-chart .hit { fill: transparent; }
+.stat-chart .pt:hover .dot { opacity: 1; }
+.stat-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.stat-table td { padding: 6px 0; border-bottom: 1px solid var(--surface-variant); }
+.stat-table .num { text-align: right; font-variant-numeric: tabular-nums; padding-left: 12px; }

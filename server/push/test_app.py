@@ -599,6 +599,50 @@ class HttpServer(unittest.TestCase):
         self.assertEqual(out["auth_rejected"], 0)
 
 
+class Statistik(unittest.TestCase):
+    def setUp(self):
+        import sqlite3
+        import app
+        self.app = app
+        self.old = getattr(app, "CONN", None)
+        app.CONN = sqlite3.connect(":memory:", check_same_thread=False)
+        app.CONN.row_factory = sqlite3.Row
+        app.CONN.execute("CREATE TABLE subs (id TEXT, endpoint TEXT, morning_time TEXT, created TEXT, auth_failed_since TEXT)")
+        app.CONN.execute("CREATE TABLE stats_daily (day TEXT PRIMARY KEY, subs INTEGER NOT NULL, apple INTEGER NOT NULL, morning INTEGER NOT NULL)")
+        app.CONN.executemany("INSERT INTO subs VALUES (?, ?, ?, ?, ?)", [
+            ("a", "https://web.push.apple.com/geheim-a", "07:00", "2026-10-05", None),
+            ("b", "https://fcm.googleapis.com/fcm/send/geheim-b", None, "2026-09-01", "2026-10-04"),
+            ("c", "https://updates.push.services.mozilla.com/wpush/v2/geheim-c", None, "2026-10-01", None),
+        ])
+
+    def tearDown(self):
+        self.app.CONN.close()
+        self.app.CONN = self.old
+
+    def test_summen(self):
+        out = self.app.stats(dt.date(2026, 10, 7))  # Mittwoch
+        self.assertEqual((out["subs"], out["morning"], out["rejected"]), (3, 1, 1))
+        self.assertEqual((out["new_7d"], out["new_30d"]), (2, 2))
+        self.assertEqual(out["services"], {"apple": 1, "google": 1, "mozilla": 1, "microsoft": 0, "andere": 0})
+
+    def test_keine_einzeldaten(self):
+        self.app.stats_snapshot("2026-10-07")
+        text = json.dumps(self.app.stats(dt.date(2026, 10, 7)))
+        for leak in ("geheim", "push.apple", "07:00", '"a"'):
+            self.assertNotIn(leak, text)
+
+    def test_tagesstand_wird_fortgeschrieben(self):
+        self.app.stats_snapshot("2026-10-07")
+        self.app.CONN.execute("DELETE FROM subs WHERE id = 'a'")
+        self.app.stats_snapshot("2026-10-07")
+        daily = self.app.stats(dt.date(2026, 10, 7))["daily"]
+        self.assertEqual(daily, [{"day": "2026-10-07", "subs": 2, "apple": 0, "morning": 0}])
+
+    def test_fremder_host_ist_andere(self):
+        self.assertEqual(self.app.push_service("https://evilpush.apple.com.example/x"), "andere")
+        self.assertEqual(self.app.push_service("https://wns2-db5p.notify.windows.com/w/?token=x"), "microsoft")
+
+
 class ClientIp(unittest.TestCase):
     def test_letzter_eintrag(self):
         from app import client_ip
