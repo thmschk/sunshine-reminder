@@ -19,7 +19,9 @@ import { renewPush } from "./push.js";
 
 export { renewPush };
 
-const VERSION = "v82";
+const VERSION = "v83";
+/** Eine Pause (guard.js), die schon so lange läuft, hält einen Weckruf nicht mehr auf: sonst fiele die Erinnerung aus. */
+const PUSH_PAUSE_MAX_AGE_MS = 20 * 60 * 1000;
 const PUSH_MAX_DAYS = 5;
 // Gesamtfrist eines Weckrufs: danach kommt die Ersatzmeldung, bevor der Browser den Service Worker beendet.
 const PUSH_DEADLINE_MS = 60000;
@@ -223,6 +225,7 @@ async function checkAccount(account, checkDates, events, today, ferien, signal) 
   const dates = [...new Set([...checkDates.filter((d) => !skip.has(d)), ...due.filter((e) => e.noMeal).map((e) => e.date)])].sort();
   const client = new IbsClient(undefined, guardHooks);
   client.signal = signal;
+  client.pauseMaxAgeMs = PUSH_PAUSE_MAX_AGE_MS;
   client.dayView = !!(await kvGet("ibsDayView"));
   client.dayStore = dayStore(client);
   const kid = { customerNo: account.customerNo, due, firstName: "" };
@@ -338,6 +341,7 @@ async function todayAndNotify(signal) {
     };
     const client = new IbsClient(undefined, guardHooks);
     client.signal = signal;
+    client.pauseMaxAgeMs = PUSH_PAUSE_MAX_AGE_MS;
     client.dayView = !!(await kvGet("ibsDayView"));
     try {
       [kid.day] = await withSession(client, account, () => collect(client, [], { history: true, peek: [today], signal }));

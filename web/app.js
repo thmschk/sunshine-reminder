@@ -8,7 +8,7 @@ import {
   accountKey, accountLabel, dayStore, loadAccounts, loadActive, removeAccount, renameAccount, saveActive, upsertAccount,
 } from "./accounts.js";
 import * as Sdui from "./sdui.js";
-import { IbsBudgetError, IbsPausedError, budgetFor, guardHooks, resume, unmetered } from "./guard.js";
+import { IbsBudgetError, IbsPausedError, budgetFor, guardHooks, probeResume, resume, unmetered } from "./guard.js";
 import { login, withSession } from "./session.js";
 import { PAUSE_TITLE, friendly } from "./errors.js";
 import { missedSlots, renewPush } from "./push.js";
@@ -522,6 +522,25 @@ const currentCreds = () => loadCreds() ?? sessionCreds;
 // ---------------------------------------------------------------- Startseite
 
 /**
+ * Solange die Pausen-Karte steht: in wachsenden Abständen (1, 2, 4, 8, dann alle
+ * 10 Minuten) das Logo von IBS5 laden; kommt es, endet die Pause und die
+ * Übersicht lädt neu (guard.js probeResume).
+ */
+function watchPause(my) {
+  let wait = 60 * 1000;
+  const tick = async () => {
+    if (my !== viewSeq) return;
+    if (document.visibilityState === "visible" && (await probeResume().catch(() => false))) {
+      if (my === viewSeq) showHome(true);
+      return;
+    }
+    wait = Math.min(wait * 2, 10 * 60 * 1000);
+    setTimeout(tick, wait);
+  };
+  setTimeout(tick, wait);
+}
+
+/**
  * Übersicht. Auf dem Handy kostet jeder Tag eine Anfrage mit Pause (IP-Sperre),
  * das dauert Sekunden. Deshalb zeigt sie sofort den zuletzt gespeicherten Stand
  * und aktualisiert im Hintergrund mit Fortschrittsbalken.
@@ -598,6 +617,7 @@ async function showHome(fresh = false) {
       if (isPause) await resume();
       showHome(true);
     };
+    if (isPause && !isBudget) watchPause(my);
     return;
   }
   if (client.dayView) kvSet("ibsDayView", true).catch(() => {});
@@ -979,9 +999,12 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
 
 // ---------------------------------------------------------------- Bestellen
 
-// Anfragen einer Bestellung, CORS-Vorabfragen mitgezählt: je Tag Vorab-Laden, Leeren,
-// Hinzufügen und Nachladen, dazu Abschicken und vielleicht ein Login.
-const orderCost = (changes) => 8 * changes.length + 3;
+// Anfragen einer Bestellung höchstens, CORS-Vorabfragen mitgezählt: je Tag Vorab-Laden,
+// Leeren, Hinzufügen und Nachladen, dazu Warenkorb-Zahl, Abschicken, Bestellhistorie
+// und vielleicht ein Login. Meist sind es weniger (placeOrders).
+const orderCost = (changes) => 8 * changes.length + 8;
+/** Vor dem Bestellen gilt ein geladener Tag so lange als aktuell: die Bestellansicht hat ihn meist gerade geladen. */
+const ORDER_PRELOAD_MAX_AGE_MS = 2 * 60 * 1000;
 /**
  * Läuft gerade eine Bestellung (auch die Rückfrage davor)? Dann wechselt die
  * Seite nicht, wenn eine Meldung angetippt wird: der Warenkorb wäre halb gefüllt.
@@ -991,6 +1014,13 @@ let submitting = false;
 const checkHint = (missing) => (missing?.length
   ? `<p>Bitte auf der Bestellseite nachsehen: ${esc(missing.map(De.short).join(", "))}</p>`
   : "<p>Bitte auf der Bestellseite nachsehen.</p>");
+/**
+ * Nach „nicht bestätigt“ wegen fehlender Antwort nicht gleich nachladen: trifft
+ * sonst dieselbe Störung und macht aus ihr eine Pause (guard.js).
+ */
+const recheckHtml = `<div class="msg order-result error"><p class="u-m0">Das Bestellsystem hat nicht geantwortet. Ob die Bestellung angekommen ist, zeigt „Jetzt nachprüfen“ — am besten in ein, zwei Minuten.</p>
+  <p class="small">${NET_TIP}</p>
+  <div class="row"><button type="button" class="block" id="b-recheck">Jetzt nachprüfen</button></div></div>`;
 
 /**
  * Bestellen, umbestellen, abbestellen. Jeder noch
@@ -1062,7 +1092,7 @@ async function showOrder(focusDate = null) {
       return left === 0 ? { kind: "done" }
         : { kind: "aborted", reason: `Danach liegen noch ${left ?? "?"} Einträge im Warenkorb — bitte auf der Bestellseite nachsehen.` };
     };
-    const outcome = await budgetFor(send ? 6 + 2 * seen.others.length : 4)
+    const outcome = await budgetFor(send ? 8 + 2 * seen.others.length : 4)
       .then(() => withLogin(creds, (c) => unmetered(c, () => (send
         ? submitCartAsSeen(c, seen.others, { reload: (ds) => collect(c, ds, { fresh: true }) })
         : discard(c)))))
@@ -1079,7 +1109,17 @@ async function showOrder(focusDate = null) {
     }
     release();
     if (outcome.kind === "aborted") await showCart();
+    else if (outcome.network) offerRecheck();
     else await load();
+  }
+
+  /** Statt gleich nachzuladen: Knopf „Jetzt nachprüfen“ (recheckHtml). Erneut abschicken lädt die Tage ohnehin frisch (forgetDays). */
+  function offerRecheck() {
+    $result.innerHTML = recheckHtml;
+    document.getElementById("b-recheck").onclick = () => {
+      $result.innerHTML = "";
+      load();
+    };
   }
 
   let days = [];
@@ -1294,7 +1334,12 @@ async function showOrder(focusDate = null) {
     // Mit halb gefülltem Warenkorb darf die Stundenbremse nicht greifen: vorher prüfen, ob alles passt.
     const outcome = await budgetFor(orderCost(changes) + (discard ? 4 : 0))
       .then(() => withLogin(creds, (c) => unmetered(c, () =>
-        placeOrders(c, changes, { previouslyInCart, othersInCart, discard, reload: (ds) => collect(c, ds, { fresh: true }) }))))
+        placeOrders(c, changes, {
+          previouslyInCart, othersInCart, discard,
+          reload: (ds) => collect(c, ds, { fresh: true }),
+          preload: (ds) => collect(c, ds, { maxAgeMs: ORDER_PRELOAD_MAX_AGE_MS }),
+          verify: (ds) => collect(c, ds, { fresh: true, history: true }),
+        }))))
       .catch((e) => ({ kind: "aborted", reason: e.message }));
     working(false);
     const back = document.getElementById("b-back");
@@ -1315,7 +1360,10 @@ async function showOrder(focusDate = null) {
     }
     // Die geänderten Tage hat placeOrders frisch geladen, der Rest kommt aus dem Zwischenspeicher.
     submitting = false;
-    if (outcome.kind === "done" || outcome.kind === "unconfirmed" || outcome.stale) await load();
+    if (outcome.kind === "unconfirmed" && outcome.network) {
+      release();
+      offerRecheck();
+    } else if (outcome.kind === "done" || outcome.kind === "unconfirmed" || outcome.stale) await load();
     else refresh();
   });
 

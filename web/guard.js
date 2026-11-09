@@ -1,23 +1,48 @@
 // Schutz vor der IP-Sperre von IBS5. Gesperrt antwortet IBS5 auf alles mit 406
 // ohne CORS-Freigabe, im Browser kommt davon nur „Failed to fetch“ an — nicht von
-// einem Netzfehler zu unterscheiden. Bei 429 (auf jedem Pfad) ruht jede Abfrage
-// drei Stunden, statt die Sperre durch Wiederholungen zu verlängern; 403 beim Login
-// heißt seit 09.10.2026 nur „Passwort falsch“. Bleibt der Login ohne Antwort, kann
-// das auch ein Aussetzer sein: erst 15 Minuten, erst beim nächsten Schweigen binnen
-// sechs Stunden drei. Die Sperre gilt der
-// IP-Adresse, deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔
-// Mobilfunk, nur wo der Browser das verrät). Dazu eine Obergrenze je Stunde und
-// Gerät, die nur bremst, bis wieder Platz im Stundenfenster ist; gezählt wird, was
-// bei IBS5 ankommt (jede Abfrage samt CORS-Vorabfrage doppelt).
-// Seite und Service Worker teilen den Zustand über IndexedDB.
+// einem Netzfehler, einem abgelaufenen Token oder einem Login-Aussetzer zu
+// unterscheiden. Bei 429 (auf jedem Pfad) ruht jede Abfrage eine Stunde. Bleibt der
+// Login ohne Antwort, lädt die Seite erst das Logo von IBS5 als Bild (probe): kommt
+// es, ist die Verbindung nicht gesperrt und es gibt keine Pause. Sonst ruht sie
+// gestuft 10, 30, 60 Minuten; ein weiteres Schweigen binnen fünf Minuten gilt als
+// dieselbe Störung, jede geglückte Antwort setzt die Stufe zurück. 403 beim Login
+// heißt seit 09.10.2026 nur „Passwort falsch“. Die Sperre gilt der IP-Adresse,
+// deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔ Mobilfunk,
+// nur wo der Browser das verrät), oder wenn die Probe während der Pause glückt
+// (probeResume). Dazu eine Obergrenze je Stunde und Gerät, die nur bremst, bis
+// wieder Platz im Stundenfenster ist; gezählt wird, was bei IBS5 ankommt (jede
+// Abfrage samt CORS-Vorabfrage doppelt). Seite und Service Worker teilen den
+// Zustand über IndexedDB.
 
-import { IbsError } from "./ibs.js";
+import { BASE_URL, IbsError } from "./ibs.js";
 import { kvDel, kvGet, kvSet, kvUpdate } from "./idb.js";
 
-const PAUSE_MS = 3 * 3600 * 1000;
-const SILENT_PAUSE_MS = 15 * 60 * 1000;
+const PAUSE_MS = 60 * 60 * 1000;
+/** Stufen der Pause nach Schweigen beim Login; die Stufe gilt sechs Stunden, bis eine Antwort glückt. */
+const SILENT_PAUSES_MS = [10, 30, 60].map((m) => m * 60 * 1000);
 const SILENT_REPEAT_MS = 6 * 3600 * 1000;
+/** Schweigen binnen dieser Zeit nach dem vorigen ist dieselbe Störung (etwa Abschicken, dann Nachladen). */
+const SILENT_SAME_MS = 5 * 60 * 1000;
 const HOUR_CAP = 150;
+
+/**
+ * Lädt eine Datei von IBS5 als Bild: true, wenn sie kommt (Verbindung nicht
+ * gesperrt), false, wenn nicht, null, wo es keine Bilder gibt (Service Worker)
+ * oder die Seite nicht über HTTPS läuft (Tests, lokal: dort nie echte Anfragen an
+ * IBS5). Tests ersetzen reachability.probe.
+ */
+function imgProbe(timeoutMs = 8000) {
+  if (typeof Image === "undefined" || globalThis.location?.protocol !== "https:") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new Image();
+    const done = (ok) => { clearTimeout(t); img.onload = img.onerror = null; resolve(ok); };
+    const t = setTimeout(() => { img.src = ""; done(false); }, timeoutMs);
+    img.onload = () => done(true);
+    img.onerror = () => done(false);
+    img.src = `${BASE_URL}/img/Logos/sunshine-logo.png?t=${Date.now()}`;
+  });
+}
+export const reachability = { probe: imgProbe };
 
 /** Uhrzeit in Berlin, „07:21“. */
 export const hhmm = (t) => new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
@@ -42,10 +67,14 @@ export class IbsBudgetError extends IbsPausedError {
 /** "wifi", "cellular" … oder null, wo der Browser es nicht sagt (iOS, Desktop). */
 const netType = () => (typeof navigator !== "undefined" && navigator.connection?.type) || null;
 
-/** Aktive Pause oder null; in einem anderen Netz als bei ihrem Beginn gilt sie nicht. */
-export async function paused() {
+/**
+ * Aktive Pause oder null; in einem anderen Netz als bei ihrem Beginn gilt sie nicht.
+ * maxAgeMs: eine Pause, die länger läuft, gilt hier nicht mehr (Weckruf, sw.js).
+ */
+export async function paused(maxAgeMs = null) {
   const p = await kvGet("ibsPause");
   if (!p || p.until <= Date.now()) return null;
+  if (maxAgeMs != null && Date.now() - p.at > maxAgeMs) return null;
   const net = netType();
   if (p.net && net && net !== p.net) {
     await kvDel("ibsPause");
@@ -58,6 +87,14 @@ export async function paused() {
 export async function resume() {
   await kvDel("ibsPause");
   await kvDel("ibsBudget");
+}
+
+/** Während einer Pause: glückt die Probe, endet sie. true, wenn keine Pause mehr gilt. */
+export async function probeResume() {
+  if (!(await paused())) return true;
+  if (!(await reachability.probe())) return false;
+  await kvDel("ibsPause");
+  return true;
 }
 
 async function pause(reason, ms = PAUSE_MS) {
@@ -100,8 +137,8 @@ export async function unmetered(client, fn) {
  * einem Fehlschlag entscheiden, ob pausiert wird.
  */
 export const guardHooks = {
-  async before({ weight = 1, unmetered: free = false } = {}) {
-    const p = await paused();
+  async before({ weight = 1, unmetered: free = false, pauseMaxAgeMs = null } = {}) {
+    const p = await paused(pauseMaxAgeMs);
     if (p) throw new IbsPausedError(p.until, p.reason);
     const now = Date.now();
     // In einer Transaktion: Seite und Service Worker zählen gleichzeitig, keiner darf den anderen überschreiben.
@@ -121,13 +158,19 @@ export const guardHooks = {
     // 403 heißt beim Login „Passwort falsch“, sonst meist „Token abgelaufen“: beides keine Sperre.
     if (status === 429) return pause(`HTTP ${status}`);
     if (network && path.startsWith("/Login/")) {
-      const last = await kvGet("ibsSilentAt");
-      await kvSet("ibsSilentAt", Date.now());
-      return pause("keine Antwort beim Anmelden", last && Date.now() - last < SILENT_REPEAT_MS ? PAUSE_MS : SILENT_PAUSE_MS);
+      // Lädt das Logo, ist die Verbindung nicht gesperrt: ein Aussetzer, keine Pause.
+      if (await reachability.probe()) return;
+      const now = Date.now();
+      const prev = await kvGet("ibsSilent");
+      let step = 0;
+      if (prev && now - prev.at < SILENT_REPEAT_MS) step = now - prev.at < SILENT_SAME_MS ? prev.step : prev.step + 1;
+      step = Math.min(step, SILENT_PAUSES_MS.length - 1);
+      await kvSet("ibsSilent", { at: now, step });
+      return pause("keine Antwort beim Anmelden", SILENT_PAUSES_MS[step]);
     }
   },
-  /** Ein geglückter Login beendet die Zählung des Schweigens. */
-  async ok({ path }) {
-    if (path.startsWith("/Login/")) await kvDel("ibsSilentAt");
+  /** Eine geglückte Antwort beendet die Zählung des Schweigens. */
+  async ok() {
+    if (await kvGet("ibsSilent").catch(() => null)) await kvDel("ibsSilent");
   },
 };

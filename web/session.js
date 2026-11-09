@@ -4,7 +4,7 @@
 // angemeldet. Gespeichert wird verschlüsselt wie die Zugangsdaten, je
 // Kundennummer, und nur, wenn diese selbst gespeichert sind.
 
-import { IbsAuthError, Profile } from "./ibs.js";
+import { IbsAuthError, Profile, pacing } from "./ibs.js";
 import { kvDel, secretGet, secretSet } from "./idb.js";
 import { loadAccounts } from "./accounts.js";
 
@@ -32,7 +32,11 @@ export async function login(client, creds, persist) {
   }
 }
 
-/** fn mit gültigem Token ausführen: gespeicherten nehmen, sonst anmelden; bei Ablauf einmal neu. */
+/**
+ * fn mit gültigem Token ausführen: gespeicherten nehmen, sonst anmelden; bei Ablauf
+ * einmal neu. War es ein Netzfehler (vielleicht ein abgelaufener Token, vielleicht
+ * eine Sperre), erst kurz warten: sonst trifft der Login dieselbe Störung.
+ */
 export async function withSession(client, creds, fn, { persist = true } = {}) {
   if (client.customerNo !== creds.customerNo) {
     client.token = null;
@@ -53,6 +57,8 @@ export async function withSession(client, creds, fn, { persist = true } = {}) {
     return await fn();
   } catch (e) {
     if (!(e instanceof IbsAuthError || e.maybeAuth)) throw e;
+    if (!(e instanceof IbsAuthError) && pacing.reloginMs) await new Promise((r) => setTimeout(r, pacing.reloginMs));
+    client.signal?.throwIfAborted();
     await login(client, creds, await keep());
     return fn();
   }

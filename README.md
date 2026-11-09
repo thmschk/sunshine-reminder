@@ -304,13 +304,17 @@ nicht). Die Web-Version fragt deshalb sparsam:
   selbst bremst, nicht IBS5. Eine Bestellung prüft vorher, ob ihre Anfragen noch
   in die Stunde passen, und läuft dann ohne Bremse durch, damit der Warenkorb nie
   halb gefüllt liegen bleibt.
-* Kommt ein 429, ruht die App drei Stunden und sagt das, statt die Sperre durch
+* Kommt ein 429, ruht die App eine Stunde und sagt das, statt die Sperre durch
   Wiederholungen zu verlängern. Kommt beim Anmelden gar keine Antwort (so sieht
-  die Sperre im Browser aus, aber auch ein Aussetzer), ruht sie erst 15 Minuten,
-  beim nächsten Mal binnen sechs Stunden drei. Wechselt das Gerät das Netz
-  (WLAN ↔ Mobilfunk, auf Android erkennbar), endet die Pause, denn die Sperre
+  die Sperre im Browser aus, aber auch ein Aussetzer), lädt die Seite das Logo
+  von IBS5 als Bild: kommt es, ist die Verbindung nicht gesperrt und die App
+  ruht nicht. Sonst ruht sie 10 Minuten, bei weiterem Schweigen 30, dann 60;
+  binnen fünf Minuten gilt es als dieselbe Störung, jede geglückte Antwort setzt
+  das zurück. Während der Pause probiert die Übersicht das Logo in wachsenden
+  Abständen und endet die Pause, sobald es kommt. Wechselt das Gerät das Netz
+  (WLAN ↔ Mobilfunk, auf Android erkennbar), endet sie ebenfalls, denn die Sperre
   gilt der IP-Adresse; „Trotzdem jetzt versuchen“ gibt es auf der Übersicht und
-  beim Anmelden.
+  beim Anmelden. Ein Weckruf übergeht eine Pause, die schon 20 Minuten läuft.
 * Ein 403 beim Anmelden heißt „Kundennummer oder Passwort falsch“ (so antwortet
   IBS5 seit dem neuen Layout vom 9. Oktober 2026), eine Weiterleitung oder 401
   gilt als Störung.

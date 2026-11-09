@@ -19,9 +19,10 @@ const REQUEST_TIMEOUT_MS = 15000;
  * frühestens gapMs (+ Zufall) nach der vorigen — über alle Clients, Kinder und
  * Abfragearten hinweg, auch Login und Bestellen. Der Zufall verhindert Gleichtakt
  * mehrerer Geräte hinter derselben IP. retryMs: Wartezeit vor dem zweiten Versuch
- * nach einem Netzfehler (IbsClient#send). Tests setzen die Werte auf 0.
+ * nach einem Netzfehler (IbsClient#send), reloginMs vor dem neuen Login nach einem
+ * Netzfehler (withSession, session.js). Tests setzen die Werte auf 0.
  */
-export const pacing = { gapMs: 400, jitterMs: 300, retryMs: 5000 };
+export const pacing = { gapMs: 400, jitterMs: 300, retryMs: 5000, reloginMs: 3000 };
 let paceChain = Promise.resolve();
 let lastStart = 0;
 function pace() {
@@ -97,7 +98,7 @@ export const De = {
  * Solche Fehler bei angemeldeten Aufrufen tragen deshalb maybeAuth.
  */
 export class IbsClient {
-  /** hooks.before({path, weight, unmetered}) vor jeder Anfrage, danach hooks.failed({path, status, network}) bzw. beim Login hooks.ok({path}) (siehe guard.js). */
+  /** hooks.before({path, weight, unmetered, pauseMaxAgeMs}) vor jeder Anfrage, danach hooks.failed({path, status, network}) bzw. hooks.ok({path}) (siehe guard.js). */
   constructor(baseUrl = BASE_URL, hooks = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.token = null;
@@ -106,6 +107,8 @@ export class IbsClient {
     this.netRetried = false;
     /** Abbruch von außen (Frist des Weckrufs): danach geht keine Anfrage mehr hinaus, laufende brechen ab. */
     this.signal = null;
+    /** Eine Pause, die länger läuft, gilt für diesen Client nicht (Weckruf, siehe guard.js paused). */
+    this.pauseMaxAgeMs = null;
   }
 
   /** Wiederholt wird nur ein Netzfehler, einmal (siehe #send): die Sperrpolitik des Anbieters ist unbekannt. */
@@ -219,7 +222,7 @@ export class IbsClient {
       this.signal?.throwIfAborted();
       // Wegen X-Requested-With schickt der Browser vorher eine CORS-Vorabfrage (IBS5 erlaubt
       // nicht, sie zwischenzuspeichern): bei IBS5 kommen zwei Anfragen an.
-      await this.hooks.before?.({ path, weight: 2, unmetered: !!this.unmetered });
+      await this.hooks.before?.({ path, weight: 2, unmetered: !!this.unmetered, pauseMaxAgeMs: this.pauseMaxAgeMs });
       await pace();
       this.signal?.throwIfAborted();
       try {
@@ -269,7 +272,7 @@ export class IbsClient {
       throw new IbsAuthError(`${path}: Anmeldung abgelaufen oder abgelehnt`);
     }
     if (!resp.ok) throw new IbsError(`${path}: HTTP ${resp.status}`);
-    if (!auth) await this.hooks.ok?.({ path });
+    await this.hooks.ok?.({ path });
     return resp.text();
   }
 }
@@ -638,11 +641,13 @@ export async function submitCartAsSeen(client, seen, { reload }) {
   }
   const dates = [...new Set(seen.map((i) => i.date))];
   const why = lost ? `Antwort auf das Abschicken fehlt (${lost.message})` : null;
+  await forgetDays(client, dates).catch(() => {});
   let after;
   try {
     after = await reload(dates);
   } catch (e) {
-    return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates };
+    return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates,
+      network: !!(lost?.network || e?.network) };
   }
   const unknownKinds = new Set();
   const asSeen = (date) => {
@@ -662,7 +667,8 @@ export async function submitCartAsSeen(client, seen, { reload }) {
   const missing = dates.filter((d) => !asSeen(d));
   const unknown = unknownKinds.size ? `Bestellart ${[...unknownKinds].map((k) => `„${k}“`).join(", ")} kann die App nicht nachprüfen.` : null;
   return missing.length
-    ? { kind: "unconfirmed", reason: [why, unknown].filter(Boolean).join("; ") || "Nicht alle Tage stehen so im Wochenplan wie im Warenkorb.", missing }
+    ? { kind: "unconfirmed", reason: [why, unknown].filter(Boolean).join("; ") || "Nicht alle Tage stehen so im Wochenplan wie im Warenkorb.", missing,
+      network: !!lost?.network }
     : { kind: "done" };
 }
 
@@ -743,15 +749,16 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
  * Jede betroffene Kalenderwoche einmal laden; Login muss vorher erfolgt sein.
  * Liefert IBS5 statt der Woche eine Tagesansicht (Handy), wird je Tag geladen.
  * Mit history holt sich die Tagesansicht die bestellten Tage vorab gesammelt aus
- * der Bestellhistorie; nur für die Übersicht, denn solche Tage tragen keine
- * Bestell-IDs.
+ * der Bestellhistorie; solche Tage tragen keine Bestell-IDs (Übersicht,
+ * Nachprüfung einer Bestellung). maxAgeMs: zwischengespeicherte Tage nur, wenn
+ * sie höchstens so alt sind.
  * peek: Tage nur zum Anzeigen (heute): bestellt aus der Historie, sonst aus der
  * Tagesansicht (Feiertag, kein Angebot, nicht oder vor dem Zeitfenster der
  * Historie bestellt); im Wochenplan kommen sie aus derselben Woche.
  */
-export async function collect(client, dates, { fresh = false, onProgress, history = false, signal, peek = [] } = {}) {
+export async function collect(client, dates, { fresh = false, maxAgeMs = null, onProgress, history = false, signal, peek = [] } = {}) {
   const byDay = () => (history ? collectByHistory(client, dates, fresh, onProgress, signal, peek)
-    : collectByDay(client, dates, fresh, onProgress, signal));
+    : collectByDay(client, dates, fresh, onProgress, signal, maxAgeMs));
   if (client.dayView) return byDay();
   const weeks = new Map();
   for (const d of [...new Set([...dates, ...peek])]) {
@@ -828,14 +835,14 @@ function saveDayCache(client) {
   return Promise.resolve(client.dayStore.save({ customerNo: client.dayCache.customerNo, rows })).catch(() => {});
 }
 
-async function collectByDay(client, dates, fresh, onProgress, signal) {
+async function collectByDay(client, dates, fresh, onProgress, signal, maxAgeMs = null) {
   const cache = await dayCache(client);
   const out = [];
   let fetched = 0;
   for (const d of dates) {
     onProgress?.(out.length, dates.length);
     const hit = cache.get(d);
-    if (!fresh && hit && isFresh(hit)) {
+    if (!fresh && hit && isFresh(hit) && (maxAgeMs == null || Date.now() - hit.at < maxAgeMs)) {
       out.push(hit.day);
       continue;
     }
@@ -854,6 +861,18 @@ async function collectByDay(client, dates, fresh, onProgress, signal) {
   client.signal?.throwIfAborted();
   if (fetched) await saveDayCache(client);
   return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Zwischengespeicherte Tage verwerfen, etwa nach dem Abschicken einer Bestellung:
+ * ob sie ankam, ist erst nach dem nächsten Laden bekannt.
+ */
+export async function forgetDays(client, dates) {
+  if (!client.dayCache && !client.dayStore) return;
+  const cache = await dayCache(client);
+  let dropped = 0;
+  for (const d of dates) dropped += cache.delete(d);
+  if (dropped) await saveDayCache(client);
 }
 
 // Die Historie filtert nach Bestelldatum: früher bestellte Tage fehlen darin.
@@ -946,14 +965,19 @@ export const AlarmText = {
 
 /**
  * Steht am Tag genau line einmal bestellt (line null: nichts bestellt)? Eine Linie
- * mit liegengebliebener Abbestellung (Status 3) gilt weiter als bestellt.
+ * mit liegengebliebener Abbestellung (Status 3) gilt weiter als bestellt. Tage aus
+ * der Bestellhistorie tragen keine Linie, dort zählt das Gericht.
  */
 function orderedAs(day, line) {
   const ordered = (day?.entries || []).filter((e) => e.isOrdered);
   if (!line) return ordered.length === 0;
-  return ordered.length === 1 && ordered[0].menuLineId === line.menuLineId
-    && parseFloat(String(ordered[0].quantityOrdered ?? "").replace(",", ".")) === 1;
+  const e = ordered[0];
+  const same = e?.menuLineId ? e.menuLineId === line.menuLineId : sameDish(e?.name, line.name);
+  return ordered.length === 1 && same && parseFloat(String(e.quantityOrdered ?? "").replace(",", ".")) === 1;
 }
+const sameDish = (a, b) => !!a && !!b && shortDish(a).toLowerCase() === shortDish(b).toLowerCase();
+/** Tag aus der Bestellhistorie (ohne Bestell-IDs, siehe historyDay). */
+const fromHistory = (day) => !!day?.entries.length && day.entries.every((e) => !e.menuLineId);
 
 /** Menge laut data-quantity-in-shopping-cart; 0, wenn leer oder unlesbar. */
 const cartQuantity = (e) => parseFloat(String(e.quantityInCart ?? "").replace(",", ".")) || 0;
@@ -985,12 +1009,23 @@ export function changeKind(c) {
  * othersInCart Einträge mit ab.
  *
  * Die Auswahl beruht auf einem zwischengespeicherten Stand: vor dem ersten Eingriff
- * in den Warenkorb lädt reload die Tage frisch, weicht einer ab (anderswo bestellt
- * oder geändert), wird nichts angefasst (stale).
+ * in den Warenkorb lädt preload die Tage (frisch oder nur Minuten alt), weicht
+ * einer ab (anderswo bestellt oder geändert), wird nichts angefasst (stale).
+ *
+ * Geleert wird ein Tag nur, wenn laut diesem Stand dort etwas im Warenkorb liegt,
+ * oder wenn im Warenkorb mehr liegt als othersInCart (dann vielleicht an einem der
+ * eigenen Tage): sonst spart das je Tag eine Anfrage.
+ *
+ * Nachgeprüft werden Neubestellungen mit verify (Bestellhistorie, eine Anfrage),
+ * alles andere und unklare Tage mit reload. Die zwischengespeicherten Tage gelten
+ * nach dem Abschicken nicht mehr (forgetDays). network im Ergebnis: unbestätigt,
+ * weil das Bestellsystem nicht antwortete.
  *
  * @returns {Promise<{kind:"done"|"dryrun"|"aborted"|"unconfirmed", reason?:string, missing?:string[], changes?:object[], stale?:boolean}>}
  */
-export async function placeOrders(client, requested, { dryRun = false, previouslyInCart = [], othersInCart = 0, discard = false, reload }) {
+export async function placeOrders(client, requested, {
+  dryRun = false, previouslyInCart = [], othersInCart = 0, discard = false, reload, preload = reload, verify = reload,
+}) {
   const changes = requested.filter((c) => changeKind(c) !== "NONE");
   if (!changes.length) return { kind: "aborted", reason: "Nichts geändert." };
   if (new Set(changes.map((c) => c.date)).size !== changes.length) {
@@ -1001,7 +1036,7 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
 
   let before;
   try {
-    before = await reload(changes.map((c) => c.date));
+    before = await preload(changes.map((c) => c.date));
   } catch (e) {
     return { kind: "aborted", reason: `Aktueller Bestellstand nicht ladbar (${e.message}). Nichts abgeschickt.` };
   }
@@ -1039,18 +1074,29 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
       + "(z. B. auf der Webseite). Nichts abgeschickt. Bitte noch einmal abschicken, die App zeigt dann, was darin liegt.");
 
   try {
+    let total;
     if (discard) {
       await client.discardCart();
-      const left = (await client.cart()).totalItemsInCart;
-      if (left !== 0) return foreign(left, 0);
+      total = (await client.cart()).totalItemsInCart;
+      if (total !== 0) return foreign(total, 0);
+    } else {
+      total = (await client.cart()).totalItemsInCart;
     }
-    let total = null;
+    // Mehr als gesehen: vielleicht an einem eigenen Tag, dann jeden Tag leeren.
+    const clearAll = total == null || total > othersInCart;
+    const inCart = (date) => {
+      const day = dayOf(before, date);
+      return day?.state === OrderState.IN_CART || (day?.entries || []).some((e) => cartQuantity(e) !== 0);
+    };
     for (const c of changes) {
       const anchor = c.target ?? c.current;
       touched.push(anchor);
       // Erst leeren: ersetzt Liegengebliebenes des Tages, danach zählt nur die Auswahl.
-      const cleared = await client.clearCart(anchor.customerId, anchor.date, anchor.menuGroupId);
-      const base = cleared.totalItemsInCart ?? (await client.cart()).totalItemsInCart;
+      let base = total;
+      if (clearAll || inCart(c.date)) {
+        const cleared = await client.clearCart(anchor.customerId, anchor.date, anchor.menuGroupId);
+        base = cleared.totalItemsInCart ?? (await client.cart()).totalItemsInCart;
+      }
       const added = changeKind(c) === "CANCEL" ? await client.cancelInCart(c.current) : await client.addToCart(c.target);
       if (!added.ok) return aborted(`${De.short(c.date)}: ${added.message || "vom Bestellsystem abgelehnt"}`);
       total = added.totalItemsInCart;
@@ -1082,14 +1128,21 @@ export async function placeOrders(client, requested, { dryRun = false, previousl
 
   const dates = changes.map((c) => c.date);
   const why = lost ? `Antwort auf das Abschicken fehlt (${lost.message})` : null;
+  await forgetDays(client, dates).catch(() => {});
   let after;
   try {
-    after = await reload(dates);
+    const orders = changes.filter((c) => changeKind(c) === "ORDER").map((c) => c.date);
+    const rest = dates.filter((d) => !orders.includes(d));
+    after = [...(orders.length ? await verify(orders) : []), ...(rest.length ? await reload(rest) : [])];
+    // Aus der Historie, aber nicht wie gewünscht (etwa anders geschriebenes Gericht): die Tagesansicht entscheidet.
+    const unsure = changes.filter((c) => fromHistory(dayOf(after, c.date)) && !orderedAs(dayOf(after, c.date), c.target)).map((c) => c.date);
+    if (unsure.length) after = after.filter((d) => !unsure.includes(d.date)).concat(await reload(unsure));
   } catch (e) {
-    return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates };
+    return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates,
+      network: !!(lost?.network || e?.network) };
   }
   const missing = changes.filter((c) => !orderedAs(dayOf(after, c.date), c.target)).map((c) => c.date);
   return missing.length
-    ? { kind: "unconfirmed", reason: why || "Nicht alle Tage stehen so im Wochenplan wie gewünscht.", missing }
+    ? { kind: "unconfirmed", reason: why || "Nicht alle Tage stehen so im Wochenplan wie gewünscht.", missing, network: !!lost?.network }
     : { kind: "done", changes };
 }

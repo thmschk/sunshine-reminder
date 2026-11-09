@@ -5,7 +5,7 @@
 <body style="font:16px monospace"><pre id="out">läuft</pre>
 <script type="module">
 import { IbsClient, IbsAuthError, collect, pacing } from "../ibs.js";
-import { guardHooks, paused, resume, IbsPausedError, IbsBudgetError, budgetFor, unmetered } from "../guard.js";
+import { guardHooks, paused, resume, probeResume, reachability, IbsPausedError, IbsBudgetError, budgetFor, unmetered } from "../guard.js";
 import { kvDel, kvGet, kvSet } from "../idb.js";
 
 const lines = [];
@@ -14,8 +14,11 @@ const check = (name, ok, extra = "") => { lines.push(`${ok ? "ok  " : "FAIL"} ${
 window.addEventListener("unhandledrejection", (e) => { lines.push("REJ " + e.reason); out.textContent = lines.join("\n"); });
 const realFetch = window.fetch;
 pacing.retryMs = 50;
+let probes = 0;
+let probeOk = false;
+reachability.probe = async () => { probes++; return probeOk; };
 let calls = 0;
-const reset = async () => { calls = 0; await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilentAt"); };
+const reset = async () => { calls = 0; probes = 0; probeOk = false; await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilent"); };
 const setNet = (type) => Object.defineProperty(navigator, "connection", { value: type ? { type } : undefined, configurable: true });
 const minutesLeft = async () => Math.round(((await paused())?.until - Date.now()) / 60000);
 
@@ -30,17 +33,63 @@ try {
   let e2 = null;
   try { await c.login("1", "x"); } catch (e) { e2 = e; }
   check("ein zweiter Versuch, während der Pause keine Anfrage", e2 instanceof IbsPausedError && calls === 2, `Anfragen: ${calls}`);
-  check("erstes Schweigen: 15 Minuten", (await minutesLeft()) === 15, `${await minutesLeft()} min`);
+  check("erstes Schweigen: 10 Minuten, vorher Logo geprüft", (await minutesLeft()) === 10 && probes === 1, `${await minutesLeft()} min, ${probes} Proben`);
   await resume(); // „Trotzdem jetzt versuchen“
   try { await c.login("1", "x"); } catch { /* erwartet */ }
-  check("zweites Schweigen binnen 6 h: 3 Stunden", (await minutesLeft()) === 180, `${await minutesLeft()} min`);
+  check("Schweigen binnen 5 Minuten: dieselbe Störung, weiter 10 Minuten", (await minutesLeft()) === 10, `${await minutesLeft()} min`);
+  for (const [want, label] of [[30, "zweite Störung binnen 6 h: 30 Minuten"], [60, "dritte: 60 Minuten"], [60, "vierte: höchstens 60 Minuten"]]) {
+    const s = await kvGet("ibsSilent");
+    await kvSet("ibsSilent", { ...s, at: Date.now() - 20 * 60 * 1000 });
+    await resume();
+    try { await c.login("1", "x"); } catch { /* erwartet */ }
+    check(label, (await minutesLeft()) === want, `${await minutesLeft()} min`);
+  }
+  await kvSet("ibsSilent", { at: Date.now() - 7 * 3600 * 1000, step: 2 });
+  await resume();
+  try { await c.login("1", "x"); } catch { /* erwartet */ }
+  check("nach sechs Stunden wieder 10 Minuten", (await minutesLeft()) === 10, `${await minutesLeft()} min`);
+
+  // 1a. Logo lädt: Verbindung nicht gesperrt, keine Pause, Stufe unverändert.
+  await reset();
+  probeOk = true;
+  let e1a = null;
+  try { await c.login("1", "x"); } catch (e) { e1a = e; }
+  check("Logo lädt: Fehler, aber keine Pause", e1a?.network && !(await paused()) && probes === 1 && (await kvGet("ibsSilent")) === undefined, e1a?.message);
+
+  // 1e. Während der Pause: Probe glückt → Pause endet; scheitert → bleibt.
+  await reset();
+  try { await c.login("1", "x"); } catch { /* */ }
+  check("Probe scheitert: Pause bleibt", (await probeResume()) === false && !!(await paused()));
+  probeOk = true;
+  check("Probe glückt: Pause endet", (await probeResume()) === true && !(await paused()));
+
+  // 1f. Weckruf: eine Pause, die länger als pauseMaxAgeMs läuft, hält ihn nicht auf.
+  await reset();
+  try { await c.login("1", "x"); } catch { /* */ }
+  const p1f = await kvGet("ibsPause");
+  window.fetch = async () => { calls++; return new Response(JSON.stringify({ token: "t", name1: "" })); };
+  const cw = new IbsClient(undefined, guardHooks);
+  cw.pauseMaxAgeMs = 20 * 60 * 1000;
+  let e1f2 = null;
+  try { await cw.login("1", "x"); } catch (e) { e1f2 = e; }
+  check("Weckruf: frische Pause gilt", e1f2 instanceof IbsPausedError);
+  await kvSet("ibsPause", { ...p1f, at: Date.now() - 21 * 60 * 1000 });
+  calls = 0;
+  await cw.login("1", "x");
+  check("Weckruf: Pause älter als 20 Minuten gilt nicht", calls === 1 && !!(await paused()));
+  window.fetch = async () => { calls++; throw new TypeError("Failed to fetch"); };
 
   // 1b. Geglückter Login setzt die Zählung zurück.
   await reset();
-  await kvSet("ibsSilentAt", Date.now() - 60000);
+  await kvSet("ibsSilent", { at: Date.now() - 60000, step: 1 });
   window.fetch = async () => { calls++; return new Response(JSON.stringify({ token: "t", name1: "" })); };
   await new IbsClient(undefined, guardHooks).login("1", "x");
-  check("geglückter Login löscht die Zählung", (await kvGet("ibsSilentAt")) === undefined);
+  check("geglückter Login löscht die Zählung", (await kvGet("ibsSilent")) === undefined);
+  await kvSet("ibsSilent", { at: Date.now() - 60000, step: 1 });
+  const c1b = new IbsClient(undefined, guardHooks); c1b.token = "t";
+  window.fetch = async () => { calls++; return new Response("<div></div>"); };
+  await c1b.dayplan("2026-10-06");
+  check("jede geglückte Antwort löscht die Zählung", (await kvGet("ibsSilent")) === undefined);
 
   // 1c. Netzwechsel hebt die Pause auf (IP-Sperre), gleiches Netz nicht.
   await reset();
@@ -171,6 +220,6 @@ try {
   lines.push("FAIL Ausnahme: " + e);
 }
 window.fetch = realFetch;
-await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilentAt");
+await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilent");
 document.getElementById("out").textContent = lines.join("\n") + (lines.some((l) => l.startsWith("FAIL")) ? "\n\nFEHLGESCHLAGEN" : "\n\nALLE OK");
 </script>

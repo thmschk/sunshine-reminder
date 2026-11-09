@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -360,7 +360,41 @@ if (!mode) {
     const done = $(".order-result.done");
     check(!!done, `Ergebnis: ${$(".order-result")?.textContent.replace(/\s+/g, " ").slice(0, 90)}`);
     check(done?.querySelectorAll("li").length === 1 && /bestellt/.test(done.textContent) && /Nudeln/.test(done.textContent),
-      "eine Zeile: Tag, „bestellt“, Gericht");  } else if (mode === "cartsend" || mode === "cartdiscard") {
+      "eine Zeile: Tag, „bestellt“, Gericht");  } else if (mode === "orderlost") {
+    // Abschicken und Nachprüfen ohne Antwort: kein Nachladen, kein neuer Login, Knopf „Jetzt nachprüfen“.
+    await account();
+    hooks.status = 0;
+    let inCart = 0;
+    let down = false;
+    const after = [];
+    const json = (o) => new Response(JSON.stringify(o));
+    hooks.ibs = (url) => {
+      if (down) { after.push(url.replace(/^.*\/ibs5/, "")); throw new TypeError("Failed to fetch"); }
+      if (url.includes("/Mealplan/ClearCart")) { inCart = 0; return json({ totalItemsInCart: 0, messageStatus: "OK" }); }
+      if (url.includes("/Mealplan/SaveOrder")) return json({ totalItemsInCart: ++inCart, messageStatus: "OK" });
+      if (url.includes("/Cart/Order")) { down = true; throw new TypeError("Failed to fetch"); }
+      return null;
+    };
+    await import("../app.js");
+    await until(() => $("#b-order-now") && !document.getElementById("refresh"));
+    $("#b-order-now").click();
+    await until(() => $('#f-order input[type=radio][value="827"]') && orderLoaded());
+    const radio = $('#f-order input[type=radio][value="827"]');
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+    $("#b-submit").click();
+    await until(() => $('dialog [data-v="mine"]'));
+    $('dialog [data-v="mine"]').click();
+    await until(() => $("#b-recheck"));
+    await ticks(200);
+    check(!!$("#b-recheck"), "Knopf „Jetzt nachprüfen“");
+    check(!after.some((u) => u.includes("/Login/")) && after.length <= 2, `danach keine Anmeldung, wenig Anfragen: ${after.join(", ")}`);
+    down = false;
+    hooks.status = 2;
+    $("#b-recheck").click();
+    await until(() => !$("#b-recheck") && orderLoaded());
+    check(!$("#b-recheck") && !!$("#f-order"), "Nachprüfen lädt die Bestellansicht neu");
+  } else if (mode === "cartsend" || mode === "cartdiscard") {
     // Nur der Warenkorb, ohne Auswahl unten: Knöpfe in der Karte, Rückfrage, Ergebnis.
     await account();
     hooks.status = 0;

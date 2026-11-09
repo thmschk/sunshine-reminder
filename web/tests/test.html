@@ -7,7 +7,7 @@
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
   parseOrderHistory, parseCart, cartOthers, submitCartAsSeen, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
-  ParserError, MenuEntry, lastCall,
+  ParserError, MenuEntry, lastCall, forgetDays, pacing as Pacing,
 } from "../ibs.js";
 
 const results = [];
@@ -398,6 +398,19 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
 const { login, withSession } = await import("../session.js");
 // Token werden nur für gespeicherte Konten abgelegt; die Testkonten danach wieder entfernen.
 const SessAcc = await import("../accounts.js");
+await test("Sitzung: nach Netzfehler erst warten, dann einmal neu anmelden", async () => {
+  const creds = { customerNo: `test-${Date.now()}-n`, password: "x" };
+  let logins = 0;
+  const a = { async login() { logins++; this.token = `T${logins}`; return new Profile(""); } };
+  const oldRelogin = Pacing.reloginMs;
+  Pacing.reloginMs = 80;
+  let n = 0;
+  const t0 = performance.now();
+  try {
+    await withSession(a, creds, async () => { if (++n === 1) throw Object.assign(new Error("Failed to fetch"), { maybeAuth: true }); return a.token; }, { persist: false });
+  } finally { Pacing.reloginMs = oldRelogin; }
+  eq([n, logins, performance.now() - t0 >= 75], [2, 2, true]);
+});
 await test("Sitzung: Token gespeichert, wiederverwendet, bei Ablauf einmal neu", async () => {
   const creds = { customerNo: `test-${Date.now()}`, password: "x" };
   await SessAcc.upsertAccount(creds);
@@ -718,7 +731,7 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
   const { kvDel, kvGet } = await import("../idb.js");
   const realFetch = window.fetch;
   const old = { ...pacing };
-  const reset = async () => { await resume(); await kvDel("ibsSilentAt"); };
+  const reset = async () => { await resume(); await kvDel("ibsSilent"); };
   const login = async (replies) => {
     await reset();
     let calls = 0;
@@ -735,9 +748,9 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     const r = await login([net(), new Response(JSON.stringify({ token: "t", name1: "" }))]);
     eq([r.err?.message ?? null, r.calls, r.pauseMin, r.budget, r.ms >= 45], [null, 2, 0, 4, true], `${Math.round(r.ms)} ms`);
   });
-  await test("Netzfehler auch beim zweiten Versuch: Pause wie bisher (15 Minuten)", async () => {
+  await test("Netzfehler auch beim zweiten Versuch: Pause (10 Minuten)", async () => {
     const r = await login([net(), net()]);
-    eq([r.calls, r.err?.network, r.pauseMin, r.budget], [2, true, 15, 4]);
+    eq([r.calls, r.err?.network, r.pauseMin, r.budget], [2, true, 10, 4]);
   });
   await test("Zeitüberschreitung: kein zweiter Versuch", async () => {
     const r = await login([new DOMException("timeout", "TimeoutError")]);
@@ -1312,6 +1325,74 @@ await test("Bestellen: Antwort aufs Abschicken fehlt, Bestellung nicht da → un
   eq(r.missing, ["2026-10-12"]);
 });
 
+// Weniger Anfragen beim Bestellen: Leeren nur bei Bedarf, Nachprüfung über die Historie.
+{
+  const two = [
+    { date: "2026-10-12", current: null, target: line("2026-10-12", "827") },
+    { date: "2026-10-14", current: null, target: line("2026-10-14", "827") },
+  ];
+  /** Tag wie aus der Bestellhistorie: ohne Linie, nur mit Gericht. */
+  const histDay = (date, name) => new DayStatus(date, OrderState.ORDERED, [new MenuEntry({
+    date, name, status: "2", quantityOrdered: "1", quantityInCart: "", orderable: false, isKv: false, menuGroupId: "", menuLineId: "", customerId: "",
+  })]);
+  await test("Bestellen: sauberer Warenkorb → kein Leeren je Tag", async () => {
+    const c = new FakeClient();
+    const r = await placeOrders(c, two, { reload: states({}, { "2026-10-12": { 827: 1 }, "2026-10-14": { 827: 1 } }) });
+    eq(r.kind, "done", r.reason);
+    eq(c.calls, ["cart", "add 2026-10-12 827", "add 2026-10-14 827", "submit"]);
+  });
+  await test("Bestellen: Tag mit Eintrag im Warenkorb (laut Stand) wird geleert", async () => {
+    const c = new FakeClient();
+    const before = states({}, { "2026-10-12": { 827: 1 }, "2026-10-14": { 827: 1 } });
+    const preload = async (ds) => (await before(ds)).map((d) => (d.date !== "2026-10-14" ? d
+      : new DayStatus(d.date, d.state, d.entries.map((e, i) => new MenuEntry({ ...e, quantityInCart: i === 0 ? "1" : "" })))));
+    const r = await placeOrders(c, two, { preload, reload: before });
+    eq(r.kind, "done", r.reason);
+    eq(c.calls.filter((x) => x.startsWith("clear")), ["clear 2026-10-14"]);
+  });
+  await test("Bestellen: nachgeprüft über die Historie, ohne Tagesansicht", async () => {
+    const c = new FakeClient();
+    let reloads = 0;
+    const r = await placeOrders(c, two, {
+      reload: async (ds) => { reloads++; return ds.map((d) => freshDay(d, {})); },
+      verify: async (ds) => ds.map((d) => histDay(d, line(d, "827").name)),
+    });
+    eq([r.kind, reloads], ["done", 1], r.reason);
+  });
+  await test("Bestellen: Historie nennt ein anderes Gericht → die Tagesansicht entscheidet", async () => {
+    const c = new FakeClient();
+    let reloads = 0;
+    const r = await placeOrders(c, two, {
+      preload: async (ds) => ds.map((d) => freshDay(d, {})),
+      reload: async (ds) => { reloads++; return ds.map((d) => freshDay(d, { 827: 1 })); },
+      verify: async (ds) => ds.map((d) => histDay(d, "Ganz was anderes")),
+    });
+    eq([r.kind, reloads], ["done", 1], r.reason);
+  });
+  await test("Bestellen: keine Antwort beim Abschicken und Nachprüfen → unbestätigt mit network", async () => {
+    const c = new FakeClient();
+    const netErr = () => Object.assign(new Error("Failed to fetch"), { network: true });
+    c.submitCart = async () => { throw netErr(); };
+    let n = 0;
+    const r = await placeOrders(c, two, { reload: async (ds) => { if (n++) throw netErr(); return ds.map((d) => freshDay(d, {})); } });
+    eq([r.kind, r.network, r.missing], ["unconfirmed", true, ["2026-10-12", "2026-10-14"]]);
+  });
+  await test("Bestellen: Abweichung ohne Netzfehler → unbestätigt ohne network", async () => {
+    const c = new FakeClient();
+    const r = await placeOrders(c, two, { reload: states({}, {}) });
+    eq([r.kind, r.network], ["unconfirmed", false]);
+  });
+  await test("forgetDays: verwirft zwischengespeicherte Tage und speichert", async () => {
+    let saved = null;
+    const cache = new Map([["2099-01-05", { at: Date.now(), day: freshDay("2026-10-12") }], ["2099-01-06", { at: Date.now(), day: freshDay("2026-10-13") }]]);
+    cache.customerNo = "k1";
+    const c = { customerNo: "k1", dayCache: cache, dayStore: { load: async () => null, save: async (v) => { saved = v; } } };
+    await forgetDays(c, ["2099-01-05"]);
+    eq([[...cache.keys()], saved?.rows.map((r) => r.date)], [["2099-01-06"], ["2099-01-06"]]);
+    await forgetDays(new FakeClient(), ["2099-01-05"]);
+  });
+}
+
 // Layout seit 09.10.2026: Klick per Skript neben dem Knopf statt onclick (Struktur aus echten Antworten).
 await test("Neues Layout: Kundennummer aus $('#id').click(…), Tages- und Wochenansicht", () => {
   const day = parseWeekplan(`<ul><li class="plan" id="dayplan"><button class="btn quantity-one basket-marker menuplan-checkbox"
@@ -1565,7 +1646,7 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
     const realFetch = window.fetch;
     const gap = { ...pacing };
     Object.assign(pacing, { gapMs: 0, jitterMs: 0 });
-    const keys = ["accounts", "activeAccount", "ibsDayView", "lastPushOk", "pushFailed", "notified", "ibsBudget", "ibsSilentAt", "ibsPause",
+    const keys = ["accounts", "activeAccount", "ibsDayView", "lastPushOk", "pushFailed", "notified", "ibsBudget", "ibsSilent", "ibsPause",
       ...["1000", "2000"].flatMap((n) => [`ibsSession:${n}`, `dayCache:${n}`])];
     for (const k of keys) await kvDel(k);
     // Nie ans echte IBS5: alles unter ibs.* beantwortet diese Attrappe.
