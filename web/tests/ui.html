@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups", "pushoffer", "pushofferno"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -717,6 +717,45 @@ if (!mode) {
     await settings();
     check(isOpen("push") && $("#b-push-admin"), "#betreiber öffnet „Erinnerung“");
     history.replaceState(null, "", location.pathname + location.search);
+  } else if (mode === "pushoffer") {
+    // Angemeldet ohne Erinnerung: Startseite bietet sie einmal an, ein Tipp schaltet sie ein.
+    await account();
+    await import("../app.js");
+    await until(() => homeLoaded() && $("#push-offer"));
+    check(!!$("#push-offer"), "Hinweis „Erinnerung einschalten?“ auf der Startseite");
+    perm.state = "default";
+    $("#b-offer-on").click();
+    await until(() => !$("#push-offer"));
+    check(asked === 1, `Erlaubnis im Klick erfragt (${asked})`);
+    check(posted.length === 1 && posted[0].time === "17:00", `Abo um 17:00 angelegt (${posted.length})`);
+    check(/Erinnerung ist an/.test($("#app").textContent), "Bestätigung „Erinnerung ist an“");
+    check(!!(await secretGet("push")), "Abo auf dem Gerät gespeichert");
+    document.getElementById("btn-reload").click();
+    await until(() => document.getElementById("refresh"));
+    await until(homeLoaded);
+    await ticks(50);
+    check(!$("#push-offer"), "mit Erinnerung kein Hinweis mehr");
+  } else if (mode === "pushofferno") {
+    // „Nein danke“ blendet den Hinweis dauerhaft aus; verweigerte Erlaubnis zeigt ihn gar nicht.
+    await account();
+    await import("../app.js");
+    await until(() => homeLoaded() && $("#push-offer"));
+    $("#b-offer-no").click();
+    check(!$("#push-offer"), "„Nein danke“ entfernt den Hinweis");
+    await ticks(50);
+    check((await kvGet("pushOfferDismissed")) === true, "„Nein danke“ gemerkt");
+    document.getElementById("btn-reload").click();
+    await until(() => document.getElementById("refresh"));
+    await until(homeLoaded);
+    await ticks(50);
+    check(!$("#push-offer") && posted.length === 0 && asked === 0, "nach „Nein danke“ kein Hinweis, keine Frage, kein Abo");
+    await kvSet("pushOfferDismissed", false);
+    perm.state = "denied";
+    document.getElementById("btn-reload").click();
+    await until(() => document.getElementById("refresh"));
+    await until(homeLoaded);
+    await ticks(50);
+    check(!$("#push-offer"), "bei verweigerter Erlaubnis kein Hinweis");
   }
   $out.textContent = summary(lines);
 }

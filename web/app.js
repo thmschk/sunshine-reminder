@@ -717,6 +717,11 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   if (stale) document.querySelector(".hero")?.insertAdjacentHTML("beforebegin", stale);
   const heal = document.getElementById("b-heal");
   if (heal) heal.onclick = () => repairPush(heal);
+  else if (!pushNotice && (await pushOfferDue())) {
+    if (my !== viewSeq) return;
+    document.querySelector(".hero")?.insertAdjacentHTML("afterend", PUSH_OFFER);
+    wirePushOffer();
+  }
   // Einmal am Tag: verlorenes Abo beim Server unbemerkt neu anlegen.
   healPush().catch(() => {});
 
@@ -770,6 +775,45 @@ function pushStale() {
     <p>${since === store.lastPushOk?.at ? `Die letzte Erinnerung kam am ${esc(when(since))}.` : "Bisher kam keine Erinnerung an."}
       Meist hilft es, das Abo beim Server neu anzulegen.</p>
     <div class="row"><button id="b-heal" type="button" class="block">Erinnerung reparieren</button></div></div>`;
+}
+
+/**
+ * Angemeldet, aber ohne Erinnerung (z. B. in Safari angemeldet, „Nicht erlauben“, nach dem Umzug):
+ * einmal anbieten, bis eingeschaltet oder „Nein danke“. Nur wo Push geht, auf dem iPhone also nur
+ * in der installierten App; nicht unter der alten Adresse, die abgemeldet werden soll.
+ */
+async function pushOfferDue() {
+  if (store.push || !pushSupported || (isIos && !standalone) || !loadCreds()) return false;
+  if (Notification.permission === "denied" || location.hostname === "sunshine.thomschke.info") return false;
+  return !(await kvGet("pushOfferDismissed").catch(() => false));
+}
+
+const PUSH_OFFER = `<div class="card" id="push-offer"><h2>Erinnerung einschalten?</h2>
+  <p>Werktags um ${DEFAULT_PUSH_TIME} Uhr meldet sich die App, wenn noch etwas offen ist. Uhrzeit und Tage
+    kannst du danach in den Einstellungen ändern.</p>
+  <div class="row"><button id="b-offer-on" type="button" class="block">Erinnerung einschalten</button></div>
+  <div class="center"><button id="b-offer-no" type="button" class="text">Nein danke</button></div></div>`;
+
+function wirePushOffer() {
+  const card = document.getElementById("push-offer");
+  const on = document.getElementById("b-offer-on");
+  // pushEnable fragt die Erlaubnis als Erstes ab, also noch im Klick (iOS verlangt das).
+  on.onclick = async () => {
+    on.disabled = true;
+    card.querySelector(".error")?.remove();
+    try {
+      await pushEnable(DEFAULT_PUSH_TIME);
+      card.outerHTML = `<div class="card hero ok"><h2>Erinnerung ist an</h2>
+        <p>Werktags um ${DEFAULT_PUSH_TIME} Uhr. Ändern kannst du das in den Einstellungen.</p></div>`;
+    } catch (e) {
+      on.disabled = false;
+      on.insertAdjacentHTML("afterend", `<p class="error">${esc(e.message)}</p>`);
+    }
+  };
+  document.getElementById("b-offer-no").onclick = () => {
+    kvSet("pushOfferDismissed", true).catch(() => {});
+    card.remove();
+  };
 }
 
 /** „Erinnerung reparieren“: Abo neu anlegen bzw. auffrischen und eine Test-Meldung schicken. */
@@ -1985,7 +2029,10 @@ function wirePushBox(message = "", at = "push") {
       wirePushBox(e.message, where);
     }
   };
-  if (sw) sw.onclick = guard(() => (store.push ? pushDisable() : pushEnable(time?.value || DEFAULT_PUSH_TIME)));
+  // Bewusst ausgeschaltet: dann auch kein Angebot „Erinnerung einschalten?“ auf der Startseite.
+  if (sw) sw.onclick = guard(() => (store.push
+    ? pushDisable().then(() => kvSet("pushOfferDismissed", true).catch(() => {}))
+    : pushEnable(time?.value || DEFAULT_PUSH_TIME)));
   if (test) test.onclick = () => runPushTest(test);
   const msw = document.getElementById("morning-switch");
   if (msw) msw.onclick = guard(() => pushSetMorning(store.push.morning ? null : DEFAULT_MORNING_TIME), "morning");
@@ -2290,7 +2337,8 @@ else if (movedHere && !(await kvGet("movedShown").catch(() => false))) {
   kvSet("movedShown", true).catch(() => {});
   askDialog("Die App ist umgezogen!", `
     <p>Bitte hier die Zugangsdaten löschen und die App vom Startbildschirm entfernen.</p>
-    <p>Dann unter <b>sunshine-order.de</b> loslegen.</p>`,
+    <p>Dann unter <b>sunshine-order.de</b> loslegen: auf dem iPhone zuerst über <b>Teilen → Zum Home-Bildschirm</b>
+      installieren und dort anmelden. Die Erinnerung ist beim Anmelden angehakt, bitte „Erlauben“ tippen.</p>`,
   "Abmelden und alles löschen", { danger: true, cancelLabel: "Später" })
     .then((ok) => ok && logoutAll(MOVED_TO));
 }
