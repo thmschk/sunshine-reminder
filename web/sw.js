@@ -94,6 +94,7 @@ self.addEventListener("push", (ev) => {
     ev.waitUntil((async () => {
       await withDeadline((signal) => todayAndNotify(signal), TODAY_TAG);
       if (kind === "today-test") await confirmTest(TODAY_TAG);
+      else await todayShown();
     })());
     return;
   }
@@ -106,6 +107,16 @@ self.addEventListener("push", (ev) => {
 });
 
 const TODAY_TAG = "hs-today";
+
+/**
+ * lastTodayOk: die Morgenmeldung (oder ihre Ersatzmeldung) steht in der Leiste; silent wie
+ * tatsächlich gezeigt. Fehlt der Eintrag eines Tages, an dem der Server gesendet hat, wurde
+ * das Gerät nicht geweckt. Die App zeigt ihn in der Fußzeile unter „Meldungen“.
+ */
+async function todayShown() {
+  const [n] = await self.registration.getNotifications({ tag: TODAY_TAG }).catch(() => []);
+  if (n) await kvSet("lastTodayOk", { at: Date.now(), silent: !!n.silent }).catch(() => {});
+}
 
 /**
  * Was auch immer schiefgeht, eine Meldung muss erscheinen — sonst kündigt iOS das Abo.

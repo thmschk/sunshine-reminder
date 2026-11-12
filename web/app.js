@@ -727,7 +727,15 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
 
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
     .format(new Date(staleAt || Date.now()));
-  const pushInfo = store.push && store.lastPushOk ? ` · Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "";
+  const lastToday = store.push ? await kvGet("lastTodayOk").catch(() => null) : null;
+  if (my !== viewSeq) return;
+  const notes = [
+    store.push && store.lastPushOk ? `Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "",
+    lastToday ? `Morgenmeldung zuletzt ${esc(when(lastToday.at))}${lastToday.silent ? " (still)" : ""}` : "",
+  ].filter(Boolean);
+  const pushInfo = notes.length ? ` · <button type="button" id="b-foot-more" class="linklike" aria-expanded="${footMoreOpen}"
+    aria-controls="foot-more">Meldungen ${footMoreOpen ? "▾" : "▸"}</button><span id="foot-more"${footMoreOpen ? "" : " hidden"}>${
+    notes.map((n) => `<br>${n}`).join("")}</span>` : "";
   // Der gespeicherte Stand kann von gestern sein: dann mit Tag.
   $footer.innerHTML = `<span role="status">${staleAt ? `Stand ${esc(when(staleAt))} · ${progressText("wird aktualisiert")}` : `Geprüft ${t}${pushInfo}`}</span>
     <button id="b-heart" class="icon heart" title="Über diese App" aria-label="Über diese App">
@@ -735,7 +743,17 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
     </button>`;
   $footer.hidden = false;
   document.getElementById("b-heart").onclick = showAbout;
+  const more = document.getElementById("b-foot-more");
+  if (more) more.onclick = () => {
+    footMoreOpen = !footMoreOpen;
+    document.getElementById("foot-more").hidden = !footMoreOpen;
+    more.setAttribute("aria-expanded", footMoreOpen);
+    more.textContent = `Meldungen ${footMoreOpen ? "▾" : "▸"}`;
+  };
 }
+
+/** Fußzeile „Meldungen“ aufgeklappt; gilt, bis die Seite neu lädt (wie die Bereiche der Einstellungen). */
+let footMoreOpen = false;
 
 /** „heute 12:01“, „gestern 12:01“ oder „03.10. 12:01“. */
 function when(ms) {

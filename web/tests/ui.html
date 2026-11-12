@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups", "pushoffer", "pushofferno"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups", "pushoffer", "pushofferno", "footmore"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -756,6 +756,30 @@ if (!mode) {
     await until(homeLoaded);
     await ticks(50);
     check(!$("#push-offer"), "bei verweigerter Erlaubnis kein Hinweis");
+  } else if (mode === "footmore") {
+    // Fußzeile: Belege von Erinnerung und Morgenmeldung erst nach „Meldungen ▸“.
+    await account();
+    await secretSet("push", { id: "s1", secret: "z", time: "17:00", created: Date.now() });
+    await kvSet("lastPushOk", { at: Date.now() - 864e5, ok: true });
+    await kvSet("lastTodayOk", { at: Date.now() - 3600e3, silent: true });
+    await import("../app.js");
+    await until(() => homeLoaded() && $("#b-foot-more"));
+    const more = $("#foot-more");
+    check(!$("#push-offer"), "mit Erinnerung kein Angebot");
+    check(more?.hidden === true && /Meldungen ▸/.test($("#b-foot-more").textContent), "zugeklappt: nur „Meldungen ▸“");
+    $("#b-foot-more").click();
+    check(!more.hidden && /Erinnerung zuletzt/.test(more.textContent) && /Morgenmeldung zuletzt .*\(still\)/.test(more.textContent),
+      `aufgeklappt: ${more.textContent.trim()}`);
+    check($("#b-foot-more").getAttribute("aria-expanded") === "true" && /▾/.test($("#b-foot-more").textContent), "Knopf zeigt ▾");
+    document.getElementById("btn-reload").click();
+    await until(() => document.getElementById("refresh"));
+    await until(() => homeLoaded() && $("#b-foot-more"));
+    check(!$("#foot-more").hidden, "bleibt nach ⟳ aufgeklappt");
+    await kvSet("lastTodayOk", { at: Date.now(), silent: false });
+    document.getElementById("btn-reload").click();
+    await until(() => document.getElementById("refresh"));
+    await until(() => homeLoaded() && $("#b-foot-more"));
+    check(/Morgenmeldung zuletzt heute/.test($("#foot-more").textContent) && !/still/.test($("#foot-more").textContent), "laute Meldung ohne „(still)“");
   }
   $out.textContent = summary(lines);
 }
