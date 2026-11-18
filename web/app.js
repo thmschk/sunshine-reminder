@@ -243,9 +243,36 @@ function landingCard(form, direct) {
     : android ? landInstall()
     : `<p class="small muted">Gedacht fürs Handy: Die Erinnerung kommt dort an, wo du dich anmeldest.</p>`;
   const login = `<h2>Anmelden</h2><p class="small muted">Mit Kundennummer und Passwort aus IBS5.</p>${form}${after}`;
-  return `<div class="card land-login" id="anmelden">${gate ? `${gate}
+  return `<div class="card land-login land-tile" id="anmelden" data-title="Anmelden">${gate ? `${gate}
       <button type="button" class="text" id="b-show-login">Trotzdem hier anmelden</button>
       <div id="land-form" hidden>${login}</div>` : login}</div>`;
+}
+
+/** Im Kachelmodus (schmal, siehe style.css) ist die Landing Page ein waagerechter Wisch-Streifen. */
+const landTilesMq = matchMedia("(max-width: 879px)");
+const smoothScroll = () => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
+
+/** Punkte unter den Kacheln; atLogin: gleich auf der Anmeldung starten (Fehlermeldung, erneuter Versuch). */
+function wireLandingTiles(atLogin) {
+  const track = document.getElementById("land-track");
+  const nav = document.getElementById("land-dots");
+  if (!track || !nav) return;
+  // Reihenfolge wie angezeigt: die Anmeldung steht per CSS-order am Ende.
+  const tiles = [...track.querySelectorAll(".land-tile")].sort((a, b) =>
+    (Number(getComputedStyle(a).order) || 0) - (Number(getComputedStyle(b).order) || 0));
+  nav.innerHTML = tiles.map((t, i) => `<button type="button" class="land-dot" aria-label="${esc(t.dataset.title)}"
+    data-tile="${i}"></button>`).join("");
+  const dots = [...nav.children];
+  const mark = (i) => dots.forEach((d, k) => d.setAttribute("aria-current", k === i ? "true" : "false"));
+  mark(0);
+  dots.forEach((d, i) => { d.onclick = () => tiles[i].scrollIntoView({ behavior: smoothScroll(), block: "nearest", inline: "start" }); });
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) mark(tiles.indexOf(e.target));
+  }, { root: track, threshold: 0.6 });
+  tiles.forEach((t) => io.observe(t));
+  if (atLogin && landTilesMq.matches) {
+    track.scrollLeft = track.scrollWidth; // Anmeldung ist die letzte Kachel
+  }
 }
 
 /** Startseite für Besucher ohne gespeichertes Konto. */
@@ -256,13 +283,15 @@ function landingHtml(msg, retry, prefill, direct) {
       <div class="land-top">
         <span class="land-brand"><img src="icon.svg?v=3" alt="">sunshine order</span>
       </div>
+      <div class="land-track" id="land-track">
       <div class="land-hero">
-        <div class="intro">
+        <div class="intro land-tile" data-title="Willkommen">
           <span class="land-tag">Für das Berliner Schulessen-Bestellsystem <b>IBS5</b></span>
           <h2 class="land-title">Schulessen vergessen?<span>Muss doch nicht sein.</span></h2>
           <p class="land-lead">Die App schaut für dich ins Bestellsystem und meldet sich, wenn noch etwas offen ist.
             Bestellen, umbestellen und abbestellen geht direkt hier.</p>
           <div class="land-cta">
+            <button type="button" class="land-tiles-only" data-scroll="anmelden">Jetzt anmelden</button>
             <button type="button" class="land-outline" data-scroll="ablauf">So funktioniert es</button>
           </div>
           <ul class="land-checks"><li>Daten bleiben auf deinem Handy</li><li>Keine Werbung</li><li>Kostenlos</li></ul>
@@ -270,7 +299,7 @@ function landingHtml(msg, retry, prefill, direct) {
         ${landingCard(loginForm(msg, retry, prefill), direct)}
       </div>
 
-      <div class="land-sec" id="ablauf">
+      <div class="land-sec land-tile" id="ablauf" data-title="So funktioniert es">
         <p class="land-kicker">Ablauf</p>
         <h3 class="land-h">So funktioniert es</h3>
         <p class="land-sub">Einmal anmelden, Uhrzeit wählen, den Rest erledigt die Erinnerung.</p>
@@ -281,7 +310,7 @@ function landingHtml(msg, retry, prefill, direct) {
         </div>
       </div>
 
-      <div class="land-sec">
+      <div class="land-sec land-tile" data-title="Funktionen">
         <h3 class="land-h">Funktionen</h3>
         <div class="land-grid">
           <div class="card">${ico('<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>')}<h4>Erinnerung</h4>
@@ -293,7 +322,7 @@ function landingHtml(msg, retry, prefill, direct) {
         </div>
       </div>
 
-      <div class="land-sec">
+      <div class="land-sec land-tile" data-title="Datenschutz">
         <div class="land-privacy">
           <div>
             <p class="land-kicker">Datenschutz</p>
@@ -311,6 +340,8 @@ function landingHtml(msg, retry, prefill, direct) {
       </div>
 
       <div class="land-end"><button type="button" data-scroll="anmelden">Jetzt anmelden</button></div>
+      </div>
+      <nav class="land-dots" id="land-dots" aria-label="Seiten"></nav>
 
       <div class="land-foot">
         <span class="land-brand"><img src="icon.svg?v=3" alt="">sunshine order</span>
@@ -346,9 +377,10 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false, d
     </div>` : landingHtml(msg, retry, prefill, !!(message || retry));
   wireInstallTip();
   // Zur Anmeldung: Eingabemarke gleich ins Feld, sofern das Formular sichtbar ist (iPhone in Safari: erst installieren).
+  if (!adding) wireLandingTiles(!!(message || retry));
   for (const b of document.querySelectorAll("[data-scroll]")) {
     b.onclick = () => {
-      document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: smoothScroll(), block: "start", inline: "start" });
       const cn = document.getElementById("cn");
       if (b.dataset.scroll === "anmelden" && cn?.offsetParent) cn.focus({ preventScroll: true });
     };

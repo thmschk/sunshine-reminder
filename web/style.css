@@ -656,3 +656,55 @@ button.land-outline { background: var(--surface); color: var(--text); border: 1p
 .stat-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .stat-table td { padding: 6px 0; border-bottom: 1px solid var(--surface-variant); }
 .stat-table .num { text-align: right; font-variant-numeric: tabular-nums; padding-left: 12px; }
+
+/* Landing Page schmal: Kacheln zum Wischen statt Scrollen; breit bleibt sie eine lange Seite.
+   .land-hero löst sich auf, damit Intro und Anmeldung eigene Kacheln werden; die Anmeldung kommt ans Ende. */
+.land-dots, .land-tiles-only { display: none; }
+@media (max-width: 879px) {
+  body:has(.landing) { height: 100%; overflow: hidden; }
+  main:has(.landing) { display: flex; flex-direction: column; min-height: 0; padding-bottom: 0; }
+  .landing { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .land-top { padding: 8px 0 0; }
+  .land-track { flex: 1; min-height: 0; display: flex; overflow-x: auto; overflow-y: hidden;
+    scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none;
+    margin: 0 calc(-1 * max(12px, env(safe-area-inset-left))); }
+  .land-track::-webkit-scrollbar { display: none; }
+  .land-hero { display: contents; }
+  .land-tile { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; scroll-snap-stop: always;
+    overflow-y: auto; overscroll-behavior-y: contain; display: flex; flex-direction: column;
+    padding: 12px max(12px, env(safe-area-inset-left)); }
+  /* Senkrecht mittig, bei Überlänge aber von oben scrollbar (justify-content: center schnitte oben ab). */
+  .land-tile > :first-child { margin-top: auto; }
+  .land-tile > :last-child { margin-bottom: auto; }
+  .landing .card.land-tile { border: 0; border-radius: 0; background: none; }
+  .land-login { order: 9; }
+  .land-login > :first-child { margin-top: auto; }
+  .intro .land-title { margin-top: 12px; }
+  .land-tiles-only { display: inline-block; }
+  .land-end { display: none; }
+  .land-dots { display: flex; justify-content: center; gap: 4px; padding: 6px 0 2px; }
+  .land-dot { width: 28px; height: 28px; padding: 0; border: 0; background: none; display: grid; place-items: center; }
+  .land-dot::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--surface-variant); transition: width .2s; }
+  .land-dot[aria-current="true"]::after { width: 22px; border-radius: 4px; background: var(--text); }
+  .land-foot { padding: 4px 0 8px; font-size: .75rem; justify-content: center; text-align: center; gap: 2px 12px; }
+  .land-foot .land-brand { display: none; }
+  /* Karten kompakt: Zahl bzw. Symbol links neben dem Text. */
+  .land-tile .land-grid { gap: 10px; }
+  .land-tile .land-grid .card { display: grid; grid-template-columns: auto 1fr; column-gap: 14px; align-items: start; padding: 14px; }
+  .land-tile .land-grid .card > :first-child { grid-row: span 2; }
+  .land-tile .land-grid h4 { margin: 2px 0 2px; }
+  .land-tile .land-sub { margin-bottom: 14px; }
+}
+@media (max-width: 879px) and (max-width: 360px) {
+  .intro .land-title { font-size: 1.75rem; }
+  .intro .land-lead { font-size: .95rem; }
+}
+@media (max-width: 879px) and (max-height: 700px) {
+  .intro .land-title { margin: 8px 0 10px; }
+  .land-privacy { padding: 18px 16px; gap: 14px; border-radius: 18px; }
+  .land-privacy p { font-size: .85rem; }
+  .land-privacy ol { gap: 6px; }
+  .land-privacy li { padding: 8px 12px; }
+  .land-tile .land-grid .card { padding: 10px 12px; }
+  .land-tile .land-grid p { font-size: .85rem; }
+}
