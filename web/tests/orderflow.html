@@ -1,0 +1,202 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>order-flow.js Tests</title>
+<!-- Ablauf einer Bestellung ohne Oberfläche gegen einen Schein-Client. Über HTTP servieren, Testdaten in fixtures/. -->
+<pre id="out">läuft</pre>
+<script type="module">
+import { CartResponse, DayStatus, MenuEntry, OrderState, parseWeekplan } from "../ibs.js";
+import { ORDER_PRELOAD_MAX_AGE_MS, describeChange, orderCost, submitCart, submitOrder } from "../order-flow.js";
+
+const results = [];
+const test = async (name, fn) => {
+  try { await fn(); results.push(`ok   ${name}`); } catch (e) { results.push(`FAIL ${name}: ${e.message}`); }
+};
+const eq = (a, b, what = "") => {
+  if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${what} erwartet ${JSON.stringify(b)}, war ${JSON.stringify(a)}`);
+};
+
+const p42 = parseWeekplan(await fetch("fixtures/weekplan_kw42_order.html").then((r) => r.text()));
+const line = (date, id, more = {}) => new MenuEntry({ ...p42.days.get(date).entries.find((e) => e.menuLineId === id), ...more });
+/** Tag aus KW 42 mit genau den Linien aus ordered (id → Menge) bestellt. */
+const freshDay = (date, ordered = {}) => new DayStatus(date, Object.keys(ordered).length ? OrderState.ORDERED : OrderState.NOT_ORDERED,
+  p42.days.get(date).entries.map((e) => new MenuEntry({
+    ...e, status: ordered[e.menuLineId] ? "2" : "0", quantityOrdered: ordered[e.menuLineId] ? String(ordered[e.menuLineId]) : "", quantityInCart: "",
+  })));
+
+/** Warenkorbseite (Desktop) mit den Einträgen {date, name, kind}. */
+const cartHtml = (items) => `<div id="shopping-cart"><table><tbody>${items.map((i) => `<tr>
+  <td><span>Mo ${i.date.slice(8, 10)}.${i.date.slice(5, 7)}.${i.date.slice(0, 4)}</span></td>
+  <td><div>${i.name}</div></td><td><div>${i.kind}</div></td><td>1</td><td>1</td></tr>`).join("")}</tbody></table></div>`;
+
+/** Schein-Client: items = eigene Einträge, page = fremde Einträge wie auf der Warenkorbseite. */
+class FakeClient {
+  constructor({ items = [], page = [], failAdd = false } = {}) {
+    Object.assign(this, { items, page, failAdd, calls: [], submitted: false });
+  }
+  total() { return this.items.length + this.page.length; }
+  async cart() { this.calls.push("cart"); return new CartResponse(true, null, this.total()); }
+  async cartPage() { this.calls.push("cartPage"); return cartHtml([...this.items.map((e) => ({ date: e.date, name: e.name, kind: "Neubestellung" })), ...this.page]); }
+  async clearCart(c, date) { this.calls.push(`clear ${date}`); this.items = this.items.filter((x) => x.date !== date); return new CartResponse(true, null, this.total()); }
+  async addToCart(e) {
+    this.calls.push(`add ${e.date} ${e.menuLineId}`);
+    if (this.failAdd && e.menuLineId === this.failAdd) return new CartResponse(false, "ausverkauft", this.total());
+    this.items.push(e);
+    return new CartResponse(true, null, this.total());
+  }
+  async cancelInCart(e) { this.calls.push(`cancel ${e.date}`); this.items.push(e); return new CartResponse(true, null, this.total()); }
+  async submitCart() { this.calls.push("submit"); this.submitted = true; this.items = []; this.page = []; return new CartResponse(true, null, 0); }
+  async discardCart() { this.calls.push("discard"); this.items = []; this.page = []; }
+}
+/** Schreibende Aufrufe am Warenkorb (alles außer Lesen). */
+const writes = (c) => c.calls.filter((x) => x !== "cart" && x !== "cartPage");
+
+/**
+ * Laden wie collect: erster Aufruf (preload, vor dem Warenkorb) liefert before, jeder weitere after;
+ * je {Datum: {Linie: Menge}} oder für after eine Funktion Datum → Tag. Merkt die Optionen.
+ */
+const loader = (before, after) => {
+  const seen = [];
+  const load = async (c, ds, opts) => {
+    seen.push(opts);
+    if (seen.length === 1) return ds.map((d) => freshDay(d, before[d]));
+    return ds.map((d) => (typeof after === "function" ? after(d) : freshDay(d, after[d])));
+  };
+  load.seen = seen;
+  return load;
+};
+const schoolDay = () => true;
+/** Optionen für submitOrder; ask liefert choice und merkt sich, was gefragt wurde. */
+const flow = (c, { choice = "mine", load, days = [], budget = async () => {} } = {}) => {
+  const asked = [];
+  const busy = [];
+  return {
+    asked, busy,
+    opts: {
+      days, schoolDay, load, budget,
+      withClient: (fn) => fn(c),
+      ask: async (changes, cart) => { asked.push({ lines: changes.map(describeChange), cart }); return choice; },
+      onBusy: (on) => busy.push(on),
+    },
+  };
+};
+const order12 = [{ date: "2026-10-12", current: null, target: line("2026-10-12", "827") }];
+
+await test("Rückfrage listet fremde Warenkorb-Einträge; „Alles abschicken“ nimmt sie mit", async () => {
+  const c = new FakeClient({ page: [{ date: "2026-10-20", name: "Linseneintopf", kind: "Neubestellung" }] });
+  const load = loader({}, { "2026-10-12": { 827: 1 } });
+  const f = flow(c, { choice: "all", load });
+  const r = await submitOrder(order12, f.opts);
+  eq(f.asked.length, 1, "einmal gefragt");
+  eq(f.asked[0].cart.total, 1, "Zahl laut IBS5");
+  eq(f.asked[0].cart.others.map((i) => [i.date, i.name, i.kind]), [["2026-10-20", "Linseneintopf", "Neubestellung"]], "fremde Einträge");
+  eq(f.asked[0].lines.length, 1, "eine Zeile je Änderung");
+  eq(/bestellen/.test(f.asked[0].lines[0]), true, `Zeile: ${f.asked[0].lines[0]}`);
+  eq([r.kind, r.othersInCart, c.submitted], ["done", 1, true], r.reason);
+  eq(f.busy, [true, false, true, false], "Fortschritt um Warenkorb und Abschicken");
+});
+
+await test("Eigene Tage im Warenkorb zählen nicht als fremd", async () => {
+  const c = new FakeClient({ items: [line("2026-10-12", "828")] });
+  const f = flow(c, { choice: false, load: loader({}, {}) });
+  await submitOrder(order12, f.opts);
+  eq([f.asked[0].cart.total, f.asked[0].cart.others], [1, []]);
+});
+
+await test("Abbruch bei Nein: kein Budget, kein Laden, nichts am Warenkorb", async () => {
+  const c = new FakeClient({ page: [{ date: "2026-10-20", name: "Linsen", kind: "Neubestellung" }] });
+  const load = loader({}, {});
+  let budgeted = 0;
+  const f = flow(c, { choice: false, load, budget: async () => { budgeted++; } });
+  const r = await submitOrder(order12, f.opts);
+  eq(r, { kind: "cancelled" });
+  eq([budgeted, load.seen.length, writes(c)], [0, 0, []]);
+  eq(f.busy, [true, false], "Fortschritt nur um das Nachsehen");
+});
+
+await test("Warenkorb nicht lesbar: nicht gefragt, nichts angefasst (step cart)", async () => {
+  const c = new FakeClient();
+  const f = flow(c, { load: loader({}, {}) });
+  f.opts.withClient = async () => { throw new Error("Netz weg"); };
+  const r = await submitOrder(order12, f.opts);
+  eq([r.kind, r.step, r.reason, f.asked.length], ["aborted", "cart", "Netz weg", 0]);
+});
+
+await test("Budget: Kosten je Änderung, Verwerfen kostet extra", async () => {
+  const units = [];
+  const budget = async (n) => { units.push(n); };
+  await submitOrder(order12, flow(new FakeClient(), { load: loader({}, { "2026-10-12": { 827: 1 } }), budget }).opts);
+  const c = new FakeClient({ page: [{ date: "2026-10-20", name: "Linsen", kind: "Neubestellung" }] });
+  const r = await submitOrder(order12, flow(c, { choice: "discard", load: loader({}, { "2026-10-12": { 827: 1 } }), budget }).opts);
+  eq(units, [orderCost(order12), orderCost(order12) + 4]);
+  eq([r.kind, r.othersInCart, c.calls.includes("discard")], ["done", 0, true], r.reason);
+});
+
+await test("Budget erschöpft: abgebrochen, bevor der Warenkorb angefasst wird", async () => {
+  const c = new FakeClient();
+  const load = loader({}, {});
+  const r = await submitOrder(order12, flow(c, { load, budget: async () => { throw new Error("Die App macht eine Pause"); } }).opts);
+  eq([r.kind, r.reason, writes(c), load.seen.length], ["aborted", "Die App macht eine Pause", [], 0]);
+});
+
+await test("Laden: preload kurz zwischengespeichert, verify über die Historie, überall schoolDay", async () => {
+  const c = new FakeClient();
+  const load = loader({}, { "2026-10-12": { 827: 1 } });
+  const r = await submitOrder(order12, flow(c, { load }).opts);
+  eq(r.kind, "done", r.reason);
+  eq(load.seen.map((o) => [o.fresh ?? false, o.history ?? false, o.maxAgeMs ?? null, o.schoolDay === schoolDay]),
+    [[false, false, ORDER_PRELOAD_MAX_AGE_MS, true], [true, true, null, true]]);
+});
+
+await test("Abbestellt, danach leerer Tag: unbestätigt statt erledigt", async () => {
+  const cancel13 = [{ date: "2026-10-13", current: line("2026-10-13", "828"), target: null }];
+  const empty = await submitOrder(cancel13, flow(new FakeClient(), {
+    load: loader({ "2026-10-13": { 828: 1 } }, (d) => new DayStatus(d, OrderState.NO_OFFER)),
+  }).opts);
+  eq([empty.kind, empty.missing], ["unconfirmed", ["2026-10-13"]], empty.reason);
+  const read = await submitOrder(cancel13, flow(new FakeClient(), { load: loader({ "2026-10-13": { 828: 1 } }, {}) }).opts);
+  eq(read.kind, "done", `gelesener Tag ohne Bestellung: ${read.reason}`);
+});
+
+await test("Rollback: abgelehnt → Warenkorb wie vorher, nichts abgeschickt", async () => {
+  // Im Warenkorb lag für den 12. schon 828 (Menge 1); die neue Wahl 827 lehnt IBS5 ab.
+  const old = line("2026-10-12", "828", { quantityInCart: "1" });
+  const c = new FakeClient({ items: [old], failAdd: "827" });
+  const days = [new DayStatus("2026-10-12", OrderState.IN_CART, [old, line("2026-10-12", "827")])];
+  const r = await submitOrder(order12, flow(c, { days, load: loader({}, {}) }).opts);
+  eq(r.kind, "aborted", r.reason);
+  eq(/ausverkauft/.test(r.reason), true, `Grund: ${r.reason}`);
+  eq(writes(c), ["clear 2026-10-12", "add 2026-10-12 827", "clear 2026-10-12", "add 2026-10-12 828"]);
+  eq([c.submitted, c.items.map((e) => e.menuLineId)], [false, ["828"]], "Warenkorb wie vorher");
+});
+
+await test("Rollback: „Verwerfen“ legt nichts zurück", async () => {
+  const old = line("2026-10-12", "828", { quantityInCart: "1" });
+  const c = new FakeClient({ items: [old], page: [{ date: "2026-10-20", name: "Linsen", kind: "Neubestellung" }], failAdd: "827" });
+  const days = [new DayStatus("2026-10-12", OrderState.IN_CART, [old])];
+  const r = await submitOrder(order12, flow(c, { choice: "discard", days, load: loader({}, {}) }).opts);
+  eq(r.kind, "aborted", r.reason);
+  eq(writes(c).filter((x) => x.startsWith("add")), ["add 2026-10-12 827"], "kein Zurücklegen");
+});
+
+await test("Nur den Warenkorb: abschicken wie gesehen, verwerfen, Budget", async () => {
+  const units = [];
+  const budget = async (n) => { units.push(n); };
+  const seen = { total: 1, others: [{ date: "2026-10-12", name: "Hörnchennudeln", kind: "Neubestellung" }] };
+  const c = new FakeClient({ page: seen.others });
+  const loaded = [];
+  const ordered = async (cl, ds, opts) => { loaded.push(opts); return ds.map((d) => freshDay(d, { 827: 1 })); };
+  const sent = await submitCart(true, seen, { withClient: (fn) => fn(c), schoolDay, budget, load: ordered });
+  eq([sent.kind, c.submitted], ["done", true], sent.reason);
+  eq(loaded.map((o) => [o.fresh, o.schoolDay === schoolDay]), [[true, true]], "frisch nachgeprüft");
+  const d = new FakeClient({ page: seen.others });
+  const gone = await submitCart(false, seen, { withClient: (fn) => fn(d), schoolDay, budget });
+  eq([gone.kind, d.calls.includes("discard"), d.submitted], ["done", true, false]);
+  eq(units, [8 + 2, 4]);
+  const e = new FakeClient({ page: seen.others });
+  const paused = await submitCart(true, seen, { withClient: (fn) => fn(e), schoolDay, budget: async () => { throw new Error("Pause"); } });
+  eq([paused.kind, paused.reason, writes(e)], ["aborted", "Pause", []]);
+});
+
+const failed = results.filter((r) => r.startsWith("FAIL")).length;
+document.getElementById("out").textContent = `${results.join("\n")}\n\n${failed ? `${failed} FEHLGESCHLAGEN` : "ALLE OK"}`;
+</script>

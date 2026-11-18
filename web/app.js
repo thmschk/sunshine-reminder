@@ -1,21 +1,25 @@
 import {
   DAYS_AHEAD, DEFAULT_CHECK, De, IbsAuthError, IbsClient, OrderState, clampDaysAhead,
-  addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, placeOrders, submitCartAsSeen, targetDates, todayBerlin, weekdayNo,
+  addDays, cartOthers, changeKind, collect, daysFromJson, daysToJson, isoWeek, targetDates, todayBerlin, weekdayNo,
 } from "./ibs.js";
+import { describeChange, submitCart, submitOrder } from "./order-flow.js";
 import { freezeWrites, kvClear, kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
-import { b64ToBytes } from "./base64.js";
 import {
   accountKey, accountLabel, dayStore, loadAccounts, loadActive, removeAccount, renameAccount, saveActive, upsertAccount,
 } from "./accounts.js";
 import * as Sdui from "./sdui.js";
-import { IbsBudgetError, IbsPausedError, budgetFor, guardHooks, probeResume, resume, unmetered } from "./guard.js";
+import { IbsBudgetError, IbsPausedError, guardHooks, probeResume, resume } from "./guard.js";
 import { login, withSession } from "./session.js";
 import { PAUSE_TITLE, friendly } from "./errors.js";
-import { missedSlots, renewPush } from "./push.js";
+import { missedSlots } from "./push.js";
+import {
+  OPERATOR_LOST, healPush, initPushClient, operatorLost, pendingWrites, pushDisable, pushEnable as enablePush, pushMakeOperator,
+  pushSetMorning, pushSetTime, pushSetWeekdays, pushTest, runPushTest,
+} from "./push-client.js";
 import { LEADS, addEvent, dueEvents, eventLine, eventsFor, loadEvents, needsCancel, noMealDates, removeEvent } from "./events.js";
 import {
-  askLater, askWithin, askedLater, holidayOn, loadHolidays, loadMealPref, nextHoliday, openWeeks, rangeText, saveMealPref, skipDates,
-  unanswered, weekText,
+  askLater, askWithin, askedLater, holidayOn, loadHolidays, loadMealPref, nextHoliday, openWeeks, rangeText, saveMealPref, schoolDayIn,
+  skipDates, unanswered, weekText,
 } from "./holidays.js";
 
 // Herkunft: Ansichten und Texte folgen der Android-Fassung (bis 6160aed).
@@ -32,6 +36,9 @@ const DAY_LIST_LENGTH = 5;
 // 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
 const DEFAULT_PUSH_TIME = "17:00";
 const DEFAULT_MORNING_TIME = "07:00";
+/** Frühere Adresse der App: dort keine Erinnerung mehr, nur noch der Hinweis auf den Umzug. */
+const MOVED_TO = "https://sunshine-order.de/";
+const movedHere = location.hostname === "sunshine.thomschke.info";
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in diesem Browser, in
 // IndexedDB, damit auch der Service Worker sie beim Weckruf lesen kann. Beim Start einmal in den
 // Speicher geladen; vorher genutztes localStorage wird übernommen.
@@ -60,6 +67,8 @@ async function loadStore() {
   if (Array.isArray(wd) && wd.length) store.pushWeekdays = wd;
   store.lastOk = (await kvGet("lastOk")) || null;
   store.lastPushOk = (await kvGet("lastPushOk")) || null;
+  store.operator = await kvGet("operator");
+  store.wasOperator = (await kvGet("wasOperator")) === true;
 }
 /** Gespeichertes Konto des gewählten Reiters, sonst das erste. */
 const loadCreds = () => store.accounts.find((a) => a.customerNo === store.active) ?? store.accounts[0] ?? null;
@@ -190,8 +199,13 @@ function nextView() {
   viewAbort = new AbortController();
   return ++viewSeq;
 }
-/** Zuletzt gezeichnete Startseite; der Ferien-Dialog überlebt das zweite Zeichnen und zeichnet danach damit neu. */
+/**
+ * Zuletzt gezeichnete Startseite samt Ansichtsnummer (my); der Ferien-Dialog überlebt das zweite
+ * Zeichnen und zeichnet danach damit neu, sofern sie noch die aktuelle Ansicht ist.
+ */
 let homeState = null;
+/** Je Kundennummer: wann die Übersicht den Zwischenspeicher zuletzt mit der Bestellhistorie abgeglichen hat. */
+const historySyncAt = new Map();
 
 /** Anmeldeformular der Startseite. */
 function loginForm(msg, retry, prefill) {
@@ -643,9 +657,11 @@ async function showHome(fresh = false) {
   if (usable) await renderHome(my, creds, daysFromJson(cached.days), { staleAt: cached.at });
   else $app.innerHTML = `${kidTabs()}<p class="muted" role="status">${progressText("Wochenplan wird geladen")}</p>${progressBar()}`;
 
+  // Ferientage ohne Angebot sind kein „unklar“ (collect, schoolDay).
+  const schoolDay = schoolDayIn(await loadHolidays());
   let days;
   try {
-    days = await withLogin(creds, (c) => collect(c, dates, { fresh, onProgress: setProgress, history: true, signal, peek }));
+    days = await withLogin(creds, (c) => collect(c, dates, { fresh, onProgress: setProgress, history: true, signal, peek, schoolDay }));
   } catch (e) {
     if (my !== viewSeq) return;
     if (e instanceof IbsAuthError && !client.token) {
@@ -693,6 +709,7 @@ async function showHome(fresh = false) {
     return;
   }
   if (client.dayView) kvSet("ibsDayView", true).catch(() => {});
+  historySyncAt.set(creds.customerNo, Date.now());
   kvSet(lastKey, { at: Date.now(), from: today, daysAhead: cfg.daysAhead, customerNo: creds.customerNo, days: daysToJson(days) })
     .catch(() => {});
   await rememberName(creds);
@@ -737,7 +754,7 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const relevant = days.filter((d) => !noMeal.has(d.date) && !skip.has(d.date));
   const ferienAsk = await ferienQuestion(ferien, pref, today, creds);
   if (my !== viewSeq) return;
-  homeState = { creds, days: allDays, staleAt };
+  homeState = { my, creds, days: allDays, staleAt };
 
   $app.innerHTML = `
     ${staleAt ? progressBar() : ""}
@@ -774,9 +791,10 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   if (now) now.onclick = () => showOrder(relevant.find((d) => d.isActionable).date);
   for (const b of $app.querySelectorAll("[data-cancel]")) b.onclick = () => showOrder(b.dataset.cancel);
   if (ferienAsk) {
+    // Neu zeichnen nur, solange die Startseite noch die aktuelle Ansicht ist (nicht etwa die Bestellansicht nach Antippen einer Meldung).
     const ask = () => showFerien(creds, ferienAsk.h, () => {
       const st = homeState;
-      if (st?.creds.customerNo === creds.customerNo) renderHome(viewSeq, st.creds, st.days, { staleAt: st.staleAt });
+      if (st?.my === viewSeq && st.creds.customerNo === creds.customerNo) renderHome(st.my, st.creds, st.days, { staleAt: st.staleAt });
     });
     if (ferienAsk.popup) ask();
     else if (ferienAsk.hint) document.getElementById("b-ferien").onclick = ask;
@@ -800,10 +818,13 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
     .format(new Date(staleAt || Date.now()));
   const lastToday = store.push ? await kvGet("lastTodayOk").catch(() => null) : null;
+  const pushLog = store.push ? await kvGet("pushLog").catch(() => null) : null;
   if (my !== viewSeq) return;
   const notes = [
     store.push && store.lastPushOk ? `Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "",
     lastToday ? `Morgenmeldung zuletzt ${esc(when(lastToday.at))}${lastToday.silent ? " (still)" : ""}` : "",
+    operatorLost() ? esc(OPERATOR_LOST) : "",
+    ...pushLogLines(pushLog),
   ].filter(Boolean);
   const pushInfo = notes.length ? ` · <button type="button" id="b-foot-more" class="linklike" aria-expanded="${footMoreOpen}"
     aria-controls="foot-more">Meldungen ${footMoreOpen ? "▾" : "▸"}</button><span id="foot-more"${footMoreOpen ? "" : " hidden"}>${
@@ -826,6 +847,45 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
 
 /** Fußzeile „Meldungen“ aufgeklappt; gilt, bis die Seite neu lädt (wie die Bereiche der Einstellungen). */
 let footMoreOpen = false;
+
+const PUSH_KINDS = { check: "Erinnerung", today: "Morgenmeldung", test: "Test", "today-test": "Test morgens", alarm: "Alarm" };
+/** „12 s“ bzw. „3 min“. */
+const shortDur = (ms) => (ms < 90000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60000)} min`);
+
+/**
+ * Protokoll der Weckrufe aus dem Service Worker (kv pushLog, siehe pushLogger in sw.js: {t, k, s, d?,
+ * on?, sent?}, neueste zuletzt) als fertiges HTML, je Weckruf eine Zeile, neueste oben: Uhrzeit, Art,
+ * Schritte (rx Empfang, ph Platzhalter, ibs Prüfung, shown Meldung, unsub abgemeldet, fail), Dauer
+ * vom Empfang bis zur Meldung, „still“ (Titel der Meldung endet so), „offline“ (on: navigator.onLine),
+ * Verzug vom Server bis zum Gerät, Fehler. Ein Weckruf beginnt mit „rx“; Einträge davor zählen zum
+ * vorigen, die am Anfang des Puffers (Rest eines herausgefallenen Weckrufs) entfallen.
+ */
+function pushLogLines(log, max = 10) {
+  if (!Array.isArray(log)) return [];
+  const runs = [];
+  for (const e of log) {
+    if (!e || typeof e !== "object" || !Number.isFinite(e.t)) continue;
+    if (!runs.length && e.s !== "rx") continue;
+    if (e.s === "rx" || !runs.length || runs.at(-1).k !== e.k) runs.push({ k: e.k, list: [] });
+    runs.at(-1).list.push(e);
+  }
+  return runs.slice(-max).reverse().map(({ k, list }) => {
+    const rx = list.find((e) => e.s === "rx");
+    const shown = list.find((e) => e.s === "shown");
+    const fail = list.find((e) => e.s === "fail");
+    const sent = list.find((e) => Number.isFinite(e.sent))?.sent;
+    const start = rx ?? list[0];
+    const parts = [
+      `${when(start.t)} ${PUSH_KINDS[k] ?? String(k ?? "?")}: ${list.map((e) => String(e.s ?? "?")).join("→")}`,
+      rx && shown ? shortDur(Math.max(0, shown.t - rx.t)) : "",
+      /\(still\)$/.test(String((shown ?? list.find((e) => e.s === "ph"))?.d ?? "")) ? "still" : "",
+      list.some((e) => e.on === false) ? "offline" : "",
+      sent != null && rx ? `Verzug ${shortDur(Math.max(0, rx.t - sent * 1000))}` : "",
+      fail ? `Fehler${fail.d ? `: ${fail.d}` : ""}` : "",
+    ];
+    return `<span class="push-log${fail ? " error" : ""}">${esc(parts.filter(Boolean).join(" · "))}</span>`;
+  });
+}
 
 /** „heute 12:01“, „gestern 12:01“ oder „03.10. 12:01“. */
 function when(ms) {
@@ -874,7 +934,7 @@ function pushStale() {
  */
 async function pushOfferDue() {
   if (store.push || !pushSupported || (isIos && !standalone) || !loadCreds()) return false;
-  if (Notification.permission === "denied" || location.hostname === "sunshine.thomschke.info") return false;
+  if (Notification.permission === "denied" || movedHere) return false;
   return !(await kvGet("pushOfferDismissed").catch(() => false));
 }
 
@@ -1133,12 +1193,11 @@ function dayRow(d, strip = null, dayEvents = [], holiday = null, skip = false, i
 
 // ---------------------------------------------------------------- Bestellen
 
-// Anfragen einer Bestellung höchstens, CORS-Vorabfragen mitgezählt: je Tag Vorab-Laden,
-// Leeren, Hinzufügen und Nachladen, dazu Warenkorb-Zahl, Abschicken, Bestellhistorie
-// und vielleicht ein Login. Meist sind es weniger (placeOrders).
-const orderCost = (changes) => 8 * changes.length + 8;
-/** Vor dem Bestellen gilt ein geladener Tag so lange als aktuell: die Bestellansicht hat ihn meist gerade geladen. */
-const ORDER_PRELOAD_MAX_AGE_MS = 2 * 60 * 1000;
+/**
+ * So alt darf ein zwischengespeicherter Tag in der Bestellansicht sein, außer die Übersicht hat
+ * den Zwischenspeicher vor höchstens dieser Zeit mit der Bestellhistorie abgeglichen (historySyncAt).
+ */
+const ORDER_VIEW_MAX_AGE_MS = 5 * 60 * 1000;
 /**
  * Läuft gerade eine Bestellung (auch die Rückfrage davor)? Dann wechselt die
  * Seite nicht, wenn eine Meldung angetippt wird: der Warenkorb wäre halb gefüllt.
@@ -1167,6 +1226,9 @@ async function showOrder(focusDate = null) {
   const client = clientFor(creds.customerNo);
   const my = nextView();
   const { signal } = viewAbort;
+  // Ob IBS5 nur Tagesansichten liefert, entscheidet, ob eine Woche in einer Anfrage kommt (loadWeeks).
+  client.dayView ||= !!(await kvGet("ibsDayView").catch(() => false));
+  if (my !== viewSeq) return;
   chrome(false);
   $header.hidden = true; // eigener Kopf: nur „Bestellen“ und „Zurück“
   // Bei mehreren Kindern steht im Kopf, für wen bestellt wird.
@@ -1184,7 +1246,7 @@ async function showOrder(focusDate = null) {
   // Wer selbst scrollt, wird nicht mehr zum angetippten Tag zurückgeholt.
   let userScrolled = false;
   for (const ev of ["wheel", "touchmove", "keydown"]) {
-    addEventListener(ev, () => { userScrolled = true; }, { once: true, passive: true });
+    addEventListener(ev, () => { userScrolled = true; }, { once: true, passive: true, signal });
   }
   const $result = document.getElementById("o-result");
   const form = document.getElementById("f-order");
@@ -1220,17 +1282,7 @@ async function showOrder(focusDate = null) {
     submitting = true;
     lock(true);
     working(true);
-    const discard = async (c) => {
-      await c.discardCart();
-      const left = (await c.cart()).totalItemsInCart;
-      return left === 0 ? { kind: "done" }
-        : { kind: "aborted", reason: `Danach liegen noch ${left ?? "?"} Einträge im Warenkorb — bitte auf der Bestellseite nachsehen.` };
-    };
-    const outcome = await budgetFor(send ? 8 + 2 * seen.others.length : 4)
-      .then(() => withLogin(creds, (c) => unmetered(c, () => (send
-        ? submitCartAsSeen(c, seen.others, { reload: (ds) => collect(c, ds, { fresh: true }) })
-        : discard(c)))))
-      .catch((e) => ({ kind: "aborted", reason: e.message }));
+    const outcome = await submitCart(send, seen, { withClient: (fn) => withLogin(creds, fn), schoolDay });
     working(false);
     if (outcome.kind === "done") {
       resultDialog("done", send ? "Abgeschickt" : "Warenkorb verworfen",
@@ -1276,6 +1328,7 @@ async function showOrder(focusDate = null) {
     refresh();
   };
   const ferien = await loadHolidays();
+  const schoolDay = schoolDayIn(ferien);
   // Die bestellte Linie, falls sie sich noch ändern lässt.
   const orderedOf = (d) => d.entries.find((e) => e.isOrdered && e.selectable) ?? null;
   const isChangeable = (d) =>
@@ -1352,7 +1405,10 @@ async function showOrder(focusDate = null) {
     const $moreWeeks = document.getElementById("b-more-weeks");
     $moreWeeks.hidden = true;
     $more.hidden = false;
-    const get = (dates) => withLogin(creds, (c) => collect(c, dates, { signal }));
+    // Die Bestellansicht lädt ohne Bestellhistorie: anderswo Bestelltes zeigt nur ein frisch geladener
+    // Tag. Hat die Übersicht den Zwischenspeicher gerade mit der Historie abgeglichen, reicht er.
+    const synced = () => Date.now() - (historySyncAt.get(creds.customerNo) || 0) < ORDER_VIEW_MAX_AGE_MS;
+    const get = (dates) => withLogin(creds, (c) => collect(c, dates, { signal, maxAgeMs: synced() ? null : ORDER_VIEW_MAX_AGE_MS, schoolDay }));
     const offered = (ds) => ds.some((d) => d.state !== OrderState.NO_OFFER);
     const anyHoliday = (ds) => ds.some((d) => holidayOn(ferien, d));
     let error = null;
@@ -1363,7 +1419,12 @@ async function showOrder(focusDate = null) {
         const dates = [0, 1, 2, 3, 4].map((i) => addDays(mon, i)).filter((d) => d >= today);
         if (!dates.length) continue;
         $more.textContent = `KW ${isoWeek(mon)[1]} wird geladen …`;
-        let week = await get(dates.slice(0, 2));
+        // Wochenplan: eine Anfrage bringt die ganze Woche. Tagesansicht (je Tag eine Anfrage):
+        // erst Mo/Di, der Rest nur, wenn die Woche nicht das Ende ist.
+        const head = dates.slice(0, 2);
+        const whole = client.dayView ? null : await get(dates);
+        if (!current()) return;
+        let week = whole ? whole.filter((d) => head.includes(d.date)) : await get(head);
         if (!current()) return;
         const holidayWeek = dates.every((d) => holidayOn(ferien, d));
         const stop = dates.length === 5 && offered(all) && !offered(week) && !anyHoliday(dates.slice(0, 2));
@@ -1372,7 +1433,7 @@ async function showOrder(focusDate = null) {
           continue;
         }
         cursor.n++;
-        if (!stop) week = week.concat(await get(dates.slice(2)));
+        if (!stop) week = week.concat(whole ? whole.filter((d) => !head.includes(d.date)) : await get(dates.slice(2)));
         if (!current()) return;
         all = all.concat(week);
         if (stop || (!offered(week) && offered(all) && !anyHoliday(dates))) {
@@ -1434,12 +1495,6 @@ async function showOrder(focusDate = null) {
       : `${changes.length} Änderungen abschicken`;
   }
 
-  const describe = (c) => {
-    const day = De.chip(c.date);
-    return { ORDER: `${day} bestellen: ${c.target?.name}`, SWITCH: `${day} umbestellen auf: ${c.target?.name}`,
-      CANCEL: `${day} abbestellen: ${c.current?.name}` }[changeKind(c)];
-  };
-
   form.addEventListener("change", refresh);
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -1449,33 +1504,16 @@ async function showOrder(focusDate = null) {
 
     submitting = true;
     lock(true);
-    // Abgeschickt wird immer der ganze Warenkorb: erst nachsehen, was sonst darin liegt.
-    working(true);
-    const cart = await withLogin(creds, (c) => cartOthers(c, changes.map((c) => c.date))).catch((e) => ({ error: e }));
-    working(false);
-    if (cart.error) {
-      resultDialog("error", "Nichts abgeschickt", `<p>${esc(cart.error.message)}</p>`);
+    const outcome = await submitOrder(changes, {
+      days: all, withClient: (fn) => withLogin(creds, fn), schoolDay, onBusy: working,
+      ask: (cs, cart) => orderDialog(cs.map(describeChange), cart),
+    });
+    if (outcome.kind === "cancelled") return release();
+    if (outcome.step === "cart") {
+      resultDialog("error", "Nichts abgeschickt", `<p>${esc(outcome.reason)}</p>`);
       return release();
     }
-    const choice = await orderDialog(changes.map(describe), cart);
-    if (!choice) return release();
-    const discard = choice === "discard";
-
-    working(true);
-    // Neu- wie Abbestellungen (Menge 1 bzw. −1): ein Abbruch legt sie wieder in den Warenkorb.
-    const previouslyInCart = discard ? [] : all.flatMap((d) => d.entries.filter((e) => e.quantityInCart !== "" && e.selectable));
-    const othersInCart = choice === "all" ? cart.others.length : 0;
-    // Mit halb gefülltem Warenkorb darf die Stundenbremse nicht greifen: vorher prüfen, ob alles passt.
-    const outcome = await budgetFor(orderCost(changes) + (discard ? 4 : 0))
-      .then(() => withLogin(creds, (c) => unmetered(c, () =>
-        placeOrders(c, changes, {
-          previouslyInCart, othersInCart, discard,
-          reload: (ds) => collect(c, ds, { fresh: true }),
-          preload: (ds) => collect(c, ds, { maxAgeMs: ORDER_PRELOAD_MAX_AGE_MS }),
-          verify: (ds) => collect(c, ds, { fresh: true, history: true }),
-        }))))
-      .catch((e) => ({ kind: "aborted", reason: e.message }));
-    working(false);
+    const { othersInCart } = outcome;
     const back = document.getElementById("b-back");
     if (back) back.disabled = false;
 
@@ -2048,6 +2086,7 @@ function pushBoxHtml(message = "") {
       ? "Auf dem iPhone nur, wenn die Seite über Teilen → „Zum Home-Bildschirm“ installiert ist und von dort geöffnet wird."
       : "Dieser Browser kann keine Erinnerungen empfangen." }) + daysAheadRow();
   }
+  if (movedHere) return srow("bell", "Erinnerung", { value: "umgezogen", hint: "Erinnerungen gibt es nur noch unter sunshine-order.de." }) + daysAheadRow();
   const on = !!store.push;
   const time = on ? store.push.time : DEFAULT_PUSH_TIME;
   // Uhrzeit und Tage gehören zur Erinnerung: bei ausgeschalteter gedimmt und gesperrt.
@@ -2058,7 +2097,9 @@ function pushBoxHtml(message = "") {
     ${srow("key", "Betreiber-Gerät", { hint: "bekommt die Alarme der täglichen Selbstprüfung" })}
     <div class="group-pad">${passwordField("admin-key", 'placeholder="Betreiber-Schlüssel"')}
       <div class="row"><button id="b-push-admin" class="text u-pl0">Als Betreiber-Gerät markieren</button></div></div>` : "";
-  return `${msg}
+  const lost = operatorLost() ? `<p class="small muted group-pad" id="operator-lost">${esc(OPERATOR_LOST)}
+    <button type="button" id="b-operator-forget" class="linklike">Ausblenden</button></p>` : "";
+  return `${msg}${lost}
     ${srow("bell", "Erinnerung werktags", { rightHtml: toggle("push-switch", on, "Erinnerung") })}
     ${srow("clock", "Uhrzeit", { hint: "Meldung kommt bis zu 30 min später", cls: off,
       rightHtml: `<input id="push-time" class="time-value" type="time" value="${esc(time)}" step="300" aria-label="Uhrzeit"${dis}>` })}
@@ -2123,18 +2164,22 @@ function wirePushBox(message = "", at = "push") {
   if (sw) sw.onclick = guard(() => (store.push
     ? pushDisable().then(() => kvSet("pushOfferDismissed", true).catch(() => {}))
     : pushEnable(time?.value || DEFAULT_PUSH_TIME)));
-  if (test) test.onclick = () => runPushTest(test);
+  if (test) test.onclick = () => showPushTest(test);
   const msw = document.getElementById("morning-switch");
   if (msw) msw.onclick = guard(() => pushSetMorning(store.push.morning ? null : DEFAULT_MORNING_TIME), "morning");
   const mtest = document.getElementById("b-morning-test");
-  if (mtest) mtest.onclick = () => runPushTest(mtest, "today");
+  if (mtest) mtest.onclick = () => showPushTest(mtest, "today");
   const mtime = document.getElementById("morning-time");
   if (mtime) mtime.onchange = guard(() => pushSetMorning(mtime.value), "morning");
+  const forget = document.getElementById("b-operator-forget");
+  if (forget) forget.onclick = () => {
+    store.wasOperator = false;
+    kvSet("wasOperator", false).catch(() => {});
+    document.getElementById("operator-lost")?.remove();
+  };
   const adm = document.getElementById("b-push-admin");
   if (adm) adm.onclick = guard(async () => {
-    const p = await currentPush();
-    await api("POST", `/subscriptions/${p.id}/admin`, null, p.secret,
-      { "X-Admin-Key": document.getElementById("admin-key").value });
+    await pushMakeOperator(document.getElementById("admin-key").value);
     alert("Dieses Gerät ist jetzt Betreiber-Gerät.");
   });
   // Die ganze Zeile öffnet die Zeitauswahl, nicht nur die Ziffern.
@@ -2159,24 +2204,6 @@ function wirePushBox(message = "", at = "push") {
   }
 }
 
-async function api(method, path, body, secret, extra = {}) {
-  const headers = { "Content-Type": "application/json", ...extra };
-  if (secret) headers.Authorization = `Bearer ${secret}`;
-  // Mit Frist: solange eine Änderung läuft, sind z. B. die Wochentage gesperrt.
-  const r = await fetch(`/api${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(20000) })
-    .catch((e) => { throw new Error(e?.name === "TimeoutError" ? "Server antwortet nicht" : `Server nicht erreichbar: ${e.message}`); });
-  if (!r.ok) throw new Error(`Server: HTTP ${r.status}`);
-  return r.json().catch(() => ({}));
-}
-
-/** Gleiche Bytes? a: ArrayBuffer oder null (dann ungleich). */
-function sameBytes(a, b) {
-  if (!a) return false;
-  const x = new Uint8Array(a);
-  return x.length === b.length && x.every((v, i) => v === b[i]);
-}
-
 /** Wo man Benachrichtigungen wieder erlaubt; nach einmal „Blockieren“ fragt der Browser nicht wieder. */
 function blockedText() {
   return isIos ? "Benachrichtigungen sind nicht erlaubt. Einstellungen → Mitteilungen → sunshine order → Mitteilungen erlauben."
@@ -2186,65 +2213,8 @@ function blockedText() {
         + "Benachrichtigungen → Zulassen.";
 }
 
-async function pushEnable(time) {
-  if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") throw new Error(`${blockedText()} Dann hier nochmal einschalten.`);
-  // serviceWorker.ready käme ohne erfolgreiche Registrierung nie zurück.
-  if (!(await swReady)) throw new Error("Dieser Browser kann den Hintergrunddienst für Erinnerungen nicht starten.");
-  const reg = await navigator.serviceWorker.ready;
-  const { publicKey } = await api("GET", "/vapid");
-  const key = b64ToBytes(publicKey);
-  let sub = await reg.pushManager.getSubscription();
-  // Ein Abo zu einem anderen Server-Schlüssel (nach Schlüsselwechsel) kommt nie an: neu abonnieren.
-  if (sub && !sameBytes(sub.options?.applicationServerKey, key)) {
-    await sub.unsubscribe().catch(() => {});
-    sub = null;
-  }
-  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-  const { id, secret } = await api("POST", "/subscriptions", {
-    subscription: sub.toJSON(), time, weekdays: store.pushWeekdays, tz: "Europe/Berlin",
-  });
-  store.push = { id, secret, time, created: Date.now() };
-  await secretSet("push", store.push);
-}
-
-/** Abo frisch aus dem Speicher: der Service Worker legt es bei pushsubscriptionchange womöglich neu an. */
-async function currentPush() {
-  store.push = (await secretGet("push").catch(() => undefined)) ?? store.push;
-  return store.push;
-}
-
-/** Tage merken (auch für den Service Worker) und, wenn die Erinnerung läuft, dem Server melden. */
-async function pushSetWeekdays(weekdays) {
-  const p = await currentPush();
-  if (p) await api("PUT", `/subscriptions/${p.id}`, { weekdays }, p.secret);
-  store.pushWeekdays = weekdays;
-  await kvSet("pushWeekdays", weekdays);
-}
-
-/** Morgenmeldung ein (Uhrzeit) oder aus (null). */
-async function pushSetMorning(morning) {
-  if (morning !== null && !/^\d{2}:\d{2}$/.test(morning)) return;
-  const p = await currentPush();
-  await api("PUT", `/subscriptions/${p.id}`, { morning_time: morning }, p.secret);
-  store.push = { ...p, morning };
-  await secretSet("push", store.push);
-}
-
-async function pushSetTime(time) {
-  if (!/^\d{2}:\d{2}$/.test(time)) return;
-  const p = await currentPush();
-  await api("PUT", `/subscriptions/${p.id}`, { time }, p.secret);
-  store.push = { ...p, time };
-  await secretSet("push", store.push);
-}
-
-/**
- * „Jetzt testen“ mit sichtbarem Ablauf: Weckruf senden, auf die Meldung warten,
- * Erfolg zeigen. Der Service Worker meldet sich, sobald die Meldung angezeigt ist.
- */
-async function runPushTest(btn, kind = "") {
+/** „Jetzt testen“ mit sichtbarem Ablauf: Weckruf senden, auf die Meldung warten, Erfolg zeigen (runPushTest in push-client.js). */
+async function showPushTest(btn, kind = "") {
   btn.disabled = true;
   btn.insertAdjacentHTML("afterend", `<div id="test-status" class="srow-edit">
     <div class="pbar pbar-run"><span></span></div><span class="small muted" id="test-text">Weckruf wird gesendet …</span></div>`);
@@ -2256,92 +2226,12 @@ async function runPushTest(btn, kind = "") {
     btn.disabled = false;
     setTimeout(() => box.remove(), 8000);
   };
-  const shown = new Promise((resolve) => {
-    const onMsg = (ev) => {
-      if (!ev.data?.testShown) return;
-      navigator.serviceWorker.removeEventListener("message", onMsg);
-      resolve(ev.data.testShown);
-    };
-    navigator.serviceWorker.addEventListener("message", onMsg);
-    // Länger als die Frist des Weckrufs im Service Worker (60 s), sonst kommt die Meldung „unbestätigt“ an.
-    setTimeout(() => resolve(null), 75000);
+  const r = await runPushTest(kind, {
+    onSent: () => { if (text()) text().textContent = "Gesendet, das Gerät prüft gerade beim Bestellsystem (bis zu einer Minute) …"; },
   });
-  try {
-    await pushTest(kind);
-    if (text()) text().textContent = "Gesendet, das Gerät prüft gerade beim Bestellsystem (bis zu einer Minute) …";
-  } catch (e) {
-    return finish(`Senden fehlgeschlagen: ${e.message}`, false);
-  }
-  const title = await shown;
+  if (!r.sent) return finish(`Senden fehlgeschlagen: ${r.error.message}`, false);
+  const { title } = r;
   finish(title ? `Meldung angezeigt: „${title}“` : "Gesendet, aber keine Meldung bestätigt. Sind Benachrichtigungen erlaubt?", !!title);
-}
-
-async function pushTest(kind = "") {
-  let tried = null;
-  const send = async () => {
-    const p = await currentPush();
-    tried = p.id;
-    await api("POST", `/subscriptions/${p.id}/test`, kind ? { kind } : null, p.secret);
-  };
-  try {
-    await send();
-  } catch (e) {
-    // Der Server kennt das Abo nicht mehr: neu anlegen (oder die gerade laufende Reparatur
-    // abwarten) und mit der neuen Kennung noch einmal senden.
-    if (!/HTTP 404/.test(e.message)) throw e;
-    await healPush(true);
-    if ((await currentPush())?.id === tried) throw e;
-    await send();
-  }
-}
-
-/**
- * Abo beim Server auffrischen: meldet die aktuelle Abo-Adresse und legt das Abo neu an, wenn
- * der Server es nicht mehr kennt (er löscht es, sobald der Push-Dienst die Adresse ablehnt,
- * und nicht jeder Browser meldet dann pushsubscriptionchange). Beim Öffnen höchstens einmal
- * am Tag; force für „Jetzt testen“ und „Erinnerung reparieren“. true, wenn neu angelegt.
- */
-// Reparaturen nacheinander: zwei gleichzeitige (Öffnen und „Jetzt testen“) legten zwei Abos an,
-// und das Gerät bekäme jeden Weckruf doppelt. Die zweite sieht die neue Kennung und frischt nur auf.
-let healChain = Promise.resolve();
-function healPush(force = false) {
-  const run = healChain.then(() => healPushNow(force));
-  healChain = run.catch(() => {});
-  return run;
-}
-
-async function healPushNow(force) {
-  const p = await currentPush();
-  if (!p || !(await swReady)) return false;
-  if (!force && Date.now() - ((await kvGet("pushHealAt")) || 0) < 86400000) return false;
-  const reg = await navigator.serviceWorker.ready;
-  // Ohne Erlaubnis gibt es kein Abo (Chrome beendet es beim Entzug). Fragen nur auf Knopfdruck (force).
-  if (force && Notification.permission === "default") await Notification.requestPermission().catch(() => {});
-  if (Notification.permission !== "granted") {
-    if (!force) return false;
-    throw new Error(blockedText());
-  }
-  let sub = await reg.pushManager.getSubscription();
-  if (!sub) {
-    const { publicKey } = await api("GET", "/vapid");
-    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
-  }
-  const renewed = await renewPush(p, sub.toJSON(), { weekdays: store.pushWeekdays });
-  await kvSet("pushHealAt", Date.now());
-  // Inzwischen ausgeschaltet: das neue Abo nicht wieder als eingeschaltet ablegen.
-  if (renewed === p || !(await currentPush())) return false;
-  store.push = renewed;
-  await secretSet("push", renewed);
-  return true;
-}
-
-async function pushDisable() {
-  const p = await currentPush();
-  store.push = null;
-  await kvDel("push");
-  if (p) await api("DELETE", `/subscriptions/${p.id}`, null, p.secret).catch(() => {});
-  const reg = await navigator.serviceWorker?.getRegistration();
-  await (await reg?.pushManager.getSubscription())?.unsubscribe();
 }
 
 $reload.onclick = () => showHome(true);
@@ -2352,6 +2242,14 @@ $add.onclick = showEvents;
 const swReady = "serviceWorker" in navigator
   ? navigator.serviceWorker.register("sw.js", { type: "module" }).then(() => true, () => false)
   : Promise.resolve(false);
+initPushClient({ store, swReady, blockedText });
+
+/** Erinnerung einschalten (push-client.js), wenn dieses Gerät dafür taugt. */
+async function pushEnable(time) {
+  if (movedHere) throw new Error("Erinnerungen gibt es nur noch unter sunshine-order.de.");
+  if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
+  return enablePush(time);
+}
 
 // Neue Version ohne Zutun: Installierte Web-Apps bleiben tagelang im Speicher und laden beim
 // Zurückwechseln nicht neu. Beim Zurückkehren nach einer neuen Version fragen; übernimmt ein neuer
@@ -2360,10 +2258,15 @@ let updatePending = false;
 const hadController = !!navigator.serviceWorker?.controller;
 const UPDATED_KEY = "sunshine-updated";
 
-/** Etwas in Arbeit, das ein Neuladen verlöre: Dialog, angefangene Bestellung, Eingabe, laufender Vorgang. */
+/**
+ * Etwas in Arbeit, das ein Neuladen verlöre: Dialog, angefangene oder laufende Bestellung
+ * (Warenkorb, placeOrders: das Ergebnis stünde nirgends), Änderung am Erinnerungs-Abo,
+ * Eingabe, laufender Ladevorgang.
+ */
 function inProgress() {
   const el = document.activeElement;
-  return !!document.querySelector("dialog[open]")
+  return submitting || pendingWrites()
+    || !!document.querySelector("dialog[open]")
     || document.getElementById("o-bar")?.hidden === false
     || !!el?.matches?.("input, textarea, select")
     || !!document.querySelector('#app > p[role="status"]');
@@ -2419,13 +2322,15 @@ navigator.serviceWorker?.addEventListener("message", (ev) => {
 // Antippen der Erinnerung öffnet ./?order=<Tag>[&k=<Kundennummer>] → direkt in die Bestellansicht.
 await loadStore();
 // Umzug: unter der alten Adresse ohne Konto gleich weiter, mit Konto einmal je Gerät das Popup.
-// Anmeldung und Erinnerung hängen an der Adresse, deshalb abmelden statt umleiten.
-const MOVED_TO = "https://sunshine-order.de/";
-const movedHere = location.hostname === "sunshine.thomschke.info";
-if (movedHere && !store.accounts.length) location.replace(MOVED_TO);
+// Anmeldung und Erinnerung hängen an der Adresse, deshalb abmelden statt umleiten. Die Erinnerung
+// meldet sich hier bei jedem Öffnen ab: ein zweites Abo auf demselben IBS5-Konto weckte doppelt.
+// Vor dem Weiterleiten auf die Abmeldung warten (höchstens 3 s), sonst bricht die Navigation sie ab.
+const unsubscribed = movedHere && Promise.race([pushDisable().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
+if (movedHere && !store.accounts.length) unsubscribed.then(() => location.replace(MOVED_TO));
 else if (movedHere && !(await kvGet("movedShown").catch(() => false))) {
   kvSet("movedShown", true).catch(() => {});
   askDialog("Die App ist umgezogen!", `
+    <p>Erinnerungen kommen nur noch unter der neuen Adresse, hier sind sie abgemeldet.</p>
     <p>Bitte hier die Zugangsdaten löschen und die App vom Startbildschirm entfernen.</p>
     <p>Dann unter <b>sunshine-order.de</b> loslegen: auf dem iPhone zuerst über <b>Teilen → Zum Home-Bildschirm</b>
       installieren und dort anmelden. Die Erinnerung ist beim Anmelden angehakt, bitte „Erlauben“ tippen.</p>`,

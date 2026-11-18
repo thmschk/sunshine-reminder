@@ -206,6 +206,8 @@ button:disabled { opacity: .45; cursor: default; }
 .muted { color: var(--on-surface-variant); }
 .small { font-size: .88rem; }
 .error { color: var(--error); }
+/* Protokoll der Weckrufe unter „Meldungen“: eine Zeile je Weckruf, Ziffern gleich breit. */
+.push-log { font-size: .75rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 .days { list-style: none; margin: 0; padding: 0; background: var(--surface); border-radius: 8px; overflow: hidden; }
 /* Zeile heute: das li selbst; übrige Tage: ein Knopf über die ganze Zeile. */
