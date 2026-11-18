@@ -21,21 +21,39 @@ sunshine-order.de, sunshine.thomschke.info {
 		-Server
 	}
 
-	# Hülle, Icons, ferien.json und version.txt immer frisch prüfen lassen, sonst hängt ein Deploy am
-	# Browser-Cache (neue Icons zusätzlich mit ?v= im Manifest, sonst bleibt das
-	# alte beim Installieren hängen).
-	@shell path / *.html *.js *.css *.json *.txt *.webmanifest *.png *.svg
+	# Hülle, ferien.json, version.txt und Bilder ohne ?v= immer frisch prüfen lassen, sonst hängt
+	# ein Deploy am Browser-Cache. Neue Icons bekommen ein neues ?v= (Manifest, sw.js, index.html),
+	# sonst bleibt das alte beim Installieren hängen.
+	@shell {
+		path / *.html *.js *.css *.json *.txt *.webmanifest *.png *.svg
+		not {
+			path *.png *.svg
+			query v=*
+		}
+	}
 	header @shell Cache-Control "no-cache"
+
+	# Bilder mit ?v= ändern sich nie (neue Fassung = neues v); Push-Meldungen laden Icon und
+	# Badge sonst bei jedem Anzeigen neu.
+	@versioned {
+		path *.png *.svg
+		query v=*
+	}
+	header @versioned Cache-Control "public, max-age=31536000, immutable"
 
 	@manifest path *.webmanifest
 	header @manifest Content-Type application/manifest+json
 
-	# max_size passend zu MAX_BODY in server/push/app.py (4096), mit Luft.
+	# max_size passend zu MAX_BODY in server/push/app.py (4096), mit Luft. request_buffers liest
+	# den Body erst ganz ein, bevor er zum Push-Dienst geht: langsame Clients binden dann nur
+	# Caddy, nicht dessen Threads (dort zusätzlich REQUEST_DEADLINE je Anfrage).
 	handle /api/* {
 		request_body {
 			max_size 16KB
 		}
-		reverse_proxy 127.0.0.1:18080
+		reverse_proxy 127.0.0.1:18080 {
+			request_buffers 16KB
+		}
 	}
 
 	# Kurze Adresse der Statistikseite.

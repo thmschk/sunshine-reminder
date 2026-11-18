@@ -6,7 +6,8 @@ services:
     environment:
       VAPID_SUBJECT: "https://sunshine-order.de"
       TZ: Europe/Berlin
-    # ADMIN_KEY (Schlüssel, mit dem ein Gerät sich als Betreiber-Gerät markiert) steht nur auf dem Server.
+    # Nur auf dem Server: ADMIN_KEY (Schlüssel, mit dem ein Gerät sich als Betreiber-Gerät markiert),
+    # optional HEARTBEAT_URL (Totmannschalter, docs/betrieb.md „Überwachung“).
     env_file:
       - path: .env
         required: false
@@ -24,7 +25,17 @@ services:
     security_opt:
       - no-new-privileges:true
     mem_limit: 256m
+    # Höchstens ein halber Kern: der Server (CPX12) trägt auch Caddy und andere Stacks.
+    cpus: 0.5
     pids_limit: 128
+    # 503 bei stehendem Zeitplan oder nur Fehlschlägen (app.py health()); Docker zeigt den Container
+    # dann als unhealthy. Neu gestartet wird er davon nicht, gemeldet wird extern (docs/betrieb.md).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     # Ins Journal des Servers: übersteht das Neuanlegen des Containers beim Deploy
     # (journalctl -t sunshine-push), docker compose logs liest es weiterhin.
     logging:

@@ -23,7 +23,9 @@
 
       <h2>Auf deinem Gerät</h2>
       <p>Kundennummer und Passwort des Bestellsystems sowie der Sdui-Zugangsschlüssel liegen verschlüsselt im
-        Speicher des Browsers. Bestellstand, Termine, Einstellungen und, falls eingerichtet, der Stundenplan der
+        Speicher des Browsers. Das schützt davor, dass jemand die gespeicherten Daten einfach ausliest, etwa aus
+        einer Sicherung; nicht aber vor jemandem, der dein entsperrtes Gerät oder dein Browserprofil benutzt,
+        oder vor veränderter Software dieser Seite. Bestellstand, Termine, Einstellungen und, falls eingerichtet, der Stundenplan der
         nächsten zwei Wochen liegen dort unverschlüsselt. Diese Daten gehen nur direkt an das Bestellsystem IBS5
         bzw. an Sdui. Unter ⚙ → „Abmelden und alles löschen“ entfernst du alles und meldest die Erinnerung
         beim Server ab.</p>
@@ -33,20 +35,32 @@
         <li><b>Seite laden:</b> Der Server sieht deine IP-Adresse und die angefragte Datei. Zugriffs- und
           Fehlerprotokolle einzelner Anfragen sind abgeschaltet.</li>
         <li><b>Erinnerung:</b> Gespeichert werden das Push-Abo (Adresse und Schlüssel des Push-Dienstes deines
-          Browsers), Uhrzeiten, Wochentage und Zeitzone, bis du die Erinnerung ausschaltest oder der Push-Dienst
-          das Abo als ungültig meldet. Zum Wecken geht eine Nachricht über den Push-Dienst deines Browsers
-          (Google, Apple oder Mozilla); sie enthält keine Namen und keine Bestellungen.</li>
+          Browsers), Uhrzeiten, Wochentage, Zeitzone, der Tag der letzten erfolgreichen Zustellung und der Tag des
+          ersten gescheiterten Versuchs danach, bis du die Erinnerung ausschaltest, der Push-Dienst das Abo als
+          ungültig meldet oder es sich länger nicht mehr zustellen lässt. Zum Wecken geht eine Nachricht über den
+          Push-Dienst deines Browsers (Google, Apple, Mozilla oder Microsoft); sie enthält keine Namen und keine
+          Bestellungen.</li>
+        <li><b>Protokoll der Weckrufe:</b> Zu jedem Weckruf schreibt der Server eine Zeile in sein Systemprotokoll:
+          die ersten sechs Zeichen der Kennung deines Abos, die Art (Erinnerung, Morgenmeldung, Test), Antwortcode
+          und Dauer beim Push-Dienst und dessen Kennung der Nachricht, nicht aber die Push-Adresse oder deine
+          IP-Adresse. Eine feste Löschfrist gibt es dafür derzeit nicht: ältere Einträge werden überschrieben, sobald
+          das Protokoll seine Größengrenze erreicht.</li>
         <li><b>Statistik:</b> Aus den Abos zählt der Server täglich nur Summen (etwa Anzahl der Geräte und
           Push-Dienst); sie stehen öffentlich unter <a href="stats">/stats</a>.</li>
         <li><b>Stundenplan aus Sdui (freiwillig):</b> Sdui sperrt direkte Zugriffe von fremden Webseiten.
-          Deshalb laufen Anmeldung (E-Mail, Passwort) und Abruf des Stundenplans durch unseren Server. Er reicht
-          sie nur weiter und speichert nichts davon.</li>
-        <li><b>Missbrauchsschutz:</b> Um Anfragen je Absender zu begrenzen, hält der Server IP-Adressen im
-          Arbeitsspeicher, höchstens bis zum nächsten Neustart des Dienstes (in der Regel wöchentlich).</li>
+          Deshalb laufen Anmeldung (E-Mail, Passwort), der Abruf deines Sdui-Kontos und des Kontos deines Kindes
+          (dabei Namen und weitere Kontodaten von Sdui) sowie des Stundenplans durch unseren Server. Er reicht
+          das nur weiter und speichert nichts davon; gezählt wird nur, wie viele Anmeldungen am Tag
+          fehlschlagen.</li>
+        <li><b>Missbrauchsschutz:</b> Um Anfragen je Absender zu begrenzen (neue Abos, Sdui, Markieren als
+          Betreiber-Gerät), hält der Server IP-Adressen bzw. ihren Netzbereich mit Zeitpunkten im Arbeitsspeicher,
+          für Test-Weckrufe stattdessen die Kennung des Abos; höchstens bis zum nächsten Neustart des Dienstes (in
+          der Regel wöchentlich).</li>
       </ul>
-      <p>Name, Kundennummer, Bestellungen und das Passwort des Bestellsystems erreichen den Server nie.
+      <p>Kundennummer, Passwort, Namen und Bestellungen aus dem Bestellsystem erreichen den Server nie.
         Der Server steht bei der Hetzner Online GmbH in der EU. Nächtliche Sicherungen der gespeicherten
-        Push-Abos werden 14 Tage aufbewahrt.</p>
+        Push-Abos werden 14 Tage aufbewahrt; außerdem stecken sie in den Sicherungen des ganzen Servers bei
+        Hetzner, die nach deren Aufbewahrungsfrist überschrieben werden.</p>
 
       <h2>Rechtsgrundlage</h2>
       <p>Art. 6 Abs. 1 lit. b DSGVO (die von dir gewünschte Funktion bereitstellen) und lit. f (berechtigtes

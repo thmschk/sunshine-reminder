@@ -38,6 +38,17 @@ es geprüft ist. Stand: 2026-10-27.
 Weckrufe derselben Uhrzeit verteilt der Server über 30 Minuten (Morgenmeldung über 10), Betreiber-Alarme
 gehen an Abos mit `is_admin`; Einzelheiten in `docs/betrieb.md`.
 
+## Nachtrag: Server-Härtung (November 2026)
+
+| Thema | Umsetzung | Test (`server/push/test_app.py`) |
+|---|---|---|
+| Abo-Tabelle mit wenigen IPs füllbar | `last_ok` und `fail_since` je Abo; nie zugestellte Abos nach 2 Tagen (frühestens Tag nach dem ersten fälligen Weckruf und nach einem gescheiterten Versand), alle nach 14 Tagen durchgehend gescheiterter Versände gelöscht, nur solange überhaupt zugestellt wird; Obergrenze 1000 zählt nur nie zugestellte; Begrenzung je IPv4-/24 bzw. IPv6-/64. Kein Prüf-Push beim Anlegen (jeder Push zeigt eine Meldung) | `Aufraeumen`, `HttpAbo.test_grenze_nur_fuer_unbestaetigte`, `test_rate_limit_je_netz` |
+| Sdui-Relay als Login-Orakel | `Content-Type: application/json` Pflicht (415), Browser-Anfragen fremder Seiten (`Sec-Fetch-Site` cross-/same-site, fremder `Origin`) 403, 5 Logins je Stunde und Netz, 100 insgesamt mit Betreiber-Alarm (höchstens stündlich), Log nur Zähler der 401 | `SduiRelay` |
+| Slowloris | Caddy puffert den Body (`request_buffers 16KB`), der Dienst schließt jede Verbindung nach 60 s; Server-Fristen im globalen Caddy-Block (docs/betrieb.md) | `HttpAbo.test_gesamtfrist_schliesst_troepfelnde_verbindung` |
+| Begrenzungstabelle O(n) | LRU mit fester Obergrenze, Abgelaufenes wird vorne abgeräumt | `RateLimitLru` |
+| Betreiber-Markierung | 5 Versuche je Stunde und Netz, `ADMIN_KEY` ≥ 128 Bit (Warnung beim Start) | `HttpAbo.test_admin_fehlversuche_begrenzt` |
+| Kleinkram | Alarmtext ≤ 200 Zeichen, 5 Test-Weckrufe je Abo und Stunde, `PRAGMA secure_delete`, 500 ohne Details bei unerwarteten Fehlern | `Versand`, `HttpAbo` |
+
 ## Offen
 
 - iPhone: Erinnerung über 14 Werktage, mindestens 5 davon „alles bestellt“, Abo muss gültig bleiben.

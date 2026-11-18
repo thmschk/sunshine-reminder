@@ -27,9 +27,13 @@ kleiner Server das Gerät, ohne die IBS5-Zugangsdaten zu kennen.
 ## Was du wissen solltest
 
 * **Dein IBS5-Passwort liegt auf dem Handy**, verschlüsselt im Browser, weil die
-  tägliche Prüfung sich ohne dich anmeldet. Den Code liefert bei jedem Öffnen
-  der Server aus — du vertraust also dem Betreiber (mir). Wie man nachprüft,
-  was ausgeliefert wird, steht unter [Integrität](#integrität).
+  tägliche Prüfung sich ohne dich anmeldet. Die Verschlüsselung schützt davor,
+  dass jemand die gespeicherten Daten einfach ausliest (etwa aus einer
+  Sicherung) — nicht vor jemandem, der dein entsperrtes Handy oder dein
+  Browserprofil benutzt, und nicht vor verändertem Code dieser Seite. Den Code
+  liefert bei jedem Öffnen der Server aus — du vertraust also dem Betreiber
+  (mir). Wie man nachprüft, was ausgeliefert wird, steht unter
+  [Integrität](#integrität).
 * **Bestellungen kosten Geld.** Maßgeblich ist, was in IBS5 steht. Meldet die
   App „nicht bestätigt“, bitte auf der Bestellseite von IBS5 nachsehen.
 * **Zu viele Abfragen kann IBS5 mit einer Sperre deiner IP-Adresse
@@ -69,15 +73,20 @@ kleiner Server das Gerät, ohne die IBS5-Zugangsdaten zu kennen.
   ohne Schulessen (Termin, Ferienwoche ohne Essen, kein Angebot) „Heute kein
   Schulessen“, auf Android still. Für die Ferien einfach abschalten oder Tage
   abwählen.
-* Jeder Weckruf zeigt eine Meldung, auch wenn alles bestellt ist. Browser und
-  vor allem iOS verlangen das, sonst kündigen sie das Abo. Auf Android kommt
-  „alles bestellt“ still und ersetzt die Meldung vom Vortag; auf dem iPhone
-  geht das nicht (Safari kennt weder stille noch ersetzende Meldungen), dort
-  klingelt jede. Wem das zu viel ist: unter ⚙ → „Tage“ seltener wecken lassen.
+* Jeder Weckruf zeigt eine Meldung, auch wenn alles bestellt ist (Browser und
+  vor allem iOS verlangen das, sonst kündigen sie das Abo). Die Erinnerung
+  meldet sich sofort hörbar mit „Essen bestellt? Ich prüfe gerade …“ und
+  ersetzt das nach der Prüfung still durch das Ergebnis. So kommt sie sicher
+  an, auch wenn Android die App im Energiesparmodus nur Sekunden arbeiten
+  lässt; dafür gibt es auch bei „alles bestellt“ einmal pro Erinnerungstag
+  einen Ton. Die Morgenmeldung beginnt still. Wem das zu viel ist: unter ⚙ →
+  „Tage“ seltener wecken lassen.
 * Zugangsdaten liegen verschlüsselt im Speicher des Browsers, mit einem
   Schlüssel, den der Browser erzeugt und nicht herausgibt. Das schützt davor,
   dass jemand die Speicherdatei kopiert und ausliest, etwa aus einem Backup.
-  Gegen Schadcode, der im Namen dieser Seite läuft, hilft es nicht.
+  Wer das Gerät oder das Browserprofil selbst benutzen kann, kommt über die
+  Seite trotzdem an die Daten; gegen Schadcode oder veränderten Code, der im
+  Namen dieser Seite läuft, hilft es ebenfalls nicht.
 * Wer mag, holt sich den **Stundenplan aus Sdui** dazu — siehe
   [unten](#stundenplan-aus-sdui-in-der-web-version).
 
@@ -89,7 +98,7 @@ Was nach dem Eingeben der Zugangsdaten passiert:
    direkt vom Handy an IBS5, nicht über unseren Server. IBS5 antwortet mit einem
    Token für die weiteren Abfragen. Mit „Auf diesem Gerät merken“ legt die Seite
    Zugangsdaten und Token verschlüsselt im Speicher des Browsers ab (IndexedDB,
-   siehe oben), damit nicht jeder Aufruf neu anmeldet. Ist der Token abgelaufen,
+   Grenzen siehe oben), damit nicht jeder Aufruf neu anmeldet. Ist der Token abgelaufen,
    meldet sich die Seite einmal neu an.
 2. **Übersicht laden (auf dem Handy).** Mit dem Token fragt die Seite bei IBS5
    erst die Bestellhistorie für alle bestellten Tage auf einmal ab, dann nur für
@@ -98,7 +107,7 @@ Was nach dem Eingeben der Zugangsdaten passiert:
    eingerichtet, kommt der Stundenplan über unseren Server dazu, der die Anfrage
    nur an Sdui weiterreicht.
 3. **Erinnerung einschalten (einmalig).** Der Browser erzeugt ein Push-Abo, eine
-   zufällige Adresse beim Push-Dienst von Google, Apple oder Mozilla. Die Seite
+   zufällige Adresse beim Push-Dienst von Google, Apple, Mozilla oder Microsoft. Die Seite
    schickt nur dieses Abo und die Uhrzeit an unseren Server.
 4. **Jeden gewählten Werktag** läuft der Weckruf so (oben zur Einordnung noch
    einmal Schritt 3):
@@ -151,8 +160,8 @@ Was nach dem Eingeben der Zugangsdaten passiert:
 <details>
 <summary><b>Was ist ein Push-Abo?</b></summary>
 
-Stell es dir als Postfach für dein Handy vor, das bei Google, Apple oder Mozilla
-steht. Dein Browser richtet es beim Einschalten der Erinnerung ein und gibt
+Stell es dir als Postfach für dein Handy vor, das bei Google, Apple, Mozilla
+oder Microsoft steht. Dein Browser richtet es beim Einschalten der Erinnerung ein und gibt
 unserem Server den Schlüssel zum Einwerfen, sonst niemandem. Was eingeworfen
 wird, kann nur dein Handy öffnen. Das Postfach verschwindet, sobald du die
 Erinnerung ausschaltest, die Benachrichtigungen entziehst oder die App löschst.
@@ -228,12 +237,14 @@ und Abruf laufen deshalb über den Server, der sie nur durchreicht:
 | Anlass | sieht | speichert | wie lange |
 |---|---|---|---|
 | Seite laden | IP-Adresse, angefragte Datei | nichts; Zugriffs- und Fehlerprotokolle einzelner Anfragen sind abgeschaltet | – |
-| Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, gegebenenfalls Uhrzeit der Morgenmeldung, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs (je Art) | bis zum Ausschalten oder bis der Push-Dienst das Abo als ungültig meldet; nächtliche Sicherungen 14 Tage |
-| Sdui (nur wenn eingerichtet) | IP-Adresse, beim Einrichten E-Mail und Passwort, danach Token, Kind-ID im Pfad, Stundenplan | nichts | – |
-| Missbrauchsschutz (neue Abos, Sdui) | IP-Adresse | IP-Adresse mit Zeitpunkten, nur im Arbeitsspeicher | höchstens bis zum nächsten Neustart des Dienstes (in der Regel wöchentlich) |
+| Erinnerung einschalten | IP-Adresse, Push-Abo | Push-Adresse und -Schlüssel, Uhrzeit, gegebenenfalls Uhrzeit der Morgenmeldung, Wochentage, Zeitzone, Zufallsverschiebung, Tag des letzten Weckrufs (je Art), der letzten geglückten Zustellung und des ersten gescheiterten Versands danach | bis zum Ausschalten, bis der Push-Dienst das Abo als ungültig meldet oder bis es nach einem gescheiterten Versand 2 Tage nie bzw. 14 Tage nicht mehr zugestellt werden konnte; nächtliche Sicherungen 14 Tage, zusätzlich im Hetzner-Backup des Servers |
+| Weckruf (Erinnerung, Morgenmeldung, Test) | Antwort des Push-Dienstes | je Weckruf eine Logzeile: erste 6 Zeichen der Abo-id, Art, HTTP-Status, Dauer, Kennung der Nachricht beim Push-Dienst; nie Push-Adresse oder IP-Adresse | im Journal des Servers, bis dessen Größengrenze sie überschreibt (keine feste Frist) |
+| Sdui (nur wenn eingerichtet) | IP-Adresse, beim Einrichten E-Mail und Passwort, danach Token, Kind-ID im Pfad, eigenes Konto und Konto des Kindes (Namen, Kontodaten von Sdui), Stundenplan | nichts; ins Log nur die Zahl abgelehnter Anmeldungen je Tag | – |
+| Missbrauchsschutz (neue Abos, Betreiber-Markierung, Sdui, Tests) | IP-Adresse | Netz der IP-Adresse (/24, /64; Sdui-Aufrufe je IPv4-Adresse) mit Zeitpunkten für neue Abos, Versuche der Betreiber-Markierung und Sdui; Test-Weckrufe mit Zeitpunkten je Abo-id; nur im Arbeitsspeicher | höchstens bis zum nächsten Neustart des Dienstes (in der Regel wöchentlich) |
 | tägliche Selbstprüfung | – (fragt selbst bei IBS5 und Sdui an, ohne Nutzerdaten, und liest die eigene `ferien.json`) | Ergebnis unter `/api/health` | bis zur nächsten Prüfung |
 
-Name, Kundennummer, Bestellungen und das IBS5-Passwort erreichen den Server nie.
+Kundennummer, Passwort, Namen und Bestellungen aus IBS5 erreichen den Server nie
+(Sdui-Daten laufen nur durch, siehe oben).
 Die Datenschutzerklärung steht unter
 [`/datenschutz.html`](https://sunshine-order.de/datenschutz.html).
 

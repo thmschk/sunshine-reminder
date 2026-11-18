@@ -3,14 +3,17 @@
 Speichert je Gerät nur ein Web-Push-Abo (Adresse, Schlüssel) mit Uhrzeit,
 gegebenenfalls Morgenzeit, Wochentagen, Zeitzone, Zufallsverschiebung, Tag des
 letzten Weckrufs je Art, Anlagedatum, SHA-256 des Abo-Geheimnisses,
-Betreiber-Kennzeichen (is_admin) und Beginn einer Ablehnung durch den Push-Dienst
-(auth_failed_since) — keine Zugangsdaten, keinen Namen, keinen Bestellstand.
+Betreiber-Kennzeichen (is_admin), Tag der letzten geglückten Zustellung (last_ok), Tag
+des ersten gescheiterten Versands seit der letzten Zustellung (fail_since) und
+Beginn einer Ablehnung durch den Push-Dienst (auth_failed_since) — keine Zugangsdaten,
+keinen Namen, keinen Bestellstand.
 Zur gewählten Zeit geht ein Push mit {"t": "check"} hinaus, zur Morgenzeit
 (falls gewählt) {"t": "today"}; was gemeldet wird, entscheidet der Service Worker
 auf dem Gerät, der IBS5 selbst abfragt.
 
 Öffentlich unter /api/stats: nur Summen über alle Abos (Anzahl, Push-Dienst, neu in
-7/30 Tagen) und deren Tagesverlauf (stats_daily).
+7/30 Tagen) und deren Tagesverlauf (stats_daily). /api/health antwortet 503, wenn der
+Zeitplan steht oder heute nur Zustellungen scheitern (für externes Monitoring).
 
 Die id ist öffentlich, ändern oder löschen darf nur, wer das beim Anlegen
 ausgegebene Geheimnis kennt (gespeichert wird nur dessen SHA-256).
@@ -24,18 +27,22 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import email.utils
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
+import socket
+import sys
 import sqlite3
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -54,13 +61,41 @@ KEY_PATH = os.path.join(DATA_DIR, "vapid_private.pem")
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://sunshine-order.de")
 PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY = 4096
-# Socket-Timeout je Verbindung (s) und Obergrenze gleichzeitiger Verbindungen.
+# Socket-Timeout je Lesevorgang (s), Gesamtfrist je Verbindung (s) und Obergrenze
+# gleichzeitiger Verbindungen. Die Gesamtfrist fängt Clients ab, die Byte für Byte
+# knapp unter dem Socket-Timeout tröpfeln.
 HANDLER_TIMEOUT = 30
+REQUEST_DEADLINE = 60
 MAX_CONNECTIONS = 64
-MAX_SUBSCRIPTIONS = 5000
+# Obergrenze für Abos ohne eine einzige geglückte Zustellung (last_ok IS NULL) und für alle Abos.
+MAX_UNCONFIRMED = 1000
+MAX_SUBSCRIPTIONS = 20000
+# Abo ohne eine einzige Zustellung: gelöscht nach UNCONFIRMED_DAYS Tagen, frühestens einen Tag
+# nach dem ersten fälligen Weckruf (Wochentage nur Sa: erst nach dem Samstag) und nur, wenn
+# ein Versand gescheitert ist (fail_since), mindestens einen Tag danach.
+UNCONFIRMED_DAYS = 2
+# Abo, bei dem seit so vielen Tagen jeder Versand scheitert (fail_since, gleich welcher Fehler), wird gelöscht.
+# Beide Fristen laufen frühestens ab dem Start des Dienstes: nach einem Ausfall oder einem
+# Stand ohne fail_since bekommt jedes Abo erst wieder Weckrufe.
+STALE_DAYS = 14
+# Aufgeräumt wird nur, solange überhaupt noch zugestellt wird: eine eigene Störung
+# (Netz, Schlüssel) träfe sonst alle Abos.
+CLEANUP_GUARD_DAYS = 4
 PUSH_TTL = 3 * 3600
 PUSH_TIMEOUT = 10
+# Versuche je Weckruf und Tag; dazwischen wartet der Zeitplan 1, 2, 4, 8 min oder so lange,
+# wie der Push-Dienst per Retry-After verlangt (höchstens RETRY_AFTER_MAX s).
 SEND_TRIES = 5
+RETRY_AFTER_MAX = 1800
+# Längste Meldung an die Betreiber-Geräte (Zeichen).
+ALARM_MAX = 200
+# /api/health: 503, wenn der letzte Durchlauf des Zeitplans älter ist oder heute bei mindestens
+# HEALTH_MIN_GAVE_UP verschiedenen Abos (bzw. allen, wenn es weniger gibt) ein Weckruf aufgegeben
+# wurde und keiner glückte.
+HEALTH_STALE_S = 300
+HEALTH_MIN_GAVE_UP = 5
+# Totmannschalter: GET auf HEARTBEAT_URL (leer = aus) höchstens alle HEARTBEAT_EVERY s, solange /api/health gesund ist.
+HEARTBEAT_EVERY = 300
 # So viele Tage darf ein Push-Dienst ein Abo mit 401/403 ablehnen, bevor es gelöscht wird.
 # 401/403 heißt meist: Abo gehört zu einem anderen VAPID-Schlüssel. Es kann aber auch an
 # uns liegen (JWT, Uhr) und träfe dann alle Abos zugleich; die Frist lässt Zeit, den
@@ -101,37 +136,82 @@ SDUI_ROUTES = [
 
 
 class RateLimit:
-    """Höchstens n Treffer je Schlüssel im Zeitfenster (Sekunden); nur im Arbeitsspeicher."""
+    """Höchstens n Treffer je Schlüssel im Zeitfenster (Sekunden); nur im Arbeitsspeicher.
 
-    def __init__(self, n: int, window: float):
-        self.n, self.window = n, window
-        self.hits: dict[str, deque] = defaultdict(deque)
+    Höchstens max_keys Schlüssel: vorne steht, was am längsten nicht kam; Abgelaufenes wird
+    dort bei jedem Aufruf abgeräumt, bei Überlauf fällt der älteste Schlüssel heraus."""
+
+    def __init__(self, n: int, window: float, max_keys: int = 4096):
+        self.n, self.window, self.max_keys = n, window, max_keys
+        self.hits: OrderedDict[str, deque] = OrderedDict()
         self.lock = threading.Lock()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         with self.lock:
-            q = self.hits[key]
+            while self.hits:
+                oldest, q = next(iter(self.hits.items()))
+                if q and now - q[-1] <= self.window:
+                    break
+                del self.hits[oldest]
+            q = self.hits.get(key)
+            if q is None:
+                q = self.hits[key] = deque()
+                if len(self.hits) > self.max_keys:
+                    self.hits.popitem(last=False)
+            else:
+                self.hits.move_to_end(key)
             while q and now - q[0] > self.window:
                 q.popleft()
             if len(q) >= self.n:
                 return False
             q.append(now)
-            # Alte Absender vergessen, damit die Tabelle nicht wächst.
-            if len(self.hits) > 10000:
-                for k in [k for k, v in self.hits.items() if not v or now - v[-1] > self.window]:
-                    del self.hits[k]
             return True
 
 
-sdui_limit = RateLimit(20, 600)  # höchstens 20 Aufrufe je Absender in 10 Minuten
-sub_limit = RateLimit(10, 3600)  # höchstens 10 neue Abos je Absender und Stunde
+# Schlüssel der Begrenzungen: net_key() der Absender-IP, siehe dort.
+sdui_limit = RateLimit(20, 600)  # alle Sdui-Aufrufe je IPv4-Adresse bzw. IPv6-/64 in 10 Minuten
+sdui_login_limit = RateLimit(5, 3600)  # Sdui-Logins je /24 bzw. /64 und Stunde
+SDUI_LOGINS_PER_HOUR = 100
+sdui_login_total = RateLimit(SDUI_LOGINS_PER_HOUR, 3600)  # alle Sdui-Logins zusammen; darüber Alarm
+sub_limit = RateLimit(10, 3600)  # neue Abos je /24 bzw. /64 und Stunde
+admin_limit = RateLimit(5, 3600)  # Versuche, ein Gerät als Betreiber zu markieren, je /24 bzw. /64
+test_limit = RateLimit(5, 3600)  # Test-Weckrufe je Abo und Stunde
+alarm_limit = RateLimit(1, 3600)  # Betreiber-Alarme außerhalb der Selbstprüfung, je Anlass
 SDUI_LOGIN_KEYS = {"identifier", "password", "slink"}
 SLINK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+# Seiten, deren Browser den Sdui-Relay benutzen dürfen.
+ALLOWED_ORIGINS = ("https://sunshine-order.de", "https://sunshine.thomschke.info")
+
+
+def net_key(ip: str, v4_prefix: int = 24) -> str:
+    """Begrenzungsschlüssel einer IP: IPv4 je /24 (bzw. v4_prefix), IPv6 je /64.
+
+    Ein Anschluss bekommt bei IPv6 meist ein ganzes /64, bei IPv4 kostet ein /24 Aufwand."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    prefix = v4_prefix if addr.version == 4 else 64
+    return str(ipaddress.ip_network(f"{addr}/{prefix}", strict=False))
 
 
 def sdui_allowed(client: str) -> bool:
-    return sdui_limit.allow(client)
+    return sdui_limit.allow(net_key(client, 32))
+
+
+def cross_site(headers) -> bool:
+    """Anfrage kam vom Browser auf einer fremden Seite.
+
+    Browser setzen Sec-Fetch-Site bzw. Origin immer selbst; fehlen beide, ist es kein Browser,
+    und der könnte die Header ohnehin beliebig setzen. Abgelehnt wird also nur, was ein Browser
+    als fremd ausweist."""
+    if headers.get("Sec-Fetch-Site", "").strip().lower() in ("cross-site", "same-site"):
+        return True
+    origin = headers.get("Origin")
+    return origin is not None and origin.strip() not in ALLOWED_ORIGINS
 
 
 def sdui_route_ok(method: str, rest: str) -> bool:
@@ -161,7 +241,8 @@ def sdui_login_body(raw: bytes) -> bytes:
 def client_ip(headers, client_address) -> str:
     """Letzter X-Forwarded-For-Eintrag, sonst die Peer-Adresse. Nur für Begrenzungen, nie im Log.
 
-    Caddy hängt die echte Peer-Adresse hinten an; vorangestellte Einträge kann der Client fälschen."""
+    Caddy (ohne trusted_proxies) ersetzt einen mitgeschickten X-Forwarded-For durch die echte
+    Peer-Adresse; der letzte Eintrag hält auch, falls dort einmal angehängt statt ersetzt wird."""
     return (headers.get("X-Forwarded-For") or client_address[0]).split(",")[-1].strip()
 
 
@@ -172,10 +253,67 @@ db_lock = threading.Lock()
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # Gelöschte Abos werden in der Datei überschrieben, nicht nur als frei markiert.
+    conn.execute("PRAGMA secure_delete = ON")
     return conn
 
 
 CONN: sqlite3.Connection
+
+# Spalten, die nach der ersten Fassung von subs dazukamen; init() ergänzt jede fehlende einzeln.
+SUBS_COLUMNS = [
+    ("offset_min", "INTEGER"),
+    ("is_admin", "INTEGER NOT NULL DEFAULT 0"),
+    ("morning_time", "TEXT"),
+    ("morning_last_sent", "TEXT"),
+    ("auth_failed_since", "TEXT"),
+    ("last_ok", "TEXT"),
+    ("fail_since", "TEXT"),
+]
+# PRAGMA user_version: 2 = last_ok eingeführt (bestehende Abos gelten ab da als bestätigt),
+# 3 = fail_since eingeführt (anfangs leer: kein Abo gilt als gescheitert).
+SCHEMA_VERSION = 3
+
+
+def migrate(conn: sqlite3.Connection, today: dt.date) -> None:
+    """Schema auf SCHEMA_VERSION bringen, ganz oder gar nicht (eine Transaktion)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS subs (
+                 id TEXT PRIMARY KEY,
+                 secret_hash TEXT NOT NULL,
+                 endpoint TEXT NOT NULL UNIQUE,
+                 keys TEXT NOT NULL,
+                 time TEXT NOT NULL,
+                 weekdays TEXT NOT NULL,
+                 tz TEXT NOT NULL,
+                 last_sent TEXT,
+                 created TEXT NOT NULL)"""
+        )
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(subs)")}
+        for name, decl in SUBS_COLUMNS:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE subs ADD COLUMN {name} {decl}")
+        # Tagessummen für /api/stats; gelöschte Abos verschwinden aus subs, der Verlauf bleibt hier.
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS stats_daily (
+                 day TEXT PRIMARY KEY,
+                 subs INTEGER NOT NULL,
+                 apple INTEGER NOT NULL,
+                 morning INTEGER NOT NULL)"""
+        )
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 2:
+            # Abos von vor last_ok: Zustellung unbekannt, gelten als bestätigt (sonst
+            # räumte cleanup_subs sie als unbestätigt ab).
+            conn.execute("UPDATE subs SET last_ok = ? WHERE last_ok IS NULL", (today.isoformat(),))
+        conn.execute(f"UPDATE subs SET offset_min = abs(random()) % {MAX_OFFSET_MIN + 1} WHERE offset_min IS NULL")
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def init() -> Vapid:
@@ -190,40 +328,10 @@ def init() -> Vapid:
         log.info("neues VAPID-Schlüsselpaar erzeugt")
     CONN = db()
     with db_lock:
-        CONN.execute(
-            """CREATE TABLE IF NOT EXISTS subs (
-                 id TEXT PRIMARY KEY,
-                 secret_hash TEXT NOT NULL,
-                 endpoint TEXT NOT NULL UNIQUE,
-                 keys TEXT NOT NULL,
-                 time TEXT NOT NULL,
-                 weekdays TEXT NOT NULL,
-                 tz TEXT NOT NULL,
-                 last_sent TEXT,
-                 created TEXT NOT NULL,
-                 offset_min INTEGER)"""
-        )
-        cols = {r["name"] for r in CONN.execute("PRAGMA table_info(subs)")}
-        if "offset_min" not in cols:
-            CONN.execute("ALTER TABLE subs ADD COLUMN offset_min INTEGER")
-        if "is_admin" not in cols:
-            CONN.execute("ALTER TABLE subs ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
-        if "morning_time" not in cols:
-            CONN.execute("ALTER TABLE subs ADD COLUMN morning_time TEXT")
-            CONN.execute("ALTER TABLE subs ADD COLUMN morning_last_sent TEXT")
-        if "auth_failed_since" not in cols:
-            CONN.execute("ALTER TABLE subs ADD COLUMN auth_failed_since TEXT")
-        # Tagessummen für /api/stats; gelöschte Abos verschwinden aus subs, der Verlauf bleibt hier.
-        CONN.execute(
-            """CREATE TABLE IF NOT EXISTS stats_daily (
-                 day TEXT PRIMARY KEY,
-                 subs INTEGER NOT NULL,
-                 apple INTEGER NOT NULL,
-                 morning INTEGER NOT NULL)"""
-        )
-        CONN.execute(f"UPDATE subs SET offset_min = abs(random()) % {MAX_OFFSET_MIN + 1} WHERE offset_min IS NULL")
-        CONN.commit()
+        migrate(CONN, dt.date.today())
         subs = CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
+    if 0 < len(os.environ.get("ADMIN_KEY", "")) < 22:
+        log.warning("ADMIN_KEY ist kürzer als 128 Bit, neu erzeugen: python3 -c 'import secrets; print(secrets.token_urlsafe(24))'")
     if new_key and subs:
         # Alle vorhandenen Abos gehören zum alten Schlüssel und werden ab jetzt mit 401/403 abgelehnt.
         log.warning("VAPID-Schlüssel fehlte und wurde NEU erzeugt, obwohl %d Abos bestehen: "
@@ -339,27 +447,94 @@ def parse_settings(body: dict, partial: bool = False) -> dict:
     return out
 
 
-def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "") -> bool:
-    """True = zugestellt; ein abgelaufenes Abo wird dabei gelöscht."""
-    info = {"endpoint": row["endpoint"], "keys": json.loads(row["keys"])}
-    # Umleitungen nie verfolgen (SSRF): max_redirects=0 lässt requests bei einer Umleitung abbrechen.
-    session = requests.Session()
-    session.max_redirects = 0
+class Sent:
+    """Ergebnis eines Push-Versands; wahr = zugestellt. gone: Abo wurde gelöscht (abgelaufen, unbrauchbar)."""
+
+    __slots__ = ("ok", "status", "retry_after", "gone")
+
+    def __init__(self, ok: bool, status: int | None = None, retry_after: float | None = None, gone: bool = False):
+        self.ok, self.status, self.retry_after, self.gone = ok, status, retry_after, gone
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+def short_id(sub_id: str) -> str:
+    """Gekürzte Abo-id fürs Log."""
+    return (sub_id or "")[:6]
+
+
+def retry_after(resp) -> float | None:
+    """Retry-After in Sekunden (Zahl oder HTTP-Datum), sonst None."""
+    raw = getattr(resp, "headers", None)
+    raw = raw.get("Retry-After") if raw is not None else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    if raw.isascii() and raw.isdigit():
+        return float(raw)
     try:
-        webpush(
-            info,
-            data=json.dumps({"t": kind, "m": message} if message else {"t": kind}),
-            vapid_private_key=vapid,
-            vapid_claims={"sub": VAPID_SUBJECT},
-            ttl=PUSH_TTL,
-            headers={"Urgency": "high"},
-            timeout=PUSH_TIMEOUT,
-            requests_session=session,
-        )
+        when = email.utils.parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, when.timestamp() - time.time()) if when.tzinfo else None
+
+
+def msg_ref(resp, endpoint: str) -> str:
+    """Kennung der Nachricht beim Push-Dienst (apns-id oder letzter Teil der Location), nie die Abo-Adresse."""
+    try:
+        ref = resp.headers.get("apns-id") or (resp.headers.get("Location") or "").rstrip("/").rsplit("/", 1)[-1]
+    except AttributeError:
+        return ""
+    if not isinstance(ref, str) or not ref or ref in endpoint:
+        return ""
+    return ref[:40]
+
+
+def note_failure(row: sqlite3.Row) -> None:
+    """Ersten gescheiterten Versand seit der letzten Zustellung vermerken (fail_since, für cleanup_subs)."""
+    with db_lock:
+        CONN.execute("UPDATE subs SET fail_since = ? WHERE id = ? AND endpoint = ? AND fail_since IS NULL",
+                     (dt.date.today().isoformat(), row["id"], row["endpoint"]))
+        CONN.commit()
+
+
+def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "") -> Sent:
+    """Ein Push an ein Abo, eine Logzeile (gekürzte id, Art, HTTP-Status, Dauer, Kennung beim
+    Push-Dienst; nie die Endpoint-URL, sie ist das Push-Token). Ein abgelaufenes Abo wird dabei gelöscht."""
+    info = {"endpoint": row["endpoint"], "keys": json.loads(row["keys"])}
+    payload = {"t": kind, "sent": int(time.time())}
+    if message:
+        payload["m"] = message[:ALARM_MAX]
+    sid = short_id(row["id"])
+    t0 = time.monotonic()
+
+    def ms() -> int:
+        return int((time.monotonic() - t0) * 1000)
+
+    try:
+        # Umleitungen nie verfolgen (SSRF): max_redirects=0 lässt requests bei einer Umleitung abbrechen.
+        with requests.Session() as session:
+            session.max_redirects = 0
+            resp = webpush(
+                info,
+                data=json.dumps(payload),
+                vapid_private_key=vapid,
+                vapid_claims={"sub": VAPID_SUBJECT},
+                ttl=PUSH_TTL,
+                headers={"Urgency": "high"},
+                timeout=PUSH_TIMEOUT,
+                requests_session=session,
+            )
+        status = getattr(resp, "status_code", None)
+        status = status if isinstance(status, int) else None
+        ref = msg_ref(resp, row["endpoint"])
+        log.info("Weckruf %s an %s: HTTP %s, %d ms%s", kind, sid, status, ms(), f", Kennung {ref}" if ref else "")
         with db_lock:
-            CONN.execute("UPDATE subs SET auth_failed_since = NULL WHERE id = ? AND auth_failed_since IS NOT NULL", (row["id"],))
+            CONN.execute("UPDATE subs SET last_ok = ?, fail_since = NULL, auth_failed_since = NULL WHERE id = ? AND endpoint = ?",
+                         (dt.date.today().isoformat(), row["id"], row["endpoint"]))
             CONN.commit()
-        return True
+        return Sent(True, status)
     except WebPushException as exc:
         status = exc.response.status_code if exc.response is not None else None
         # Immer nur dieses Abo samt Endpoint: wurde es inzwischen erneuert, bleibt es.
@@ -367,9 +542,11 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
             with db_lock:
                 CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ?", (row["id"], row["endpoint"]))
                 CONN.commit()
-            log.info("Abo abgelaufen und gelöscht")
-        elif status in (401, 403):
+            log.info("Weckruf %s an %s: HTTP %s, %d ms, Abo abgelaufen und gelöscht", kind, sid, status, ms())
+            return Sent(False, status, gone=True)
+        if status in (401, 403):
             today = dt.date.today()
+            note_failure(row)
             with db_lock:
                 CONN.execute("UPDATE subs SET auth_failed_since = ? WHERE id = ? AND endpoint = ? AND auth_failed_since IS NULL",
                              (today.isoformat(), row["id"], row["endpoint"]))
@@ -377,29 +554,36 @@ def send(row: sqlite3.Row, vapid: Vapid, kind: str = "check", message: str = "")
                                     (row["id"], row["endpoint"], (today - dt.timedelta(days=AUTH_FAIL_DAYS)).isoformat())).rowcount
                 CONN.commit()
             if gone:
-                log.warning("Abo seit %d Tagen mit HTTP %s abgelehnt (anderer VAPID-Schlüssel?), gelöscht", AUTH_FAIL_DAYS, status)
-            else:
-                log.warning("Push abgelehnt: HTTP %s (anderer VAPID-Schlüssel?)", status)
-        else:
-            log.warning("Push fehlgeschlagen: HTTP %s", status)
-        return False
+                log.warning("Weckruf %s an %s: HTTP %s, Abo seit %d Tagen abgelehnt (anderer VAPID-Schlüssel?), gelöscht",
+                            kind, sid, status, AUTH_FAIL_DAYS)
+                return Sent(False, status, gone=True)
+            log.warning("Weckruf %s an %s abgelehnt: HTTP %s, %d ms (anderer VAPID-Schlüssel?)", kind, sid, status, ms())
+            return Sent(False, status)
+        note_failure(row)
+        wait = retry_after(exc.response) if status == 429 or (status or 0) >= 500 else None
+        log.warning("Weckruf %s an %s fehlgeschlagen: HTTP %s, %d ms%s", kind, sid, status, ms(),
+                    f", Retry-After {wait:.0f} s" if wait is not None else "")
+        return Sent(False, status, retry_after=wait)
     except requests.TooManyRedirects:
-        log.warning("Push fehlgeschlagen: Umleitung nicht gefolgt")
-        return False
+        note_failure(row)
+        log.warning("Weckruf %s an %s fehlgeschlagen: Umleitung nicht gefolgt, %d ms", kind, sid, ms())
+        return Sent(False)
     except requests.RequestException as exc:
         # Nur der Typ: Meldung und Traceback enthalten die Endpoint-URL (= Push-Token).
-        log.warning("Push fehlgeschlagen: %s", type(exc).__name__)
-        return False
+        note_failure(row)
+        log.warning("Weckruf %s an %s fehlgeschlagen: %s, %d ms", kind, sid, type(exc).__name__, ms())
+        return Sent(False)
     except ValueError:
         # Schlüssel oder Adresse nicht verwendbar (die Prüfung beim Anlegen fängt das meist ab): wird nie zustellbar.
         with db_lock:
             CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ?", (row["id"], row["endpoint"]))
             CONN.commit()
-        log.warning("Unbrauchbares Abo gelöscht")
-        return False
-    except Exception:
-        log.exception("Push nicht versendbar")
-        return False
+        log.warning("Weckruf %s an %s: unbrauchbares Abo gelöscht", kind, sid)
+        return Sent(False, gone=True)
+    except Exception as exc:
+        log.error("Weckruf %s an %s nicht versendbar: %s", kind, sid, type(exc).__name__)
+        note_failure(row)
+        return Sent(False)
 
 
 # Tägliche Selbstprüfung: Gerade die Eigenheiten, von denen die Web-Version lebt,
@@ -472,17 +656,25 @@ def ferien_problem(get, today: dt.date) -> str | None:
     return None
 
 
+def alarm(vapid: Vapid, text: str) -> None:
+    """Meldung an alle Betreiber-Abos (is_admin), gekürzt auf ALARM_MAX Zeichen."""
+    with db_lock:
+        rows = CONN.execute("SELECT * FROM subs WHERE is_admin = 1").fetchall()
+    for row in rows:
+        send(row, vapid, "alarm", text[:ALARM_MAX])
+
+
 def run_selfcheck(vapid: Vapid) -> None:
-    problems = selfcheck()
-    selfcheck_state.update(at=dt.datetime.now().isoformat(timespec="minutes"), ok=not problems, problems=problems)
-    if problems:
-        log.warning("Selbstprüfung: %s", "; ".join(problems))
-        with db_lock:
-            rows = CONN.execute("SELECT * FROM subs WHERE is_admin = 1").fetchall()
-        for row in rows:
-            send(row, vapid, "alarm", "Selbstprüfung: " + "; ".join(problems))
-    else:
-        log.info("Selbstprüfung ok")
+    try:
+        problems = selfcheck()
+        selfcheck_state.update(at=dt.datetime.now().isoformat(timespec="minutes"), ok=not problems, problems=problems)
+        if problems:
+            log.warning("Selbstprüfung: %s", "; ".join(problems))
+            alarm(vapid, "Selbstprüfung: " + "; ".join(problems))
+        else:
+            log.info("Selbstprüfung ok")
+    except Exception as exc:
+        log.error("Selbstprüfung abgebrochen: %s", type(exc).__name__)
 
 
 # Weckruf-Arten je Abo: Push-Inhalt → (Spalte Uhrzeit, Spalte letzter Versand, größte Verschiebung).
@@ -543,15 +735,73 @@ def push_service(endpoint: str) -> str:
 
 
 def stats_snapshot(today: str) -> None:
-    """Tagessumme von heute fortschreiben; der letzte Durchlauf des Tages bleibt stehen."""
+    """Tagessumme von heute fortschreiben, nur wenn sie sich geändert hat; der letzte Stand des Tages bleibt stehen."""
     with db_lock:
         rows = CONN.execute("SELECT endpoint, morning_time FROM subs").fetchall()
-        CONN.execute(
-            "INSERT OR REPLACE INTO stats_daily (day, subs, apple, morning) VALUES (?, ?, ?, ?)",
-            (today, len(rows), sum(push_service(r["endpoint"]) == "apple" for r in rows),
-             sum(r["morning_time"] is not None for r in rows)),
-        )
+        values = (len(rows), sum(push_service(r["endpoint"]) == "apple" for r in rows),
+                  sum(r["morning_time"] is not None for r in rows))
+        old = CONN.execute("SELECT subs, apple, morning FROM stats_daily WHERE day = ?", (today,)).fetchone()
+        if old is not None and tuple(old) == values:
+            return
+        CONN.execute("INSERT OR REPLACE INTO stats_daily (day, subs, apple, morning) VALUES (?, ?, ?, ?)", (today, *values))
         CONN.commit()
+
+
+def first_due(created: dt.date, weekdays: str) -> dt.date:
+    """Erster Tag nach dem Anlegen mit einem fälligen Weckruf; der Tag selbst zählt nicht (Uhrzeit evtl. schon vorbei)."""
+    for i in range(1, 8):
+        day = created + dt.timedelta(days=i)
+        if str(day.isoweekday()) in weekdays:
+            return day
+    return created + dt.timedelta(days=7)
+
+
+def cleanup_subs(today: dt.date, started: dt.date | None = None) -> int:
+    """Löscht Abos ohne eine einzige Zustellung (UNCONFIRMED_DAYS, frühestens Tag nach dem ersten
+    fälligen Weckruf) und Abos, bei denen seit STALE_DAYS jeder Versand scheitert; beides nur nach
+    einem gescheiterten Versand (fail_since) und nur, solange überhaupt zugestellt wird.
+    started: Start des Dienstes, früher beginnt keine Frist."""
+    with db_lock:
+        rows = CONN.execute("SELECT id, endpoint, created, weekdays, last_ok, fail_since FROM subs").fetchall()
+        newest = CONN.execute("SELECT MAX(last_ok) FROM subs").fetchone()[0]
+    if not rows:
+        return 0
+    if newest is None or newest < (today - dt.timedelta(days=CLEANUP_GUARD_DAYS)).isoformat():
+        log.warning("Aufräumen ausgesetzt: seit %s keine Zustellung", newest or "jeher")
+        return 0
+    unconfirmed, old = [], []
+    for r in rows:
+        # Nie versucht (Dienst stand, älterer Stand ohne fail_since) oder zuletzt zugestellt: bleibt.
+        if r["fail_since"] is None:
+            continue
+        failed = dt.date.fromisoformat(r["fail_since"])
+        if started is not None:
+            failed = max(failed, started)
+        if r["last_ok"] is None:
+            created = dt.date.fromisoformat(r["created"])
+            deadline = max(created + dt.timedelta(days=UNCONFIRMED_DAYS),
+                           first_due(created, r["weekdays"]) + dt.timedelta(days=1),
+                           failed + dt.timedelta(days=1))
+            if started is not None:
+                deadline = max(deadline, started + dt.timedelta(days=UNCONFIRMED_DAYS))
+            if today > deadline:
+                unconfirmed.append(r)
+        elif failed < today - dt.timedelta(days=STALE_DAYS):
+            old.append(r)
+    if not unconfirmed and not old:
+        return 0
+    with db_lock:
+        # Mit Endpoint und fail_since: was inzwischen erneuert oder zugestellt wurde, bleibt.
+        for r in unconfirmed:
+            CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ? AND last_ok IS NULL AND fail_since = ?",
+                         (r["id"], r["endpoint"], r["fail_since"]))
+        for r in old:
+            CONN.execute("DELETE FROM subs WHERE id = ? AND endpoint = ? AND fail_since = ?",
+                         (r["id"], r["endpoint"], r["fail_since"]))
+        CONN.commit()
+    log.info("Aufgeräumt: %d Abos ohne jede Zustellung, %d seit %d Tagen ohne Zustellung gelöscht",
+             len(unconfirmed), len(old), STALE_DAYS)
+    return len(unconfirmed) + len(old)
 
 
 def stats(today: dt.date) -> dict:
@@ -580,46 +830,199 @@ def stats(today: dt.date) -> dict:
     }
 
 
-def scheduler(vapid: Vapid) -> None:
-    now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
-    # Nach SELFCHECK_AT gestartet: die Prüfung beim Start (main) zählt für heute.
-    selfcheck_last = now.date() if now.strftime("%H:%M") >= SELFCHECK_AT else None
-    failures: dict[tuple[str, str, str], int] = {}
-    while True:
-        # Kurz nach jeder vollen Minute prüfen.
-        time.sleep(61 - dt.datetime.now().second)
-        try:
-            with db_lock:
-                rows = CONN.execute("SELECT * FROM subs").fetchall()
-            sent = 0
-            for row in rows:
-                now = dt.datetime.now(ZoneInfo(row["tz"]))
-                today = now.date().isoformat()
-                for kind in SLOTS:
-                    if not is_due(row, now, kind):
-                        continue
-                    # Erst nach erfolgreicher Zustellung als erledigt markieren: scheitert der
-                    # Push-Dienst kurz, versucht der nächste Durchlauf es im Nachholfenster erneut,
-                    # höchstens SEND_TRIES-mal am Tag (ein dauerhaft abgelehntes Abo nicht minütlich).
-                    if send(row, vapid, kind):
-                        mark_sent(row, today, kind)
-                        sent += 1
-                    else:
-                        key = (row["id"], today, kind)
-                        failures[key] = failures.get(key, 0) + 1
-                        if failures[key] >= SEND_TRIES:
-                            mark_sent(row, today, kind)
-            for key in [k for k in failures if k[1] < (dt.date.today() - dt.timedelta(days=1)).isoformat()]:
-                del failures[key]
-            if sent:
-                log.info("%d Weckrufe verschickt", sent)
-            now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
-            stats_snapshot(now.date().isoformat())
-            if selfcheck_due(now, selfcheck_last):
-                selfcheck_last = now.date()
-                run_selfcheck(vapid)
-        except Exception:  # Der Wecker darf nie stehen bleiben.
-            log.exception("Fehler im Zeitplan")
+BERLIN = ZoneInfo("Europe/Berlin")
+STARTED = time.monotonic()
+# Letzter vollständiger Durchlauf des Zeitplans (Uhrzeit für /api/health, monotone Zeit für die Prüfung).
+sched_state: dict = {"at": None, "mono": None}
+# Weckrufe von heute (Europe/Berlin): zugestellt, gescheiterte Versuche, Abos mit aufgegebenem Weckruf
+# (je Abo einmal, gleich welche Art; die ids dazu in gave_up_ids, nur im Speicher).
+day_counts: dict = {"day": None, "sent_ok": 0, "sent_fail": 0, "gave_up": 0}
+gave_up_ids: set = set()
+counts_lock = threading.Lock()
+
+
+def count(field: str, today: str | None = None, sub_id: str | None = None) -> None:
+    today = today or dt.datetime.now(BERLIN).date().isoformat()
+    with counts_lock:
+        if day_counts["day"] != today:
+            day_counts.update(day=today, sent_ok=0, sent_fail=0, gave_up=0)
+            gave_up_ids.clear()
+        if field == "gave_up":
+            if sub_id in gave_up_ids:
+                return
+            gave_up_ids.add(sub_id)
+        day_counts[field] += 1
+
+
+def health() -> tuple[int, dict]:
+    """Zustand für /api/health und den Totmannschalter: 503 bei problems, warn nur zur Info."""
+    today = dt.datetime.now(BERLIN).date().isoformat()
+    with counts_lock:
+        counts = {k: (day_counts[k] if day_counts["day"] == today else 0) for k in ("sent_ok", "sent_fail", "gave_up")}
+    with db_lock:
+        rejected = CONN.execute("SELECT COUNT(*) FROM subs WHERE auth_failed_since IS NOT NULL").fetchone()[0]
+        admins = CONN.execute("SELECT COUNT(*) FROM subs WHERE is_admin = 1").fetchone()[0]
+        total = CONN.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
+    problems, warn = [], []
+    # Vor dem ersten Durchlauf zählt der Start des Dienstes.
+    if time.monotonic() - (sched_state["mono"] or STARTED) > HEALTH_STALE_S:
+        problems.append("Zeitplan steht")
+    # Einzelne abgelehnte oder tote Abos lösen das nicht aus, erst mehrere verschiedene;
+    # bei weniger Abos insgesamt reicht es, wenn alle aufgegeben haben.
+    if counts["sent_ok"] == 0 and counts["gave_up"] >= max(1, min(HEALTH_MIN_GAVE_UP, total)):
+        problems.append("heute nur Fehlschläge")
+    # Kein Ausfall, aber Alarme der Selbstprüfung erreichen dann niemanden.
+    if admins == 0:
+        warn.append("keine Betreiber-Abos")
+    # Öffentlich nur die Kategorie je Problem der Selbstprüfung (Text vor dem ersten ":"); Details stehen im Log.
+    public = {**selfcheck_state, "problems": [p.split(":")[0] for p in selfcheck_state["problems"]]}
+    body = {
+        "ok": not problems,
+        "problems": problems,
+        "warn": warn,
+        "scheduler_at": sched_state["at"],
+        **counts,
+        # auth_rejected > 0: Push-Dienste lehnen Abos mit 401/403 ab, siehe AUTH_FAIL_DAYS.
+        "auth_rejected": rejected,
+        "admins": admins,
+        "selfcheck": public,
+    }
+    return (503 if problems else 200), body
+
+
+def ping(url: str) -> None:
+    """GET auf eine Überwachungs-URL; Fehler nur mit Typ ins Log (die URL enthält ein Token)."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "sunshine-push"}), timeout=10) as r:
+            r.read(256)
+    except Exception as exc:
+        log.warning("Totmannschalter nicht erreichbar: %s", type(exc).__name__)
+
+
+class Scheduler:
+    """Jede Minute: fällige Weckrufe, Tagessumme, stündliches Aufräumen, tägliche Selbstprüfung, Totmannschalter."""
+
+    def __init__(self, vapid: Vapid):
+        self.vapid = vapid
+        now = dt.datetime.now(BERLIN)
+        # Nach SELFCHECK_AT gestartet: die Prüfung beim Start (main) zählt für heute.
+        self.selfcheck_last = now.date() if now.strftime("%H:%M") >= SELFCHECK_AT else None
+        self.selfcheck_thread: threading.Thread | None = None
+        # (Abo-id, Tag, Art) → (gescheiterte Versuche, frühester nächster Versuch als Zeitstempel).
+        self.failures: dict[tuple[str, str, str], tuple[int, float]] = {}
+        self.cleaned: tuple[str, int] | None = None
+        self.started = now.date()
+        self.pinged: float | None = None
+
+    def run(self) -> None:
+        while True:
+            # Kurz nach jeder vollen Minute prüfen.
+            time.sleep(61 - dt.datetime.now().second)
+            try:
+                self.tick()
+            except Exception:  # Der Wecker darf nie stehen bleiben.
+                log.exception("Fehler im Zeitplan")
+
+    def tick(self, now: dt.datetime | None = None) -> None:
+        now = now or dt.datetime.now(dt.timezone.utc)
+        with db_lock:
+            rows = CONN.execute("SELECT * FROM subs").fetchall()
+        sent = 0
+        for row in rows:
+            try:
+                sent += self.wake(row, now)
+            except Exception as exc:  # Ein kaputtes Abo hält die übrigen nicht auf.
+                log.error("Fehler bei Abo %s: %s", short_id(row["id"]), type(exc).__name__)
+        if sent:
+            log.info("%d Weckrufe verschickt", sent)
+        berlin = now.astimezone(BERLIN)
+        yesterday = (berlin.date() - dt.timedelta(days=1)).isoformat()
+        for key in [k for k in self.failures if k[1] < yesterday]:
+            del self.failures[key]
+        for step in (self.stats, self.cleanup, self.selfcheck):
+            try:
+                step(berlin)
+            except Exception:
+                log.exception("Fehler im Zeitplan (%s)", step.__name__)
+        sched_state.update(at=berlin.isoformat(timespec="seconds"), mono=time.monotonic())
+        self.heartbeat()
+
+    def wake(self, row, now: dt.datetime) -> int:
+        """Fällige Weckrufe eines Abos; Zahl der zugestellten."""
+        local = now.astimezone(ZoneInfo(row["tz"]))
+        today = local.date().isoformat()
+        ts = now.timestamp()
+        sent = 0
+        for kind in SLOTS:
+            if not is_due(row, local, kind):
+                continue
+            # Erst nach erfolgreicher Zustellung als erledigt markieren: scheitert der Push-Dienst
+            # kurz, versucht ein späterer Durchlauf es im Nachholfenster erneut, mit wachsendem
+            # Abstand und höchstens SEND_TRIES-mal; danach bleibt der Weckruf für heute aus.
+            # 401/403 (Abo abgelehnt) wird heute nicht wiederholt, 404/410 hat das Abo schon gelöscht.
+            key = (row["id"], today, kind)
+            tries, next_at = self.failures.get(key, (0, 0.0))
+            if tries >= SEND_TRIES or ts < next_at:
+                continue
+            res = send(row, self.vapid, kind)
+            if res:
+                mark_sent(row, today, kind)
+                self.failures.pop(key, None)
+                count("sent_ok", berlin_day(now))
+                sent += 1
+                continue
+            if res.gone:
+                continue
+            tries = SEND_TRIES if res.status in (401, 403) else tries + 1
+            count("sent_fail", berlin_day(now))
+            delay = res.retry_after if res.retry_after is not None else 60 * 2 ** (tries - 1)
+            # Durchläufe liegen gut 60 s auseinander; 5 s Spiel, damit „in 1 min“ nicht 2 min wird.
+            self.failures[key] = (tries, ts + min(delay, RETRY_AFTER_MAX) - 5)
+            if tries >= SEND_TRIES:
+                count("gave_up", berlin_day(now), row["id"])
+                if res.status in (401, 403):
+                    log.warning("Weckruf %s an %s abgelehnt (HTTP %s), heute kein weiterer Versuch",
+                                kind, short_id(row["id"]), res.status)
+                else:
+                    log.warning("Weckruf %s an %s nach %d Versuchen aufgegeben (zuletzt HTTP %s)",
+                                kind, short_id(row["id"]), tries, res.status)
+        return sent
+
+    def stats(self, berlin: dt.datetime) -> None:
+        stats_snapshot(berlin.date().isoformat())
+
+    def cleanup(self, berlin: dt.datetime) -> None:
+        hour = (berlin.date().isoformat(), berlin.hour)
+        if self.cleaned != hour:
+            self.cleaned = hour
+            cleanup_subs(berlin.date(), self.started)
+
+    def selfcheck(self, berlin: dt.datetime) -> None:
+        # In eigenem Thread: sie dauert bis gut eine Minute und darf den Morgenversand nicht aufhalten.
+        if not selfcheck_due(berlin, self.selfcheck_last):
+            return
+        if self.selfcheck_thread is not None and self.selfcheck_thread.is_alive():
+            return
+        self.selfcheck_last = berlin.date()
+        self.selfcheck_thread = threading.Thread(target=run_selfcheck, args=(self.vapid,), daemon=True, name="selfcheck")
+        self.selfcheck_thread.start()
+
+    def heartbeat(self) -> None:
+        url = os.environ.get("HEARTBEAT_URL", "").strip()
+        if not url or (self.pinged is not None and time.monotonic() - self.pinged < HEARTBEAT_EVERY):
+            return
+        if health()[0] != 200:
+            return
+        self.pinged = time.monotonic()
+        threading.Thread(target=ping, args=(url,), daemon=True, name="heartbeat").start()
+
+
+def berlin_day(now: dt.datetime) -> str:
+    return now.astimezone(BERLIN).date().isoformat()
+
+
+# Sdui-Logins mit 401 (falsches Passwort o. Ä.) je Tag; ins Log kommt nur diese Zahl.
+sdui_rejected = {"day": None, "n": 0}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -628,17 +1031,49 @@ class Handler(BaseHTTPRequestHandler):
     # Langsame oder abgebrochene Clients halten sonst ewig einen Thread.
     timeout = HANDLER_TIMEOUT
     vapid: Vapid
+    replied = False
 
     def log_message(self, *args):  # keine IPs, keine Pfade mit ids im Log
         pass
 
-    def reply(self, status: int, body: dict | None = None) -> None:
-        data = json.dumps(body or {}).encode()
+    def guarded(self, handler) -> None:
+        """Unbehandelte Ausnahme: 500 und eine Logzeile nur mit dem Typ (Meldungen können Abo-Daten enthalten)."""
+        try:
+            handler()
+        except Exception as exc:
+            if isinstance(exc, OSError):
+                log.info("Verbindung abgebrochen (%s %s)", self.command, type(exc).__name__)
+                return
+            log.error("Fehler bei %s: %s", self.command, type(exc).__name__)
+            if not self.replied:
+                try:
+                    self.reply(500)
+                except OSError:
+                    pass
+
+    def do_GET(self):
+        self.guarded(self.get)
+
+    def do_POST(self):
+        self.guarded(self.post)
+
+    def do_PUT(self):
+        self.guarded(self.put)
+
+    def do_DELETE(self):
+        self.guarded(self.delete)
+
+    def start(self, status: int, length: int) -> None:
+        self.replied = True
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(length))
         self.end_headers()
+
+    def reply(self, status: int, body: dict | None = None) -> None:
+        data = json.dumps(body or {}).encode()
+        self.start(status, len(data))
         self.wfile.write(data)
 
     def content_length(self) -> int:
@@ -653,18 +1088,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def read_body(self, n: int) -> bytes:
         try:
-            return self.rfile.read(n)
+            data = self.rfile.read(n)
         except TimeoutError:
             raise BadRequest("Zeitüberschreitung")
+        # Weniger als angekündigt: Verbindung abgebrochen oder von der Gesamtfrist geschlossen.
+        if len(data) < n:
+            raise BadRequest("Zeitüberschreitung")
+        return data
 
     def body(self) -> dict:
         try:
             obj = json.loads(self.read_body(self.content_length()) or b"{}")
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             raise BadRequest("kein JSON")
         if not isinstance(obj, dict):
             raise BadRequest("kein Objekt")
         return obj
+
+    def client(self) -> str:
+        return client_ip(self.headers, self.client_address)
 
     def owned(self, sub_id: str) -> sqlite3.Row | None:
         auth = self.headers.get("Authorization", "")
@@ -683,8 +1125,22 @@ class Handler(BaseHTTPRequestHandler):
         rest = self.path[len("/api/sdui/"):]
         if not sdui_route_ok(method, rest):
             return self.reply(404)
-        if not sdui_allowed(client_ip(self.headers, self.client_address)):
+        if cross_site(self.headers):
+            return self.reply(403, {"error": "nur von dieser Seite"})
+        if not sdui_allowed(self.client()):
             return self.reply(429, {"error": "zu viele Anfragen, bitte später"})
+        login = method == "POST"
+        if login:
+            if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":
+                return self.reply(415, {"error": "Content-Type application/json erwartet"})
+            if not sdui_login_limit.allow(net_key(self.client())):
+                return self.reply(429, {"error": "zu viele Anmeldeversuche, bitte später"})
+            if not sdui_login_total.allow("alle"):
+                if alarm_limit.allow("sdui-login"):
+                    log.warning("Sdui-Relay: mehr als %d Logins in einer Stunde", SDUI_LOGINS_PER_HOUR)
+                    threading.Thread(target=alarm, daemon=True, args=(
+                        self.vapid, f"Sdui-Relay: mehr als {SDUI_LOGINS_PER_HOUR} Logins in einer Stunde, weitere abgewiesen")).start()
+                return self.reply(429, {"error": "zu viele Anmeldeversuche, bitte später"})
         try:
             n = self.content_length()
         except BadRequest as exc:
@@ -692,67 +1148,66 @@ class Handler(BaseHTTPRequestHandler):
         headers = {"Accept": "application/json", "User-Agent": "sunshine (+https://github.com/thmschk/sunshine-reminder)"}
         if self.headers.get("Authorization", "").startswith("Bearer "):
             headers["Authorization"] = self.headers["Authorization"]
-        try:
-            data = self.read_body(n) if method == "POST" else None
-        except BadRequest as exc:
-            return self.reply(400, {"error": str(exc)})
-        if data is not None:
+        data = None
+        if login:
             try:
-                data = sdui_login_body(data)
+                data = sdui_login_body(self.read_body(n))
             except BadRequest as exc:
                 return self.reply(400, {"error": str(exc)})
-        if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(f"{SDUI_BASE}/{rest}", data=data, method=method, headers=headers)
         try:
             with SDUI_OPENER.open(req, timeout=20) as r:
                 status, body = r.status, r.read()
         except urllib.error.HTTPError as exc:
-            if 300 <= exc.code < 400:
-                return self.reply(502, {"error": "Sdui leitet um, nicht gefolgt"})
-            status, body = exc.code, exc.read()
+            with exc:
+                if 300 <= exc.code < 400:
+                    return self.reply(502, {"error": "Sdui leitet um, nicht gefolgt"})
+                status, body = exc.code, exc.read()
         except Exception:
             return self.reply(502, {"error": "Sdui nicht erreichbar"})
+        if login and status == 401:
+            today = dt.date.today().isoformat()
+            if sdui_rejected["day"] != today:
+                sdui_rejected.update(day=today, n=0)
+            sdui_rejected["n"] += 1
+            log.info("Sdui-Login abgelehnt (401), heute %d", sdui_rejected["n"])
         # Bewusst keine Access-Control-Allow-*-Header: fremde Origins können die Antwort nicht lesen.
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
+        self.start(status, len(body))
         self.wfile.write(body)
 
-    def do_GET(self):
+    def get(self):
         if self.path.startswith("/api/sdui/"):
             return self.sdui("GET")
-        if self.path.split("?")[0] == "/api/health":
-            with db_lock:
-                rejected = CONN.execute("SELECT COUNT(*) FROM subs WHERE auth_failed_since IS NOT NULL").fetchone()[0]
-            # auth_rejected > 0: Push-Dienste lehnen Abos mit 401/403 ab, siehe AUTH_FAIL_DAYS.
-            # Öffentlich nur die Kategorie je Problem (Text vor dem ersten ":"); Details stehen im Log.
-            public = {**selfcheck_state, "problems": [p.split(":")[0] for p in selfcheck_state["problems"]]}
-            return self.reply(200, {"selfcheck": public, "auth_rejected": rejected})
-        if self.path.split("?")[0] == "/api/stats":
-            return self.reply(200, stats(dt.datetime.now(ZoneInfo("Europe/Berlin")).date()))
-        if self.path.split("?")[0] == "/api/vapid":
+        path = self.path.split("?")[0]
+        if path == "/api/health":
+            return self.reply(*health())
+        if path == "/api/stats":
+            return self.reply(200, stats(dt.datetime.now(BERLIN).date()))
+        if path == "/api/vapid":
             return self.reply(200, {"publicKey": public_key_b64(self.vapid)})
         self.reply(404)
 
-    def do_POST(self):
+    def post(self):
         if self.path.startswith("/api/sdui/"):
             return self.sdui("POST")
         kind, sub_id, test = self.route()
         try:
             if kind == "subs" and sub_id is None:
                 s = parse_settings(self.body())
-                if not sub_limit.allow(client_ip(self.headers, self.client_address)):
+                if not sub_limit.allow(net_key(self.client())):
                     return self.reply(429, {"error": "zu viele neue Abos, bitte später"})
                 new_id, secret = secrets.token_urlsafe(18), secrets.token_urlsafe(24)
                 with db_lock:
-                    # Dasselbe Gerät zählt nicht mit: es ersetzt nur sein altes Abo.
-                    if CONN.execute("SELECT COUNT(*) FROM subs WHERE endpoint != ?", (s["endpoint"],)).fetchone()[0] >= MAX_SUBSCRIPTIONS:
+                    # Dasselbe Gerät zählt nicht mit: es ersetzt nur sein altes Abo. Begrenzt sind vor allem
+                    # Abos ohne eine einzige Zustellung; cleanup_subs räumt sie nach wenigen Tagen ab.
+                    unconfirmed, total = CONN.execute(
+                        "SELECT COUNT(*) FILTER (WHERE last_ok IS NULL), COUNT(*) FROM subs WHERE endpoint != ?",
+                        (s["endpoint"],)).fetchone()
+                    if unconfirmed >= MAX_UNCONFIRMED or total >= MAX_SUBSCRIPTIONS:
                         return self.reply(503, {"error": "voll"})
                     # Dasselbe Gerät neu angemeldet: altes Abo ersetzen. is_admin wird nicht übernommen
-                    # (der Endpoint ist kein Geheimnis); Betreiber melden sich per ADMIN_KEY neu an.
+                    # (der Endpoint ist kein Geheimnis); Betreiber markieren sich per ADMIN_KEY neu.
                     CONN.execute("DELETE FROM subs WHERE endpoint = ?", (s["endpoint"],))
                     CONN.execute(
                         "INSERT INTO subs (id, secret_hash, endpoint, keys, time, weekdays, tz, created, offset_min, is_admin, morning_time) "
@@ -762,28 +1217,33 @@ class Handler(BaseHTTPRequestHandler):
                          s["morning_time"]),
                     )
                     CONN.commit()
-                return self.reply(201, {"id": new_id, "secret": secret})
+                return self.reply(201, {"id": new_id, "secret": secret, "is_admin": False})
             if kind == "subs" and test == "/test":
                 row = self.owned(sub_id)
                 if row is None:
                     return self.reply(404)
+                if not test_limit.allow(row["id"]):
+                    return self.reply(429, {"error": "zu viele Tests, bitte später"})
                 # {"kind": "today"} probt die Morgenmeldung, sonst die Erinnerung.
                 push_kind = "today-test" if self.body().get("kind") == "today" else "test"
-                return self.reply(200 if send(row, self.vapid, push_kind) else 502)
+                ok = send(row, self.vapid, push_kind)
+                return self.reply(200 if ok else 502, {"is_admin": bool(row["is_admin"])})
             if kind == "subs" and test == "/admin":
                 # Gerät als Betreiber-Gerät markieren: Geheimnis des Abos UND Betreiber-Schlüssel.
+                if not admin_limit.allow(net_key(self.client())):
+                    return self.reply(429, {"error": "zu viele Versuche, bitte später"})
                 row = self.owned(sub_id)
                 if row is None or not admin_key_ok(self.headers.get("X-Admin-Key", "")):
                     return self.reply(403)
                 with db_lock:
                     CONN.execute("UPDATE subs SET is_admin = 1 WHERE id = ?", (sub_id,))
                     CONN.commit()
-                return self.reply(200, {"admin": True})
+                return self.reply(200, {"admin": True, "is_admin": True})
         except BadRequest as exc:
             return self.reply(400, {"error": str(exc)})
         self.reply(404)
 
-    def do_PUT(self):
+    def put(self):
         kind, sub_id, test = self.route()
         if kind != "subs" or not sub_id or test:
             return self.reply(404)
@@ -804,15 +1264,16 @@ class Handler(BaseHTTPRequestHandler):
                     s["morning_last_sent"] = None
             if "endpoint" in s:
                 s["auth_failed_since"] = None
+                s["fail_since"] = None
             cols = ", ".join(f"{k} = ?" for k in s)
             with db_lock:
                 if "endpoint" in s:
                     CONN.execute("DELETE FROM subs WHERE endpoint = ? AND id != ?", (s["endpoint"], sub_id))
                 CONN.execute(f"UPDATE subs SET {cols} WHERE id = ?", (*s.values(), sub_id))
                 CONN.commit()
-        self.reply(200)
+        self.reply(200, {"is_admin": bool(row["is_admin"])})
 
-    def do_DELETE(self):
+    def delete(self):
         kind, sub_id, test = self.route()
         if kind != "subs" or not sub_id or test or self.owned(sub_id) is None:
             return self.reply(404)
@@ -823,11 +1284,39 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class LimitedServer(ThreadingHTTPServer):
-    """Höchstens MAX_CONNECTIONS gleichzeitige Verbindungen; weitere bekommen sofort 503."""
+    """Höchstens MAX_CONNECTIONS gleichzeitige Verbindungen; weitere bekommen sofort 503.
+
+    Jede Verbindung hat REQUEST_DEADLINE Sekunden; danach schließt ein Wächter-Thread sie."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.deadlines: dict[socket.socket, float] = {}
+        self.deadline_lock = threading.Lock()
+        self.closed = threading.Event()
+        threading.Thread(target=self.watchdog, daemon=True, name="watchdog").start()
+
+    def watchdog(self) -> None:
+        while not self.closed.wait(0.5):
+            now = time.monotonic()
+            with self.deadline_lock:
+                late = [s for s, t in self.deadlines.items() if now > t]
+                for s in late:
+                    del self.deadlines[s]
+            for s in late:
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def server_close(self) -> None:
+        self.closed.set()
+        super().server_close()
+
+    def handle_error(self, request, client_address) -> None:
+        # Ohne Traceback (könnte Anfragedaten enthalten) und ohne Client-Adresse.
+        exc = sys.exc_info()[1]
+        log.info("Verbindung abgebrochen: %s", type(exc).__name__)
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
@@ -845,9 +1334,13 @@ class LimitedServer(ThreadingHTTPServer):
             raise
 
     def process_request_thread(self, request, client_address):
+        with self.deadline_lock:
+            self.deadlines[request] = time.monotonic() + REQUEST_DEADLINE
         try:
             super().process_request_thread(request, client_address)
         finally:
+            with self.deadline_lock:
+                self.deadlines.pop(request, None)
             self.slots.release()
 
 
@@ -855,8 +1348,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     vapid = init()
     Handler.vapid = vapid
-    threading.Thread(target=scheduler, args=(vapid,), daemon=True).start()
-    threading.Thread(target=run_selfcheck, args=(vapid,), daemon=True).start()
+    threading.Thread(target=Scheduler(vapid).run, daemon=True, name="scheduler").start()
+    threading.Thread(target=run_selfcheck, args=(vapid,), daemon=True, name="selfcheck").start()
     log.info("lauscht auf :%d", PORT)
     LimitedServer(("0.0.0.0", PORT), Handler).serve_forever()
 
