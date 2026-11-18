@@ -33,9 +33,27 @@ export async function login(client, creds, persist) {
 }
 
 /**
+ * Anmelden, wobei gleichzeitige Abläufe desselben Clients einen Login teilen:
+ * sonst meldeten sich zwei Abläufe, die denselben abgelaufenen Token bemerken,
+ * je einmal an (doppelte Last, und der zweite Login entwertet womöglich den
+ * Token des ersten). persist() wird nur vom tatsächlich anmeldenden Ablauf gefragt.
+ */
+function sharedLogin(client, creds, persist) {
+  const running = client.loggingIn;
+  if (running && running.customerNo === creds.customerNo) return running.done;
+  const done = (async () => login(client, creds, await persist()))();
+  const mine = { customerNo: creds.customerNo, done };
+  client.loggingIn = mine;
+  const clear = () => { if (client.loggingIn === mine) client.loggingIn = null; };
+  done.then(clear, clear);
+  return done;
+}
+
+/**
  * fn mit gültigem Token ausführen: gespeicherten nehmen, sonst anmelden; bei Ablauf
  * einmal neu. War es ein Netzfehler (vielleicht ein abgelaufener Token, vielleicht
- * eine Sperre), erst kurz warten: sonst trifft der Login dieselbe Störung.
+ * eine Sperre), erst kurz warten: sonst trifft der Login dieselbe Störung. Hat ein
+ * anderer Ablauf inzwischen neu angemeldet, wird dessen Token genommen.
  */
 export async function withSession(client, creds, fn, { persist = true } = {}) {
   if (client.customerNo !== creds.customerNo) {
@@ -52,14 +70,24 @@ export async function withSession(client, creds, fn, { persist = true } = {}) {
   // Neuer Token nur für ein Konto, das noch gespeichert ist: ein Weckruf kann ein
   // inzwischen entferntes Kind (oder „Alles löschen“) überdauern.
   const keep = async () => persist && (await loadAccounts().catch(() => [])).some((a) => a.customerNo === creds.customerNo);
-  if (!client.token) await login(client, creds, await keep());
+  if (client.loggingIn?.customerNo === creds.customerNo) await client.loggingIn.done;
+  if (!client.token) await sharedLogin(client, creds, keep);
+  const used = client.token;
   try {
     return await fn();
   } catch (e) {
     if (!(e instanceof IbsAuthError || e.maybeAuth)) throw e;
-    if (!(e instanceof IbsAuthError) && pacing.reloginMs) await new Promise((r) => setTimeout(r, pacing.reloginMs));
-    client.signal?.throwIfAborted();
-    await login(client, creds, await keep());
+    if (client.loggingIn?.customerNo === creds.customerNo) {
+      await client.loggingIn.done;
+    } else if (client.token && client.token !== used && client.customerNo === creds.customerNo) {
+      // Ein anderer Ablauf hat schon neu angemeldet: dessen Token versuchen.
+    } else {
+      if (!(e instanceof IbsAuthError) && pacing.reloginMs) await new Promise((r) => setTimeout(r, pacing.reloginMs));
+      client.signal?.throwIfAborted();
+      if (client.loggingIn?.customerNo === creds.customerNo) await client.loggingIn.done;
+      else if (!(client.token && client.token !== used)) await sharedLogin(client, creds, keep);
+    }
+    if (!client.token) await sharedLogin(client, creds, keep);
     return fn();
   }
 }

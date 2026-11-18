@@ -9,7 +9,6 @@
 // das an der ersten Antwort und lädt dann je Tag über WeekplanMobile?date=.
 
 export const BASE_URL = "https://ibs.sunshine-catering.de/ibs5";
-export const WEB_URL = "https://ibs.sunshine-catering.de/IBS5";
 /** Frist je Anfrage an IBS5. */
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -76,6 +75,29 @@ export function isoWeek(iso) {
   const yearStart = Date.UTC(d.getUTCFullYear(), 0, 1);
   return [d.getUTCFullYear(), Math.ceil(((d - yearStart) / 86400000 + 1) / 7)];
 }
+
+/** Ostersonntag (gregorianisch, Gaußsche Osterformel in der Form von Meeus/Jones/Butcher). */
+function easter(year) {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** Gesetzlicher Feiertag in Berlin? (Die Schulferien stehen in ferien.json, siehe holidays.js.) */
+export function publicHolidayBerlin(iso) {
+  if (["01-01", "03-08", "05-01", "10-03", "12-25", "12-26"].includes(iso.slice(5))) return true;
+  const e = easter(Number(iso.slice(0, 4)));
+  return [-2, 1, 39, 50].some((n) => addDays(e, n) === iso);
+}
+
+/**
+ * Schultag ohne Kenntnis der Ferien: Montag bis Freitag und kein Feiertag. Wer die
+ * Ferien kennt, nimmt schoolDayIn (holidays.js).
+ */
+export const isSchoolDay = (iso) => weekdayNo(iso) <= 5 && !publicHolidayBerlin(iso);
 
 const LONG = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
 const SHORT = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
@@ -320,15 +342,6 @@ export const OrderState = Object.freeze({
   UNKNOWN: "UNKNOWN",
 });
 
-export const STATE_LABEL = {
-  ORDERED: "bestellt",
-  IN_CART: "nur im Warenkorb — nicht abgeschickt",
-  NOT_ORDERED: "nicht bestellt (noch bestellbar)",
-  DEADLINE_PASSED: "nicht bestellt, Bestellschluss vorbei",
-  NO_OFFER: "kein Angebot",
-  UNKNOWN: "unklar",
-};
-
 const STATUS_ORDERED = "2";
 const STATUS_NOT_ORDERED = "0";
 
@@ -400,8 +413,21 @@ export class MenuEntry {
   get selectable() {
     return this.orderable && !this.isKv && !!this.customerId && !!this.menuGroupId && !!this.menuLineId;
   }
-  get isOrdered() { return this.status === STATUS_ORDERED || this.quantityOrdered !== ""; }
-  get isUnderstood() { return this.status === STATUS_ORDERED || this.status === STATUS_NOT_ORDERED; }
+  get isOrdered() { return this.status === STATUS_ORDERED || quantityOf(this.quantityOrdered) > 0; }
+  /** Beide Mengen lesbar; sonst ist der Tag unklar, weder bestellt noch offen. */
+  get quantitiesReadable() { return !Number.isNaN(quantityOf(this.quantityOrdered)) && !Number.isNaN(quantityOf(this.quantityInCart)); }
+  get isUnderstood() { return (this.status === STATUS_ORDERED || this.status === STATUS_NOT_ORDERED) && this.quantitiesReadable; }
+}
+
+/**
+ * Menge aus data-quantity-ordered bzw. data-quantity-in-shopping-cart: leer = 0,
+ * sonst eine Zahl, auch mit Dezimalkomma („1,000“) oder typografischem Minus;
+ * alles andere NaN (unlesbar).
+ */
+export function quantityOf(value) {
+  const t = quantityText(String(value ?? ""));
+  if (!t) return 0;
+  return /^[-+]?\d+(?:\.\d+)?$/.test(t) ? parseFloat(t) : NaN;
 }
 
 export class DayStatus {
@@ -412,17 +438,18 @@ export class DayStatus {
   }
   get orderedItems() { return this.entries.filter((e) => e.isOrdered).map((e) => e.name); }
   get isActionable() { return this.state === OrderState.NOT_ORDERED || this.state === OrderState.IN_CART; }
-  get label() { return STATE_LABEL[this.state]; }
 }
 
 // Kaltverpflegung hält einen Tag nicht offen: die Tagesansicht liefert sie auch nach
 // dem Bestellschluss mit data-readonly="false" (gesperrt nur im Seiten-JS).
 const orderableMeal = (e) => e.orderable && !e.isKv;
 
-// Ein unbekannter Status ergibt UNKNOWN und gilt nie stillschweigend als bestellt.
+// Ein unbekannter Status oder eine unlesbare Menge ergibt UNKNOWN und gilt nie
+// stillschweigend als bestellt oder offen. Menge 0 heißt nicht bestellt.
 function dayState(entries) {
   if (entries.some((e) => e.isOrdered)) return OrderState.ORDERED;
-  if (entries.some((e) => e.quantityInCart !== "")) return OrderState.IN_CART;
+  if (!entries.every((e) => e.quantitiesReadable)) return OrderState.UNKNOWN;
+  if (entries.some((e) => quantityOf(e.quantityInCart) !== 0)) return OrderState.IN_CART;
   if (!entries.every((e) => e.isUnderstood)) return OrderState.UNKNOWN;
   if (entries.some(orderableMeal)) return OrderState.NOT_ORDERED;
   return OrderState.DEADLINE_PASSED;
@@ -611,7 +638,8 @@ const sameItems = (a, b) => {
  * weg oder anders, dann wird nicht abgeschickt. Ohne lesbares Datum ließe sich ein
  * Eintrag nicht nachprüfen, auch dann nicht. Nachgeprüft wird je Tag: mit
  * Neubestellung bestellt, mit Umbestellung das Gericht bestellt, mit nur
- * Abbestellungen nicht mehr bestellt; eine andere Bestellart gilt als unbestätigt.
+ * Abbestellungen nicht mehr bestellt (an einem gelesenen Tag, siehe cancelledOn);
+ * eine andere Bestellart gilt als unbestätigt.
  * @returns {Promise<{kind:"done"|"aborted"|"unconfirmed", reason?:string, missing?:string[]}>}
  */
 export async function submitCartAsSeen(client, seen, { reload }) {
@@ -662,7 +690,7 @@ export async function submitCartAsSeen(client, seen, { reload }) {
     // Was „Umbestellung“ genau meint, verrät die Seite nicht: das Gericht muss danach bestellt sein.
     const dish = (i) => ordered.some((e) => e.name && e.name.toLowerCase() === shortDish(i.name).toLowerCase());
     if (um.length) return um.every(dish);
-    return neu.length ? ordered.length > 0 : ordered.length === 0;
+    return neu.length ? ordered.length > 0 : cancelledOn(after.find((d) => d.date === date));
   };
   const missing = dates.filter((d) => !asSeen(d));
   const unknown = unknownKinds.size ? `Bestellart ${[...unknownKinds].map((k) => `„${k}“`).join(", ")} kann die App nicht nachprüfen.` : null;
@@ -693,13 +721,13 @@ function historyDay(date, lines) {
 
 // ---------------------------------------------------------------- Prüfung
 
-export const DEFAULT_CHECK = Object.freeze({ daysAhead: 9, weekdays: [1, 2, 3, 4, 5], includeToday: false });
-
 /**
  * Vorwarnzeit in Tagen, Standard 7. Unter 3 käme ein Montag erst am Freitag
  * davor in die Prüfung, oft nach dem Bestellschluss.
  */
 export const DAYS_AHEAD = Object.freeze({ def: 7, min: 3, max: 14 });
+
+export const DEFAULT_CHECK = Object.freeze({ daysAhead: DAYS_AHEAD.def, weekdays: [1, 2, 3, 4, 5], includeToday: false });
 /** Gespeicherte Vorwarnzeit, in die Grenzen gezogen; ältere Werte unter 3 werden 3. */
 export const clampDaysAhead = (n) => (Number.isInteger(n) ? Math.min(DAYS_AHEAD.max, Math.max(DAYS_AHEAD.min, n)) : DAYS_AHEAD.def);
 
@@ -723,13 +751,6 @@ export function lastCall(today, date, pushDays, schoolDays = DEFAULT_CHECK.weekd
   return date <= nextWeekday(nextWeekday(today, pushDays), schoolDays);
 }
 
-/** Längste Lücke in Kalendertagen zwischen zwei aufeinanderfolgenden Wochentagen aus weekdays (Mo–Fr: 3, Fr → Mo). */
-export function longestGap(weekdays) {
-  const days = [...new Set(weekdays)].sort((a, b) => a - b);
-  if (!days.length) return 7;
-  return Math.max(...days.map((d, i) => (i + 1 < days.length ? days[i + 1] - d : days[0] + 7 - d)));
-}
-
 /**
  * Zu prüfende Tage: daysAhead Kalendertage voraus, mindestens aber bis zum
  * nächsten Schultag bzw. bis cfg.coverUntil (Tag des nächsten Weckrufs). Sonst
@@ -746,19 +767,97 @@ export function targetDates(today, cfg = DEFAULT_CHECK) {
 }
 
 /**
+ * Wie weit voraus (Kalendertage ab heute) ein Schultag ein Angebot haben muss:
+ * IBS5 stellt Speisepläne wochenweise vorher ein, der Bestellschluss liegt Tage
+ * vor dem Liefertag. Weiter voraus heißt ein leerer Tag womöglich nur „noch nicht
+ * eingestellt“.
+ */
+const OFFER_EXPECTED_DAYS = 7;
+
+/**
+ * Wie lange ein gelesener Speiseplan mit Gerichten belegt, dass das Seitenformat
+ * verstanden wird (siehe settle). Nach einem Formatwechsel melden leere Tage also
+ * spätestens nach dieser Zeit „unklar“.
+ */
+export const MENU_PROOF_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** Aus Tages- oder Wochenansicht gelesen (nicht aus der Bestellhistorie) und mit Gerichten. */
+const readable = (d) => d.entries.length > 0 && !fromHistory(d);
+
+/**
+ * Wann für dieses Konto zuletzt ein Speiseplan mit lesbaren Gerichten gelesen
+ * wurde (ms), aus client.dayStore (menuSeen/markMenuSeen) oder dem Speicher des
+ * Clients; 0, wenn nie.
+ */
+async function menuSeenAt(client) {
+  const mem = client.menuSeen && client.menuSeen.customerNo === client.customerNo ? client.menuSeen.at : 0;
+  const saved = Number(await Promise.resolve(client.dayStore?.menuSeen?.()).catch(() => 0)) || 0;
+  return Math.max(mem, saved);
+}
+
+function markMenuSeen(client, at = Date.now()) {
+  client.menuSeen = { customerNo: client.customerNo, at };
+  return Promise.resolve(client.dayStore?.markMenuSeen?.(at)).catch(() => {});
+}
+
+/**
+ * Ein leerer Schultag im Nahbereich ist nur dann „kein Angebot“, wenn belegt ist,
+ * dass der Parser das Seitenformat versteht: im selben Lauf oder vor höchstens
+ * MENU_PROOF_MS wurde für das Konto ein Tag mit Gerichten gelesen (Tages- oder
+ * Wochenansicht, auch aus dem Zwischenspeicher). Sonst kann es ebenso ein
+ * Seitenformat sein, das der Parser nicht erkennt: UNKNOWN. Kein Schultag
+ * (schoolDay) oder weiter voraus bleibt „kein Angebot“.
+ */
+function settle(days, schoolDay, proven) {
+  if (proven) return days;
+  const today = todayBerlin();
+  const until = addDays(today, OFFER_EXPECTED_DAYS);
+  return days.map((d) => (doubtful(d, today, until, schoolDay) ? new DayStatus(d.date, OrderState.UNKNOWN) : d));
+}
+const doubtful = (d, today, until, schoolDay) => d.state === OrderState.NO_OFFER && !d.entries.length
+  && d.date >= today && d.date <= until && schoolDay(d.date);
+
+/**
+ * Beleg für settle. Ohne gespeicherten Beleg und ohne Gerichte in diesem Lauf
+ * (etwa: alles bestellt, nur ein leerer Freitag wurde geladen) dient ein laut
+ * Bestellhistorie bestellter Tag als Gegenprobe: dessen Tagesansicht muss
+ * Gerichte zeigen. Das kostet eine Anfrage, höchstens einmal je MENU_PROOF_MS.
+ */
+async function proveFormat(client, days, schoolDay, { fresh, signal, maxAgeMs }) {
+  const today = todayBerlin();
+  const until = addDays(today, OFFER_EXPECTED_DAYS);
+  const read = days.some(readable);
+  if (read) await markMenuSeen(client);
+  if (read || !days.some((d) => doubtful(d, today, until, schoolDay))) return true;
+  if (Date.now() - (await menuSeenAt(client)) <= MENU_PROOF_MS) return true;
+  const probe = days.find((d) => fromHistory(d) && d.date >= today);
+  if (!probe || !client.dayplan) return false;
+  const [day] = await collectByDay(client, [probe.date], fresh, null, signal, maxAgeMs);
+  if (!day?.entries.length) return false;
+  await markMenuSeen(client);
+  return true;
+}
+
+/**
  * Jede betroffene Kalenderwoche einmal laden; Login muss vorher erfolgt sein.
  * Liefert IBS5 statt der Woche eine Tagesansicht (Handy), wird je Tag geladen.
  * Mit history holt sich die Tagesansicht die bestellten Tage vorab gesammelt aus
  * der Bestellhistorie; solche Tage tragen keine Bestell-IDs (Übersicht,
- * Nachprüfung einer Bestellung). maxAgeMs: zwischengespeicherte Tage nur, wenn
- * sie höchstens so alt sind.
+ * Nachprüfung einer Bestellung).
+ * maxAgeMs: Zwischengespeichertes (Tage, Wochenseiten) nur, wenn es höchstens so
+ * alt ist; fresh: nichts Zwischengespeichertes.
  * peek: Tage nur zum Anzeigen (heute): bestellt aus der Historie, sonst aus der
  * Tagesansicht (Feiertag, kein Angebot, nicht oder vor dem Zeitfenster der
  * Historie bestellt); im Wochenplan kommen sie aus derselben Woche.
+ * schoolDay(date): an diesem Tag wird ein Angebot erwartet (siehe settle);
+ * ohne Angabe Mo–Fr ohne Feiertage, Ferien gelten dann als Schultage.
  */
-export async function collect(client, dates, { fresh = false, maxAgeMs = null, onProgress, history = false, signal, peek = [] } = {}) {
-  const byDay = () => (history ? collectByHistory(client, dates, fresh, onProgress, signal, peek)
-    : collectByDay(client, dates, fresh, onProgress, signal, maxAgeMs));
+export async function collect(client, dates, {
+  fresh = false, maxAgeMs = null, onProgress, history = false, signal, peek = [], schoolDay = isSchoolDay,
+} = {}) {
+  const finish = async (days) => settle(days, schoolDay, await proveFormat(client, days, schoolDay, { fresh, signal, maxAgeMs }));
+  const byDay = async () => finish(await (history ? collectByHistory(client, dates, fresh, onProgress, signal, peek, maxAgeMs)
+    : collectByDay(client, dates, fresh, onProgress, signal, maxAgeMs)));
   if (client.dayView) return byDay();
   const weeks = new Map();
   for (const d of [...new Set([...dates, ...peek])]) {
@@ -768,10 +867,11 @@ export async function collect(client, dates, { fresh = false, maxAgeMs = null, o
     weeks.get(key).dates.push(d);
   }
   const result = [];
+  let read = false;
   for (const key of [...weeks.keys()].sort()) {
     const { y, w, dates: ds } = weeks.get(key);
     signal?.throwIfAborted();
-    const plan = parseWeekplan(await client.weekplan(y, w));
+    const plan = parseWeekplan(await weekplanOnce(client, y, w, fresh, maxAgeMs));
     if (plan.view === "day") {
       client.dayView = true;
       return byDay();
@@ -782,9 +882,37 @@ export async function collect(client, dates, { fresh = false, maxAgeMs = null, o
     if (shown.length && !shown.includes(w)) {
       throw new IbsError(`Angefragt war KW ${w}, geliefert wurde KW ${shown.join("/")}`);
     }
+    // Zweite Gegenprobe, auch ohne jede KW-Angabe: alle Gerichte liegen in der angefragten Woche.
+    const other = [...plan.days.keys()].find((k) => isoWeek(k).join() !== [y, w].join());
+    if (other) throw new IbsError(`Angefragt war KW ${w}, geliefert wurde ein Plan mit ${De.short(other)}`);
+    // Gerichte an anderen Tagen der Seite belegen das Format ebenso (siehe settle).
+    read ||= [...plan.days.values()].some(readable);
     for (const d of ds) result.push(plan.days.get(d) ?? new DayStatus(d, OrderState.NO_OFFER));
   }
-  return result.sort((a, b) => a.date.localeCompare(b.date));
+  if (read) await markMenuSeen(client);
+  return (await finish(result)).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Wie lange eine geladene Wochenseite für dieselbe Woche wiederverwendet wird:
+ * nur für Anfragen kurz nacheinander oder gleichzeitig (etwa Mo–Di und Mi–Fr
+ * derselben Woche), nicht als Zwischenspeicher.
+ */
+const WEEK_REUSE_MS = 5000;
+
+/** Wochenseite laden; eine laufende oder wenige Sekunden alte Anfrage derselben Woche wird geteilt. */
+function weekplanOnce(client, y, w, fresh, maxAgeMs) {
+  const cache = (client.weekCache ??= new Map());
+  const now = Date.now();
+  for (const [k, hit] of cache) if (now - hit.at >= WEEK_REUSE_MS) cache.delete(k);
+  const key = `${client.customerNo ?? ""}|${y}-${w}`;
+  const hit = cache.get(key);
+  if (hit && !fresh && (maxAgeMs == null || now - hit.at < maxAgeMs)) return hit.text;
+  // Alter ab dem Start der Anfrage: so gilt eine Antwort eher zu alt als zu frisch.
+  const entry = { at: now, text: Promise.resolve(client.weekplan(y, w)) };
+  cache.set(key, entry);
+  entry.text.catch(() => { if (cache.get(key) === entry) cache.delete(key); });
+  return entry.text;
 }
 
 // Die Tagesansicht kostet eine Anfrage je Tag: strikt nacheinander (Abstand siehe
@@ -797,16 +925,19 @@ export async function collect(client, dates, { fresh = false, maxAgeMs = null, o
 // Bestellschluss liefert es nicht, die eine endgültige Sperre belegen würde.
 const DAY_TTL_MS = { [OrderState.NO_OFFER]: 60 * 60 * 1000 };
 const DAY_CACHE_MS = 10 * 60 * 1000;
-// Ab nächster Woche länger: dort ist kein Bestellschluss nah, und ob anderswo
-// bestellt wurde, gleicht die Übersicht über die Bestellhistorie ab.
+// Mehr als FAR_AFTER_DAYS Kalendertage voraus länger: so früh liegt kein
+// Bestellschluss (für einen Montag womöglich schon vor dem Freitag davor, siehe
+// DAYS_AHEAD), und ob anderswo bestellt wurde, gleicht die Übersicht über die
+// Bestellhistorie ab.
+const FAR_AFTER_DAYS = 5;
 const FAR_CACHE_MS = 6 * 60 * 60 * 1000;
 // Ein offenes Gericht ohne Kundennummer kann nicht bestellt werden: dann hat der Parser
 // das Markup nicht verstanden (z. B. neues IBS5-Layout), der Tag wird neu geladen.
 const unusable = (day) => day.entries.some((e) => e.orderable && !e.isKv && !e.customerId);
 const isFresh = (hit) => {
   if (unusable(hit.day)) return false;
-  const nextMonday = addDays(todayBerlin(), 8 - weekdayNo(todayBerlin()));
-  const ttl = DAY_TTL_MS[hit.day.state] ?? (hit.day.date >= nextMonday ? FAR_CACHE_MS : DAY_CACHE_MS);
+  const far = hit.day.date > addDays(todayBerlin(), FAR_AFTER_DAYS);
+  const ttl = DAY_TTL_MS[hit.day.state] ?? (far ? FAR_CACHE_MS : DAY_CACHE_MS);
   return Date.now() - hit.at < ttl;
 };
 
@@ -868,6 +999,7 @@ async function collectByDay(client, dates, fresh, onProgress, signal, maxAgeMs =
  * ob sie ankam, ist erst nach dem nächsten Laden bekannt.
  */
 export async function forgetDays(client, dates) {
+  client.weekCache?.clear();
   if (!client.dayCache && !client.dayStore) return;
   const cache = await dayCache(client);
   let dropped = 0;
@@ -883,7 +1015,7 @@ const HISTORY_DAYS = 90;
  * (offen, zu spät, kein Angebot unterscheidet nur sie). Ist die Historie nicht
  * lesbar, wird je Tag geladen.
  */
-async function collectByHistory(client, dates, fresh, onProgress, signal, peek = []) {
+async function collectByHistory(client, dates, fresh, onProgress, signal, peek = [], maxAgeMs = null) {
   peek = peek.filter((d) => !dates.includes(d));
   if (!dates.length && !peek.length) return [];
   signal?.throwIfAborted();
@@ -893,8 +1025,8 @@ async function collectByHistory(client, dates, fresh, onProgress, signal, peek =
     ordered = parseOrderHistory(await client.orderHistory(addDays(today, -HISTORY_DAYS), addDays(today, 1)));
   } catch (e) {
     if (!(e instanceof ParserError)) throw e;
-    const all = await collectByDay(client, dates, fresh, onProgress, signal);
-    return [...all, ...(await collectByDay(client, peek, fresh, null, signal))].sort((a, b) => a.date.localeCompare(b.date));
+    const all = await collectByDay(client, dates, fresh, onProgress, signal, maxAgeMs);
+    return [...all, ...(await collectByDay(client, peek, fresh, null, signal, maxAgeMs))].sort((a, b) => a.date.localeCompare(b.date));
   }
   // Zwischengespeicherte Tage, die der Historie widersprechen (anderswo bestellt
   // oder abbestellt), sind veraltet. Bestellt ohne jede Zeile im Zeitraum heißt
@@ -911,8 +1043,8 @@ async function collectByHistory(client, dates, fresh, onProgress, signal, peek =
   const fromHistory = (ds) => ds.filter((d) => ordered.has(d)).map((d) => historyDay(d, ordered.get(d)));
   const known = fromHistory(dates);
   const progress = onProgress && ((done) => onProgress(known.length + done, dates.length));
-  const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, progress, signal);
-  const peeked = await collectByDay(client, peek.filter((d) => !ordered.has(d)), fresh, null, signal);
+  const rest = await collectByDay(client, dates.filter((d) => !ordered.has(d)), fresh, progress, signal, maxAgeMs);
+  const peeked = await collectByDay(client, peek.filter((d) => !ordered.has(d)), fresh, null, signal, maxAgeMs);
   return [...known, ...rest, ...fromHistory(peek), ...peeked].sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -973,14 +1105,25 @@ function orderedAs(day, line) {
   if (!line) return ordered.length === 0;
   const e = ordered[0];
   const same = e?.menuLineId ? e.menuLineId === line.menuLineId : sameDish(e?.name, line.name);
-  return ordered.length === 1 && same && parseFloat(String(e.quantityOrdered ?? "").replace(",", ".")) === 1;
+  return ordered.length === 1 && same && quantityOf(e.quantityOrdered) === 1;
 }
+/**
+ * Abbestellt laut einem gelesenen Tag: Gerichte gelesen, keins bestellt, nichts
+ * im Warenkorb. Ein leerer oder unklarer Tag bestätigt nichts — er sieht nach
+ * einer nicht erkannten Seite genauso aus.
+ */
+function cancelledOn(day) {
+  return !!day?.entries.length && (day.state === OrderState.NOT_ORDERED || day.state === OrderState.DEADLINE_PASSED)
+    && !day.entries.some((e) => e.isOrdered);
+}
+/** Nach dem Abschicken: steht der Tag wie gewünscht (line null: abbestellt, siehe cancelledOn)? */
+const confirmedAs = (day, line) => (line ? orderedAs(day, line) : cancelledOn(day));
 const sameDish = (a, b) => !!a && !!b && shortDish(a).toLowerCase() === shortDish(b).toLowerCase();
 /** Tag aus der Bestellhistorie (ohne Bestell-IDs, siehe historyDay). */
 const fromHistory = (day) => !!day?.entries.length && day.entries.every((e) => !e.menuLineId);
 
 /** Menge laut data-quantity-in-shopping-cart; 0, wenn leer oder unlesbar. */
-const cartQuantity = (e) => parseFloat(String(e.quantityInCart ?? "").replace(",", ".")) || 0;
+const cartQuantity = (e) => quantityOf(e.quantityInCart) || 0;
 
 /** current = bestellte Linie oder null, target = gewünschte Linie oder null ("nichts"). */
 export function changeKind(c) {
@@ -1086,7 +1229,8 @@ export async function placeOrders(client, requested, {
     const clearAll = total == null || total > othersInCart;
     const inCart = (date) => {
       const day = dayOf(before, date);
-      return day?.state === OrderState.IN_CART || (day?.entries || []).some((e) => cartQuantity(e) !== 0);
+      // Unlesbare Menge (NaN) zählt als „vielleicht im Warenkorb“: dann wird geleert.
+      return day?.state === OrderState.IN_CART || (day?.entries || []).some((e) => quantityOf(e.quantityInCart) !== 0);
     };
     for (const c of changes) {
       const anchor = c.target ?? c.current;
@@ -1141,7 +1285,7 @@ export async function placeOrders(client, requested, {
     return { kind: "unconfirmed", reason: [why, `Nachprüfung fehlgeschlagen: ${e.message}`].filter(Boolean).join("; "), missing: dates,
       network: !!(lost?.network || e?.network) };
   }
-  const missing = changes.filter((c) => !orderedAs(dayOf(after, c.date), c.target)).map((c) => c.date);
+  const missing = changes.filter((c) => !confirmedAs(dayOf(after, c.date), c.target)).map((c) => c.date);
   return missing.length
     ? { kind: "unconfirmed", reason: why || "Nicht alle Tage stehen so im Wochenplan wie gewünscht.", missing, network: !!lost?.network }
     : { kind: "done", changes };

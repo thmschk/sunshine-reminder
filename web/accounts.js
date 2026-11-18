@@ -5,7 +5,7 @@
 // Was je Konto zwischengespeichert wird, trägt die Kundennummer im Schlüssel.
 
 import { Profile } from "./ibs.js";
-import { kvDel, kvGet, kvSet, secretGet, secretSet } from "./idb.js";
+import { kvDel, kvGet, kvSet, kvUpdate, secretGet, secretSet } from "./idb.js";
 
 const KEY = "accounts";
 const LEGACY = "creds";
@@ -14,7 +14,7 @@ const ACTIVE = "activeAccount";
 /** Schlüssel eines Zwischenspeichers je Konto, z. B. dayCache:12345. */
 export const accountKey = (base, customerNo) => `${base}:${customerNo}`;
 /** Diese Schlüssel gehören je einem Konto; „Kind entfernen“ löscht sie. */
-const PER_ACCOUNT = ["ibsSession", "dayCache", "lastDays", "ferienEssen", "ferienSpaeter"];
+const PER_ACCOUNT = ["ibsSession", "dayCache", "lastDays", "ferienEssen", "ferienSpaeter", "menuSeen"];
 
 const valid = (a) => !!(a?.customerNo && a?.password);
 
@@ -64,10 +64,9 @@ export async function removeAccount(customerNo) {
   const list = (await loadAccounts()).filter((a) => a.customerNo !== customerNo);
   await saveAccounts(list);
   for (const base of PER_ACCOUNT) await kvDel(accountKey(base, customerNo));
-  const events = (await kvGet("events")) || [];
-  await kvSet("events", events.filter((e) => e.who !== customerNo));
-  const notified = (await kvGet("notified")) || [];
-  await kvSet("notified", notified.filter((k) => !k.includes(`:${customerNo}:`)));
+  // In einer Transaktion: ein Lesefehler überschreibt nichts, ein gleichzeitiger Schreiber geht nicht verloren.
+  await kvUpdate("events", (events) => (Array.isArray(events) ? { value: events.filter((e) => e.who !== customerNo) } : {}));
+  await kvUpdate("notified", (keys) => (Array.isArray(keys) ? { value: keys.filter((k) => !k.includes(`:${customerNo}:`)) } : {}));
   if ((await kvGet(ACTIVE)) === customerNo) await kvDel(ACTIVE);
   return list;
 }
@@ -79,8 +78,9 @@ export const saveActive = (customerNo) => kvSet(ACTIVE, customerNo).catch(() => 
 export const accountLabel = (a) => new Profile(a?.name || "").firstName || `Kd. ${a?.customerNo || ""}`;
 
 /**
- * Tages-Zwischenspeicher (siehe dayCache in ibs.js) je Kundennummer. Gelesen
- * wird beim Kontowechsel, wenn withSession client.customerNo schon gesetzt hat;
+ * Tages-Zwischenspeicher (siehe dayCache in ibs.js) und Formatbeleg (menuSeen)
+ * je Kundennummer. Gelesen wird beim Kontowechsel, wenn withSession
+ * client.customerNo schon gesetzt hat;
  * der Eintrag aus der Zeit mit einem Konto gilt, solange die Kundennummer passt.
  * Abgelegt wird nur für ein noch gespeichertes Konto: ein Weckruf kann das
  * Abmelden oder „Kind entfernen“ überdauern.
@@ -91,4 +91,14 @@ export const dayStore = (client) => ({
     if (!(await loadAccounts()).some((a) => a.customerNo === rows.customerNo)) return;
     await kvSet(accountKey("dayCache", rows.customerNo), rows);
   },
+  // Zuletzt einen Speiseplan mit lesbaren Gerichten gelesen (ms, siehe settle in ibs.js).
+  menuSeen: () => kvGet(accountKey("menuSeen", client.customerNo)),
+  markMenuSeen: async (at) => {
+    const key = accountKey("menuSeen", client.customerNo);
+    // Höchstens stündlich schreiben: der Beleg gilt 14 Tage.
+    if ((await kvGet(key)) > at - MENU_SEEN_WRITE_MS) return;
+    if (!(await loadAccounts()).some((a) => a.customerNo === client.customerNo)) return;
+    await kvUpdate(key, (old) => ({ value: Math.max(Number(old) || 0, at) }));
+  },
 });
+const MENU_SEEN_WRITE_MS = 60 * 60 * 1000;

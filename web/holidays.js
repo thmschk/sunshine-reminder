@@ -6,8 +6,8 @@
 // Hinter „until“ sind die Ferien unbekannt, dort gilt jeder Tag als Schultag.
 
 import { accountKey } from "./accounts.js";
-import { addDays, weekdayNo } from "./ibs.js";
-import { kvGet, kvSet } from "./idb.js";
+import { addDays, isSchoolDay, weekdayNo } from "./ibs.js";
+import { kvGet, kvSet, kvUpdate } from "./idb.js";
 
 const KEY = "ferien";
 const PREF = "ferienEssen";
@@ -44,6 +44,12 @@ export function holidayOn(doc, date) {
   return doc.holidays.find((h) => h.start <= date && date <= h.end)?.name ?? null;
 }
 
+/**
+ * Für collect (ibs.js, Option schoolDay): Mo–Fr, kein Feiertag, keine Ferien. Nur an
+ * solchen Tagen gilt ein Tag ohne lesbares Angebot nahe voraus als unklar.
+ */
+export const schoolDayIn = (doc) => (date) => isSchoolDay(date) && !holidayOn(doc, date);
+
 /** Montag der Woche. */
 export const weekOf = (date) => addDays(date, 1 - weekdayNo(date));
 
@@ -73,16 +79,26 @@ export function nextHoliday(doc, today, within) {
 /** Offene Ferienwochen ohne Antwort. */
 export const unanswered = (doc, h, prefs, today) => openWeeks(doc, h, today).filter((w) => typeof prefs[w.monday] !== "boolean");
 
-/** { Montag: true (Essen, erinnern) | false (kein Essen) }; fehlt eine Woche, ist sie nicht gefragt. */
+const asPref = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
+
+/**
+ * { Montag: true (Essen, erinnern) | false (kein Essen) }; fehlt eine Woche, ist sie
+ * nicht gefragt. Nicht lesbar gilt wie nicht gefragt: dann wird erinnert wie sonst.
+ */
 export async function loadMealPref(customerNo) {
-  const v = await kvGet(accountKey(PREF, customerNo)).catch(() => undefined);
-  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  return asPref(await kvGet(accountKey(PREF, customerNo)).catch(() => undefined));
 }
 
-/** Antworten für einzelne Wochen übernehmen; vergangene Wochen fallen dabei heraus. */
+/**
+ * Antworten für einzelne Wochen übernehmen; vergangene Wochen fallen dabei heraus.
+ * Lesen und Schreiben in einer Transaktion: ist der Speicher nicht lesbar, wird
+ * geworfen statt die übrigen Antworten zu überschreiben.
+ */
 export async function saveMealPref(customerNo, answers, today) {
-  const keep = Object.entries(await loadMealPref(customerNo)).filter(([monday]) => addDays(monday, 6) >= today);
-  await kvSet(accountKey(PREF, customerNo), { ...Object.fromEntries(keep), ...answers });
+  await kvUpdate(accountKey(PREF, customerNo), (old) => {
+    const keep = Object.entries(asPref(old)).filter(([monday]) => addDays(monday, 6) >= today);
+    return { value: { ...Object.fromEntries(keep), ...answers } };
+  });
 }
 
 /** Tage, an denen ein offener Tag gewollt ist: Ferientage in Wochen ohne Ferienessen. */

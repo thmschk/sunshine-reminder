@@ -6,7 +6,7 @@
 // ein Jahr gilt; nur der bleibt (verschlüsselt) auf dem Gerät.
 
 import { addDays, todayBerlin, weekdayNo } from "./ibs.js";
-import { kvGet, kvSet, secretGet } from "./idb.js";
+import { kvGet, kvSet, kvUpdate, secretGet } from "./idb.js";
 
 export class SduiError extends Error {}
 export class SduiAuthError extends SduiError {}
@@ -184,8 +184,10 @@ export async function cachedPlan({ force = false } = {}) {
   try {
     const lessons = await timetable(cfg.token, cfg.childId, today, addDays(today, PLAN_DAYS));
     await kvSet("sduiPlan", { at: Date.now(), from: today, lessons });
-    const known = new Set([...((await kvGet("sduiKnown")) || []), ...knownSubjects(lessons)]);
-    await kvSet("sduiKnown", [...known].sort((a, b) => a.localeCompare(b, "de")));
+    // Seite und Service Worker laden beide: ergänzen in einer Transaktion, sonst ginge ein Fach verloren.
+    await kvUpdate("sduiKnown", (old) => ({
+      value: [...new Set([...(Array.isArray(old) ? old : []), ...knownSubjects(lessons)])].sort((a, b) => a.localeCompare(b, "de")),
+    }));
     return { lessons, error: null };
   } catch (e) {
     const lessons = cache?.lessons || [];

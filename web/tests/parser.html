@@ -1,0 +1,386 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Parser- und Abgleich-Tests</title>
+<!-- Über HTTP servieren (python3 -m http.server im Repo oder in web/). Nichts geht an IBS5: alle Clients sind Attrappen. -->
+<pre id="out">läuft</pre>
+<script type="module">
+import * as Ibs from "../ibs.js";
+const {
+  parseWeekplan, OrderState, collect, evaluate, AlarmText, addDays, todayBerlin, weekdayNo, isoWeek, isSchoolDay, publicHolidayBerlin,
+  quantityOf, placeOrders, submitCartAsSeen, CartResponse, DayStatus, MenuEntry, IbsError, IbsAuthError, Profile, forgetDays,
+  DEFAULT_CHECK, DAYS_AHEAD, MENU_PROOF_MS,
+} = Ibs;
+
+const results = [];
+const test = async (name, fn) => {
+  try { await fn(); results.push(`ok   ${name}`); } catch (e) { results.push(`FAIL ${name}: ${e.message}`); }
+};
+const eq = (a, b, what = "") => {
+  if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${what} erwartet ${JSON.stringify(b)}, war ${JSON.stringify(a)}`);
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const de = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
+
+const kw42 = await fetch("fixtures/weekplan_kw42_order.html").then((r) => r.text());
+const t = todayBerlin();
+/** Erster Schultag (Mo–Fr, kein Feiertag) ab heute + from Tagen. */
+const schoolDayFrom = (from) => {
+  for (let i = from; i < from + 14; i++) if (isSchoolDay(addDays(t, i))) return addDays(t, i);
+  throw new Error("kein Schultag gefunden");
+};
+const near = schoolDayFrom(1);
+/** Bestellknopf der Tagesansicht bzw. des Wochenplans. */
+const button = (date, { status = "0", ordered = "", cart = "", name = "Linseneintopf", line = "828", readonly = false } = {}) =>
+  `<button class="menuplan-checkbox" data-order-status="${status}" data-quantity-ordered="${ordered}" data-quantity-in-shopping-cart="${cart}"
+    data-name="${name}" data-date="${de(date)}" data-readonly="${readonly}" id="menu_quantity_mobile-${date}_16_${line}"
+    onclick="DayPlan.changeItemQuantity('', 1, 'x', '1000', '${line}', '${date}', 'u', true, '16', 'n');"></button>`;
+const dayPage = (...buttons) => `<ul><li class="plan" id="dayplan">${buttons.join("")}</li></ul>`;
+const weekPage = (w, ...buttons) => `<div id="weekplan"><div class="weekplan-title">Wochenplan KW ${w}</div>${buttons.join("")}</div>`;
+
+// ---------------------------------------------------------------- K1: kein Angebot nur mit Beleg
+
+await test("K1 Tagesansicht: leerer Schultag nahe voraus (Format nicht erkannt) → unklar, nicht „kein Angebot“", async () => {
+  const fake = { customerNo: "1000", dayView: true, async dayplan() { return '<li class="plan" id="dayplan"><div class="neu">…</div></li>'; } };
+  const [day] = await collect(fake, [near], { fresh: true });
+  eq(day.state, OrderState.UNKNOWN, near);
+  const alarm = evaluate([day]);
+  eq([alarm.kind, alarm.unclear.length], ["alarm", 1], "Alarm");
+  eq(AlarmText.title(alarm), "Bestellstatus unklar");
+  eq(/selbst nachsehen/.test(AlarmText.body(alarm)), true, "selbst prüfen");
+});
+await test("K1 Tagesansicht: alle Schultage leer → jeder unklar, kein „Alles erledigt“", async () => {
+  const dates = [1, 2, 3, 4, 5, 6, 7].map((i) => addDays(t, i)).filter(isSchoolDay);
+  const fake = { customerNo: "1000", dayView: true, async dayplan() { return dayPage(); } };
+  const days = await collect(fake, dates, { fresh: true });
+  eq(days.every((d) => d.state === OrderState.UNKNOWN), true, days.map((d) => d.state).join());
+  eq(evaluate(days).kind, "alarm");
+});
+await test("K1: leer an Ferientag, Feiertag, Wochenende oder weit voraus bleibt „kein Angebot“", async () => {
+  const fake = { customerNo: "1000", dayView: true, async dayplan() { return dayPage(); } };
+  const { schoolDayIn } = await import("../holidays.js");
+  const ferien = { until: "2099-12-31", holidays: [{ start: near, end: near, name: "Herbstferien" }] };
+  eq((await collect(fake, [near], { fresh: true, schoolDay: schoolDayIn(ferien) }))[0].state, OrderState.NO_OFFER, "Ferien");
+  eq((await collect(fake, [near], { fresh: true, schoolDay: schoolDayIn({ until: "2099-12-31", holidays: [] }) }))[0].state,
+    OrderState.UNKNOWN, "ohne Ferien");
+  const far = schoolDayFrom(9);
+  eq((await collect(fake, [far], { fresh: true }))[0].state, OrderState.NO_OFFER, "weit voraus: Plan vielleicht noch nicht eingestellt");
+  const weekend = [1, 2, 3, 4, 5, 6, 7].map((i) => addDays(t, i)).find((d) => weekdayNo(d) === 6);
+  eq((await collect(fake, [weekend], { fresh: true }))[0].state, OrderState.NO_OFFER, "Samstag");
+  eq(evaluate([new DayStatus(near, OrderState.NO_OFFER)]).kind, "ok", "belegtes „kein Angebot“ ist kein Alarm");
+});
+await test("K1 Wochenansicht: Seite ganz ohne lesbare Gerichte → unklar; Lücke neben lesbaren Tagen → kein Angebot", async () => {
+  const [y, w] = isoWeek(near);
+  const empty = { async weekplan() { return weekPage(w, '<div class="day">wird geladen …</div>'); } };
+  eq((await collect(empty, [near], { fresh: true }))[0].state, OrderState.UNKNOWN, "leere Woche");
+  const mon = addDays(near, 1 - weekdayNo(near));
+  const other = mon === near ? addDays(near, 1) : mon;
+  const partial = { async weekplan() { return weekPage(w, button(other, { status: "2", ordered: "1" })); } };
+  const days = await collect(partial, [near], { fresh: true });
+  eq(days[0].state, OrderState.NO_OFFER, "Format verstanden, Tag ohne Angebot");
+  eq(y > 2000, true);
+});
+{
+  // Beleg „Format verstanden“ je Konto wie dayStore in accounts.js (menuSeen/markMenuSeen), hier im Speicher.
+  const proofStore = (seenAt = null) => ({ seenAt, rows: [], load() { return null; }, save() {},
+    menuSeen() { return this.seenAt; }, markMenuSeen(at) { this.seenAt = Math.max(this.seenAt || 0, at); } });
+  const DAY = 24 * 60 * 60 * 1000;
+  const emptyFake = (store) => ({ customerNo: "1000", dayView: true, dayStore: store, async dayplan() { return dayPage(); } });
+  await test("K1 Beleg: Studientag (leerer Schultag) mit Beleg vor 3 Tagen → kein Angebot, kein Alarm", async () => {
+    const days = await collect(emptyFake(proofStore(Date.now() - 3 * DAY)), [near], { fresh: true });
+    eq([days[0].state, evaluate(days).kind], [OrderState.NO_OFFER, "ok"]);
+  });
+  await test("K1 Beleg: letzter lesbarer Plan vor mehr als 14 Tagen → unklar", async () => {
+    eq((await collect(emptyFake(proofStore(Date.now() - 15 * DAY)), [near], { fresh: true }))[0].state, OrderState.UNKNOWN);
+    eq(MENU_PROOF_MS, 14 * DAY);
+  });
+  await test("K1 Beleg: Tag mit Gerichten im selben Lauf (Tagesansicht) → leerer Tag ist kein Angebot, Beleg gespeichert", async () => {
+    const store = proofStore();
+    const other = schoolDayFrom(near === addDays(t, 1) ? 2 : 1);
+    const fake = { customerNo: "1000", dayView: true, dayStore: store, async dayplan(d) { return d === other ? dayPage(button(d)) : dayPage(); } };
+    const days = await collect(fake, [near, other], { fresh: true });
+    eq(days.map((d) => d.state), [near, other].sort().map((d) => (d === near ? OrderState.NO_OFFER : OrderState.NOT_ORDERED)));
+    eq(Date.now() - store.seenAt < 5000, true, "Beleg gespeichert");
+  });
+  await test("K1 Beleg: aus der Wochenansicht zählt auch für die Tagesansicht", async () => {
+    const store = proofStore();
+    const [, w] = isoWeek(near);
+    const mon = addDays(near, 1 - weekdayNo(near));
+    const other = mon === near ? addDays(near, 1) : mon;
+    const week = { customerNo: "1000", dayStore: store, async weekplan() { return weekPage(w, button(other, { status: "2", ordered: "1" })); } };
+    await collect(week, [other], { fresh: true });
+    eq(store.seenAt > 0, true, "Beleg aus dem Wochenplan");
+    eq((await collect(emptyFake(store), [near], { fresh: true }))[0].state, OrderState.NO_OFFER, "Tagesansicht danach");
+    eq((await collect(emptyFake(proofStore()), [near], { fresh: true }))[0].state, OrderState.UNKNOWN, "anderes Gerät ohne Beleg");
+  });
+  await test("K1 Beleg: Zwischengespeicherter Tag mit Gerichten zählt wie ein frisch geladener", async () => {
+    const store = proofStore();
+    const other = schoolDayFrom(near === addDays(t, 1) ? 2 : 1);
+    store.load = () => ({ customerNo: "1000", rows: [{ date: other, at: Date.now(), day: { date: other, state: OrderState.NOT_ORDERED,
+      entries: parseWeekplan(dayPage(button(other))).days.get(other).entries.map((e) => ({ ...e })) } }] });
+    const asked = [];
+    const fake = { customerNo: "1000", dayView: true, dayStore: store, async dayplan(d) { asked.push(d); return dayPage(); } };
+    const days = await collect(fake, [near, other]);
+    eq([asked, days.find((d) => d.date === near).state], [[near], OrderState.NO_OFFER]);
+  });
+  // Bestellhistorie: Mo–Do bestellt, Fr leer (Kind nur Mo–Do angemeldet), sonst nichts gelesen.
+  const de2 = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+  const hist = (d) => `<table id="order-history-table"><tr><td>01.10.2026</td><td>${de2(d)}</td><td>1</td><td>M1 - Nudeln</td></tr></table>`;
+  const ordered = schoolDayFrom(near === addDays(t, 1) ? 2 : 1);
+  await test("K1 Beleg: nur bestellte Tage aus der Historie → Gegenprobe an deren Tagesansicht (eine Anfrage)", async () => {
+    const store = proofStore();
+    const asked = [];
+    const fake = { customerNo: "1000", dayView: true, dayStore: store, async orderHistory() { return hist(ordered); },
+      async dayplan(d) { asked.push(d); return d === ordered ? dayPage(button(d, { status: "2", ordered: "1" })) : dayPage(); } };
+    const days = await collect(fake, [near, ordered], { history: true, fresh: true });
+    eq(days.map((d) => [d.date, d.state]), [[near, OrderState.NO_OFFER], [ordered, OrderState.ORDERED]].sort((a, b) => a[0].localeCompare(b[0])));
+    eq([asked, store.seenAt > 0], [[near, ordered], true], "Gegenprobe");
+    asked.length = 0;
+    await collect(fake, [near, ordered], { history: true, fresh: true });
+    eq(asked, [near], "mit Beleg keine zweite Gegenprobe");
+  });
+  await test("K1 Beleg: Historie allein belegt nichts — Gegenprobe ohne lesbare Gerichte → unklar", async () => {
+    const store = proofStore();
+    const fake = { customerNo: "1000", dayView: true, dayStore: store, async orderHistory() { return hist(ordered); },
+      async dayplan() { return '<li class="plan" id="dayplan"><div class="neu">…</div></li>'; } };
+    const days = await collect(fake, [near, ordered], { history: true, fresh: true });
+    eq([days.find((d) => d.date === near).state, store.seenAt], [OrderState.UNKNOWN, null]);
+  });
+  await test("K1 Beleg: ohne ferien.json gelten Ferien als Schultage — mit Beleg kein Alarm", async () => {
+    const { schoolDayIn } = await import("../holidays.js");
+    const sd = schoolDayIn({ until: "", holidays: [] });
+    eq((await collect(emptyFake(proofStore(Date.now() - DAY)), [near], { fresh: true, schoolDay: sd }))[0].state, OrderState.NO_OFFER);
+  });
+}
+await test("K1 Feiertage Berlin", () => {
+  const yes = ["2026-01-01", "2026-03-08", "2026-04-03", "2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-10-03", "2026-12-25", "2026-12-26", "2027-03-26", "2027-03-29", "2027-05-17"];
+  const no = ["2026-04-02", "2026-04-07", "2026-05-15", "2026-10-02", "2026-12-24", "2027-03-30"];
+  eq(yes.filter((d) => !publicHolidayBerlin(d)), [], "fehlende Feiertage");
+  eq(no.filter(publicHolidayBerlin), [], "falsche Feiertage");
+  eq([isSchoolDay("2026-11-18"), isSchoolDay("2026-11-21"), isSchoolDay("2026-04-06")], [true, false, false]);
+});
+
+// ---------------------------------------------------------------- K2: Mengen als Zahl
+
+await test("K2 Mengen: „0“ heißt nicht bestellt, „1,000“ bestellt, unlesbar → unklar", () => {
+  const d = "2026-10-12";
+  const state = (opts) => parseWeekplan(dayPage(button(d, opts))).days.get(d).state;
+  eq(state({ ordered: "0" }), OrderState.NOT_ORDERED, "ordered 0");
+  eq(state({ ordered: "0,000", cart: "0" }), OrderState.NOT_ORDERED, "0,000 / 0");
+  eq(state({ ordered: "1,000" }), OrderState.ORDERED, "1,000");
+  eq(state({ cart: "1,000" }), OrderState.IN_CART, "Warenkorb 1,000");
+  eq(state({ cart: "−1" }), OrderState.IN_CART, "Abbestellung im Warenkorb");
+  eq(state({ cart: "0" }), OrderState.NOT_ORDERED, "Warenkorb 0");
+  eq(state({ ordered: "eins" }), OrderState.UNKNOWN, "unlesbar bestellt");
+  eq(state({ cart: "?" }), OrderState.UNKNOWN, "unlesbar Warenkorb");
+  eq(state({ ordered: "0", readonly: true }), OrderState.DEADLINE_PASSED, "0 nach Bestellschluss");
+  eq([quantityOf(""), quantityOf("1,000"), quantityOf("-1"), quantityOf("2.5"), Number.isNaN(quantityOf("1.000,00"))], [0, 1, -1, 2.5, true]);
+});
+await test("K2: die 0 macht nicht alle Tage einer Woche bestellt", () => {
+  const p = parseWeekplan(kw42.replaceAll('data-quantity-ordered=""', 'data-quantity-ordered="0"'));
+  const ordered = [...parseWeekplan(kw42).days.values()].filter((d) => d.state === OrderState.ORDERED).map((d) => d.date);
+  eq([...p.days.values()].filter((d) => d.state === OrderState.ORDERED).map((d) => d.date), ordered);
+});
+
+// ---------------------------------------------------------------- M1: Woche ohne KW-Kopf
+
+await test("M1 Wochenansicht ohne KW-Angabe mit Tagen einer anderen Woche → Fehler", async () => {
+  const page = `<div id="weekplan">${button("2026-10-19", { status: "2", ordered: "1" })}${button("2026-10-20")}</div>`;
+  let err = null;
+  try { await collect({ async weekplan() { return page; } }, ["2026-10-12", "2026-10-13"]); } catch (e) { err = e; }
+  eq(err instanceof IbsError && /Angefragt war KW 42/.test(err.message), true, `Fehler: ${err?.message}`);
+  const right = `<div id="weekplan">${button("2026-10-12", { status: "2", ordered: "1" })}</div>`;
+  const days = await collect({ async weekplan() { return right; } }, ["2026-10-12", "2026-10-13"]);
+  eq(days.map((d) => d.state), [OrderState.ORDERED, OrderState.NO_OFFER], "passende Woche ohne Kopf");
+});
+
+// ---------------------------------------------------------------- M2: Abbestellen bestätigen
+
+class FakeClient {
+  constructor() { Object.assign(this, { items: [], calls: [], submitted: false }); }
+  total() { return this.items.length; }
+  async cart() { this.calls.push("cart"); return new CartResponse(true, null, this.total()); }
+  async clearCart(c, date) { this.calls.push(`clear ${date}`); this.items = this.items.filter((x) => x.date !== date); return new CartResponse(true, null, this.total()); }
+  async addToCart(e) { this.calls.push(`add ${e.date}`); this.items.push(e); return new CartResponse(true, null, this.total()); }
+  async cancelInCart(e) { this.calls.push(`cancel ${e.date}`); this.items.push(e); return new CartResponse(true, null, this.total()); }
+  async submitCart() { this.calls.push("submit"); this.submitted = true; return new CartResponse(true, null, 0); }
+  async cartPage() { return `<div id="shopping-cart"><table><tbody>${(this.page || []).map((i) => `<tr><td>Di ${de(i.date)}</td><td>${i.name}</td><td>${i.kind}</td></tr>`).join("")}</tbody></table></div>`; }
+}
+{
+  const p42 = parseWeekplan(kw42);
+  const d = "2026-10-13";
+  const line = p42.days.get(d).entries.find((e) => e.selectable);
+  const orderedDay = new DayStatus(d, OrderState.ORDERED, p42.days.get(d).entries.map((e) => new MenuEntry({ ...e, status: e === line ? "2" : "0", quantityOrdered: e === line ? "1" : "", quantityInCart: "" })));
+  const openDay = new DayStatus(d, OrderState.NOT_ORDERED, p42.days.get(d).entries.map((e) => new MenuEntry({ ...e, status: "0", quantityOrdered: "", quantityInCart: "" })));
+  const cancel = (after) => placeOrders(new FakeClient(), [{ date: d, current: line, target: null }], {
+    preload: async () => [orderedDay], reload: async () => [after],
+  });
+  await test("M2 Abbestellen: leerer Tag danach → unbestätigt, nicht erledigt", async () => {
+    for (const after of [new DayStatus(d, OrderState.NO_OFFER), new DayStatus(d, OrderState.UNKNOWN), new DayStatus(d, OrderState.UNKNOWN, openDay.entries)]) {
+      const r = await cancel(after);
+      eq([r.kind, r.missing], ["unconfirmed", [d]], after.state);
+    }
+  });
+  await test("M2 Abbestellen: gelesener Tag ohne Bestellung → erledigt", async () => {
+    eq((await cancel(openDay)).kind, "done", "offen");
+    const closed = new DayStatus(d, OrderState.DEADLINE_PASSED, openDay.entries.map((e) => new MenuEntry({ ...e, orderable: false })));
+    eq((await cancel(closed)).kind, "done", "Bestellschluss vorbei");
+  });
+  await test("M2 Nur Warenkorb mit Abbestellung: leerer Tag danach → unbestätigt", async () => {
+    const seen = [{ date: d, name: "Linsen", kind: "Abbestellung" }];
+    const run = async (after) => {
+      const c = new FakeClient();
+      c.items = [{ date: d }];
+      c.page = seen;
+      return submitCartAsSeen(c, seen, { reload: async () => [after] });
+    };
+    eq((await run(new DayStatus(d, OrderState.NO_OFFER))).kind, "unconfirmed", "leer");
+    eq((await run(openDay)).kind, "done", "gelesen");
+  });
+}
+
+// ---------------------------------------------------------------- M3: Lesefehler überschreibt nichts
+
+{
+  const Ev = await import("../events.js");
+  const Fe = await import("../holidays.js");
+  const { kvSet, kvRead, kvDel, closeConnection } = await import("../idb.js");
+  /** IndexedDB wie bei verlorener Verbindung (iOS): jedes Öffnen scheitert mit UnknownError. */
+  const broken = async (fn) => {
+    const realOpen = IDBFactory.prototype.open;
+    await closeConnection();
+    IDBFactory.prototype.open = function () { throw new DOMException("Connection to Indexed Database server lost", "UnknownError"); };
+    try { return await fn(); } finally { IDBFactory.prototype.open = realOpen; }
+  };
+  const list = [{ id: "a", title: "Ausflug", date: addDays(t, 3), lead: 2, noMeal: false, who: null }];
+  await test("M3 Termine: Lesefehler → Fehler statt leerer Liste, beim Hinzufügen kein Überschreiben", async () => {
+    await kvSet("events", list);
+    const read = await broken(() => Ev.loadEvents(t).then(() => null, (e) => e));
+    eq(!!read, true, "loadEvents wirft");
+    const add = await broken(() => Ev.addEvent(t, { title: "Neu", date: addDays(t, 4), lead: 1 }).then(() => null, (e) => e));
+    const del = await broken(() => Ev.removeEvent(t, "a").then(() => null, (e) => e));
+    eq([!!add, !!del], [true, true], "Schreiben scheitert mit");
+    eq((await kvRead("events")).map((e) => e.id), ["a"], "Termine unverändert");
+  });
+  await test("M3 Termine: gleichzeitig hinzugefügt (Seite und Service Worker) → beide da", async () => {
+    await kvSet("events", list);
+    await Promise.all([Ev.addEvent(t, { title: "X", date: addDays(t, 5), lead: 1 }), Ev.addEvent(t, { title: "Y", date: addDays(t, 6), lead: 1 })]);
+    eq((await Ev.loadEvents(t)).map((e) => e.title), ["Ausflug", "X", "Y"]);
+    await kvSet("events", []);
+  });
+  await test("M3 Ferienessen: Lesefehler überschreibt die übrigen Antworten nicht", async () => {
+    await kvSet("ferienEssen:test-m3", { "2099-01-05": false });
+    const err = await broken(() => Fe.saveMealPref("test-m3", { "2099-01-12": true }, t).then(() => null, (e) => e));
+    eq(!!err, true, "wirft");
+    eq(await kvRead("ferienEssen:test-m3"), { "2099-01-05": false }, "unverändert");
+    await Fe.saveMealPref("test-m3", { "2099-01-12": true }, t);
+    eq(await kvRead("ferienEssen:test-m3"), { "2099-01-05": false, "2099-01-12": true }, "zusammengeführt");
+    await kvDel("ferienEssen:test-m3");
+  });
+  await test("M3 Kind entfernen: Lesefehler bei Terminen löscht nicht alle", async () => {
+    const Acc = await import("../accounts.js");
+    await Acc.saveAccounts([{ customerNo: "9001", password: "x", name: "" }]);
+    const mine = [{ ...list[0], id: "m", who: "9001" }, { ...list[0], id: "o", who: "9002" }, { ...list[0], id: "all", who: null }];
+    await kvSet("events", mine);
+    await Acc.removeAccount("9001");
+    eq((await kvRead("events")).map((e) => e.id), ["o", "all"], "nur die des Kindes weg");
+    await kvSet("events", []);
+    await Acc.saveAccounts([]);
+  });
+}
+
+// ---------------------------------------------------------------- S5: ein Login für parallele Abläufe
+
+{
+  const { withSession } = await import("../session.js");
+  const fakeClient = () => ({
+    token: "alt", customerNo: "1000", logins: 0,
+    async login() { this.logins++; await sleep(30); this.token = `neu${this.logins}`; return new Profile("Muster, Mia"); },
+  });
+  const creds = { customerNo: "1000", password: "x" };
+  await test("S5 Token abgelaufen, zwei Abläufe gleichzeitig → ein Login", async () => {
+    const c = fakeClient();
+    // Wie IbsClient#send: ohne Token (während eines Logins) oder mit abgelaufenem ein Auth-Fehler.
+    const fn = async () => { await sleep(5); if (!c.token || c.token === "alt") throw new IbsAuthError("abgelaufen"); return c.token; };
+    const r = await Promise.all([withSession(c, creds, fn, { persist: false }), withSession(c, creds, fn, { persist: false })]);
+    eq([c.logins, r], [1, ["neu1", "neu1"]]);
+  });
+  await test("S5 ohne Token, zwei Abläufe gleichzeitig → ein Login", async () => {
+    const c = fakeClient();
+    c.token = null;
+    c.customerNo = null;
+    const r = await Promise.all([withSession(c, creds, async () => c.token, { persist: false }), withSession(c, creds, async () => c.token, { persist: false })]);
+    eq([c.logins, r], [1, ["neu1", "neu1"]]);
+  });
+  await test("S5 zweiter Ablauf merkt den Ablauf erst nach dem Login des ersten → nimmt dessen Token", async () => {
+    const c = fakeClient();
+    let first = true;
+    const slow = async () => { const tok = c.token; await sleep(80); if (tok === "alt") throw new IbsAuthError("abgelaufen"); return c.token; };
+    const fast = async () => { if (first) { first = false; throw new IbsAuthError("abgelaufen"); } return c.token; };
+    const r = await Promise.all([withSession(c, creds, fast, { persist: false }), withSession(c, creds, slow, { persist: false })]);
+    eq([c.logins, r], [1, ["neu1", "neu1"]]);
+  });
+}
+
+// ---------------------------------------------------------------- M4: Frische nach Kalendertagen, maxAgeMs
+
+{
+  const memStore = (rows) => ({ rows, load() { return { customerNo: "1000", rows: this.rows }; }, save(v) { this.rows = v.rows; } });
+  const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, day: { date, state, entries: [] } });
+  await test("M4 Zwischenspeicher: bis 5 Tage voraus 10 Minuten, auch nach dem Wochenwechsel; danach 6 Stunden", async () => {
+    // t+5 liegt ab Mittwoch schon in der nächsten Woche: dort galten früher 6 Stunden.
+    const [d4, d6] = [addDays(t, 5), addDays(t, 6)];
+    const asked = [];
+    const fake = { customerNo: "1000", dayView: true, dayStore: memStore([row(d4, OrderState.NOT_ORDERED, 60), row(d6, OrderState.NOT_ORDERED, 60)]),
+      async dayplan(d) { asked.push(d); return dayPage(button(d)); } };
+    await collect(fake, [d4, d6]);
+    eq(asked, [d4], "nur der nahe Tag neu");
+  });
+  await test("M4 maxAgeMs gilt auch mit Bestellhistorie", async () => {
+    const far = addDays(t, 10);
+    const asked = [];
+    const fake = { customerNo: "1000", dayView: true, dayStore: memStore([row(far, OrderState.NOT_ORDERED, 1)]),
+      async orderHistory() { return '<table id="order-history-table"><tbody></tbody></table>'; },
+      async dayplan(d) { asked.push(d); return dayPage(button(d)); } };
+    await collect(fake, [far], { history: true });
+    eq(asked, [], "ohne maxAgeMs aus dem Speicher");
+    await collect(fake, [far], { history: true, maxAgeMs: 30000 });
+    eq(asked, [far], "älter als maxAgeMs: neu geladen");
+  });
+}
+
+// ---------------------------------------------------------------- S2: dieselbe Woche nicht doppelt
+
+await test("S2 Wochenansicht: Mo–Di und Mi–Fr derselben Woche gleichzeitig → eine Anfrage; fresh und forgetDays laden neu", async () => {
+  let calls = 0;
+  const fake = { customerNo: "1000", async weekplan() { calls++; await sleep(20); return kw42; } };
+  const [a, b] = await Promise.all([collect(fake, ["2026-10-12", "2026-10-13"]), collect(fake, ["2026-10-14", "2026-10-15", "2026-10-16"])]);
+  eq([calls, a.length + b.length], [1, 5], "gleichzeitig");
+  await collect(fake, ["2026-10-14"]);
+  eq(calls, 1, "kurz danach");
+  await collect(fake, ["2026-10-14"], { fresh: true });
+  eq(calls, 2, "fresh");
+  await forgetDays(fake, ["2026-10-14"]);
+  await collect(fake, ["2026-10-14"]);
+  eq(calls, 3, "nach forgetDays");
+  await collect(fake, ["2026-10-14"], { maxAgeMs: 0 });
+  eq(calls, 4, "maxAgeMs 0");
+});
+await test("S2: gescheiterte Wochenanfrage wird nicht wiederverwendet", async () => {
+  let calls = 0;
+  const fake = { customerNo: "1000", async weekplan() { if (calls++ === 0) throw new IbsError("Netz"); return kw42; } };
+  let err = null;
+  try { await collect(fake, ["2026-10-12"]); } catch (e) { err = e; }
+  eq([!!err, (await collect(fake, ["2026-10-12"])).length, calls], [true, 1, 2]);
+});
+
+// ---------------------------------------------------------------- S8: toter Code, einheitliche Vorwarnzeit
+
+await test("S8 Vorwarnzeit einheitlich, Ungenutztes entfernt", () => {
+  eq(DEFAULT_CHECK.daysAhead, DAYS_AHEAD.def);
+  eq(["WEB_URL", "STATE_LABEL", "longestGap"].filter((n) => n in Ibs), []);
+  eq("label" in new DayStatus("2026-10-12", OrderState.ORDERED), false, "DayStatus.label");
+});
+
+const bad = results.filter((r) => r.startsWith("FAIL"));
+document.getElementById("out").textContent = results.join("\n") + `\n\n${bad.length ? `${bad.length} FEHLGESCHLAGEN` : `ALLE OK (${results.length})`}`;
+</script>
