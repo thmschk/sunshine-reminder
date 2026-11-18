@@ -211,9 +211,15 @@ function loginForm(msg, retry, prefill) {
 
 /** Installieren unter der Anmeldung (Android): Knopf, solange Chrome ihn anbietet, sonst der Weg übers Menü. */
 function landInstall() {
-  return `<div id="land-install" class="land-install">${installPrompt
-    ? `<button id="b-install" type="button">Als App installieren</button><span class="small muted">Eigenes Symbol, öffnet sich wie eine App.</span>`
-    : `<span class="small muted">Als App: in Chrome oben rechts auf <b>⋮</b> → <b>App installieren</b>.</span>`}</div>`;
+  return `<div id="land-install" class="land-install">
+    <b>Als App installieren</b>${installPrompt
+      ? `<span class="small muted">Eigenes Symbol, öffnet sich wie eine App.</span><button id="b-install" type="button">Installieren</button>`
+      : `<ol class="tip-steps">
+          <li><span>In Chrome oben rechts auf <b>⋮</b> tippen</span></li>
+          <li><span><b>App installieren</b> wählen</span></li>
+          <li><span>Künftig über das neue Symbol öffnen</span></li>
+        </ol>`}
+  </div>`;
 }
 
 /**
@@ -286,7 +292,7 @@ function landingHtml(msg, retry, prefill, direct) {
       <div class="land-track" id="land-track">
       <div class="land-hero">
         <div class="intro land-tile" data-title="Willkommen">
-          <span class="land-tag">Für das Berliner Schulessen-Bestellsystem <b>IBS5</b></span>
+          <span class="land-tag">Nur für das Berliner Schulessen-Bestellsystem <b>IBS5</b></span>
           <h2 class="land-title">Schulessen vergessen?<span>Muss doch nicht sein.</span></h2>
           <p class="land-lead">Die App schaut für dich ins Bestellsystem und meldet sich, wenn noch etwas offen ist.
             Bestellen, umbestellen und abbestellen geht direkt hier.</p>
@@ -345,8 +351,8 @@ function landingHtml(msg, retry, prefill, direct) {
 
       <div class="land-foot">
         <span class="land-brand"><img src="icon.svg?v=3" alt="">sunshine order</span>
-        <span>Privates Projekt · kein Angebot von Sunshine Catering, IBS5 oder Sdui</span>
-        <span><a href="datenschutz.html">Datenschutz</a> · <a href="${REPO_URL}#architektur" target="_blank" rel="noopener">So funktioniert's (GitHub)</a></span>
+        <span>Privates Projekt · kein Angebot von Sunshine Catering</span>
+        <span><a href="datenschutz.html">Datenschutz</a> · <a href="${REPO_URL}#architektur" target="_blank" rel="noopener">So funktioniert's technisch</a></span>
       </div>
     </div>`;
 }

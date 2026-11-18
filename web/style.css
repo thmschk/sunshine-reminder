@@ -598,9 +598,11 @@ button.land-outline { background: var(--surface); color: var(--text); border: 1p
 .landing .card { border: 1px solid var(--surface-variant); border-radius: 18px; padding: 18px; }
 .land-login h2 { margin: 0 0 2px; font-size: 1.25rem; }
 .land-login .tip-steps { margin: 12px 0 8px; }
-.land-install { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; padding-top: 14px;
-  border-top: 1px solid var(--surface-variant); }
-.land-install button { background: var(--surface); color: var(--text); border: 1px solid var(--surface-variant); }
+.land-install { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--surface-variant); }
+.land-install > b, .land-install > .small { display: block; }
+.land-install .tip-steps { margin: 6px 0 0; }
+.land-install .tip-steps b { white-space: nowrap; }
+.land-install button { margin-top: 10px; }
 .land-sec { padding: 28px 0; }
 @media (min-width: 880px) { .land-sec { padding: 48px 0; } }
 .land-kicker { font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--open-text); margin: 0 0 6px; }
@@ -707,4 +709,15 @@ button.land-outline { background: var(--surface); color: var(--text); border: 1p
   .land-privacy li { padding: 8px 12px; }
   .land-tile .land-grid .card { padding: 10px 12px; }
   .land-tile .land-grid p { font-size: .85rem; }
+}
+
+/* Kachelmodus: Anmeldung kompakter, Hinweis „Für das Berliner …“ ans Ende der Willkommenskachel. */
+@media (max-width: 879px) {
+  .land-login label { margin: 8px 0 3px; }
+  .land-login .check { min-height: 40px; }
+  .land-login .row { margin-top: 8px; }
+  .land-login p.small { margin: 8px 0 0; }
+  .intro > .land-title { margin-top: auto; }
+  .intro > .land-checks { margin-bottom: 0; flex-direction: column; gap: 4px; }
+  .intro > .land-tag { order: 9; align-self: flex-start; margin: 20px 0 auto; }
 }
