@@ -93,7 +93,7 @@ rollback() {
     rsync -a --delete push.prev/ push/
     if [[ -f compose.yaml.prev ]]; then cp compose.yaml.prev compose.yaml; fi
     docker tag "$old_image" "$img:latest" </dev/null || { echo "FEHLER: altes Image $old_image fehlt, kein Zurück" >&2; return; }
-    docker compose up -d --no-build </dev/null >/dev/null 2>&1 || true
+    docker compose up -d --no-build --force-recreate </dev/null >/dev/null 2>&1 || true
     echo "Alter Push-Dienst wieder gestartet; Web-Dateien und Caddy unverändert." >&2
   fi
 }
@@ -101,7 +101,10 @@ rollback() {
 rsync -a --delete "$src/server/push/" push/
 cp "$src/server/compose.yaml" compose.yaml
 docker tag "$img:$SHA" "$img:latest"
-if ! docker compose up -d --no-build --quiet-pull </dev/null 2>&1 | { grep -vE "^ *(#|=>)" || true; } | tail -3; then
+# Compose erkennt ein nur neu getaggtes latest nicht, solange compose.yaml gleich bleibt.
+recreate=
+[[ $old_image != "$new_image" ]] && recreate=--force-recreate
+if ! docker compose up -d --no-build --quiet-pull $recreate </dev/null 2>&1 | { grep -vE "^ *(#|=>)" || true; } | tail -3; then
   echo "FEHLER: docker compose up mit ${SHA:0:7} gescheitert" >&2
   rollback
   exit 1
