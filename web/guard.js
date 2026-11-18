@@ -3,10 +3,11 @@
 // einem Netzfehler, einem abgelaufenen Token oder einem Login-Aussetzer zu
 // unterscheiden. Bei 429 (auf jedem Pfad) ruht jede Abfrage eine Stunde. Bleibt der
 // Login ohne Antwort, lädt die Seite erst das Logo von IBS5 als Bild (probe): kommt
-// es, ist die Verbindung nicht gesperrt und es gibt keine Pause. Sonst ruht sie
-// gestuft 10, 30, 60 Minuten; ein weiteres Schweigen binnen fünf Minuten gilt als
-// dieselbe Störung, jede geglückte Antwort setzt die Stufe zurück. 403 beim Login
-// heißt seit 09.10.2026 nur „Passwort falsch“. Die Sperre gilt der IP-Adresse,
+// es, ist die Verbindung nicht gesperrt und es gibt keine Pause. Ohne Probe
+// (Service Worker) ruht sie nur zwei Minuten. Sonst ruht sie gestuft 10, 30,
+// 60 Minuten; ein weiteres Schweigen binnen fünf Minuten gilt als dieselbe
+// Störung, jede geglückte Antwort setzt die Stufe zurück. 403 beim Login heißt
+// seit 09.10.2026 nur „Passwort falsch“. Die Sperre gilt der IP-Adresse,
 // deshalb endet die Pause, sobald das Gerät das Netz wechselt (WLAN ↔ Mobilfunk,
 // nur wo der Browser das verrät), oder wenn die Probe während der Pause glückt
 // (probeResume). Dazu eine Obergrenze je Stunde und Gerät, die nur bremst, bis
@@ -23,6 +24,12 @@ const SILENT_PAUSES_MS = [10, 30, 60].map((m) => m * 60 * 1000);
 const SILENT_REPEAT_MS = 6 * 3600 * 1000;
 /** Schweigen binnen dieser Zeit nach dem vorigen ist dieselbe Störung (etwa Abschicken, dann Nachladen). */
 const SILENT_SAME_MS = 5 * 60 * 1000;
+/**
+ * Schweigen ohne Probe (Service Worker hat keine Bilder): nur so lange, dass der Weckruf
+ * nicht gleich das nächste Kind anmeldet. Eine Stufe zählt es nicht, sonst träfe die Pause
+ * eines bloßen Aussetzers auch die App, die man nach der Meldung öffnet.
+ */
+const SILENT_UNPROBED_MS = 2 * 60 * 1000;
 const HOUR_CAP = 150;
 
 /**
@@ -97,8 +104,17 @@ export async function probeResume() {
   return true;
 }
 
+/**
+ * Pause bis jetzt + ms; eine laufende, die länger dauert (im selben Netz), bleibt
+ * unverändert, etwa eine Stufe nach Schweigen, wenn danach der Service Worker ohne
+ * Probe nur zwei Minuten setzte. Ohne IndexedDB (privater Modus) gibt es keine
+ * Pause; der eigentliche Fehler der Anfrage bleibt sichtbar.
+ */
 async function pause(reason, ms = PAUSE_MS) {
-  await kvSet("ibsPause", { until: Date.now() + ms, reason, at: Date.now(), net: netType() });
+  const now = Date.now();
+  const next = { until: now + ms, reason, at: now, net: netType() };
+  const sameNet = (old) => !old.net || !next.net || old.net === next.net;
+  await kvUpdate("ibsPause", (old) => (old && old.until >= next.until && sameNet(old) ? {} : { value: next })).catch(() => {});
 }
 
 /** Zeitpunkt, ab dem weight weitere Plätze im Stundenfenster frei sind, oder null, wenn sie es jetzt sind. */
@@ -159,13 +175,15 @@ export const guardHooks = {
     if (status === 429) return pause(`HTTP ${status}`);
     if (network && path.startsWith("/Login/")) {
       // Lädt das Logo, ist die Verbindung nicht gesperrt: ein Aussetzer, keine Pause.
-      if (await reachability.probe()) return;
+      const reached = await reachability.probe();
+      if (reached) return;
+      if (reached === null) return pause("keine Antwort beim Anmelden", SILENT_UNPROBED_MS);
       const now = Date.now();
       const prev = await kvGet("ibsSilent");
       let step = 0;
       if (prev && now - prev.at < SILENT_REPEAT_MS) step = now - prev.at < SILENT_SAME_MS ? prev.step : prev.step + 1;
       step = Math.min(step, SILENT_PAUSES_MS.length - 1);
-      await kvSet("ibsSilent", { at: now, step });
+      await kvSet("ibsSilent", { at: now, step }).catch(() => {});
       return pause("keine Antwort beim Anmelden", SILENT_PAUSES_MS[step]);
     }
   },

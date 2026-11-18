@@ -1,0 +1,298 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Weckruf-Tests</title>
+<!-- Über HTTP servieren wie test.html. Prüft handlePush (sw.js) mit erfundenen Weckrufen und Prüfungen, nie mit IBS5. -->
+<pre id="out">läuft</pre>
+<script type="module">
+import { handlePush, notify, withDeadline, pushLogger } from "../sw.js";
+import { PUSH_KINDS } from "../push.js";
+import { KeyUnreadableError, kvDel, kvGet, kvSet, secretGet, secretSet } from "../idb.js";
+
+const results = [];
+const test = async (name, fn) => {
+  try { await fn(); results.push(`ok   ${name}`); } catch (e) { results.push(`FAIL ${name}: ${e.message}`); }
+};
+const eq = (a, b, what = "") => {
+  if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${what} erwartet ${JSON.stringify(b)}, war ${JSON.stringify(a)}`);
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rejections = [];
+window.addEventListener("unhandledrejection", (e) => rejections.push(String(e.reason?.message || e.reason)));
+
+// Meldungen landen in shown; eine Meldung mit gleichem Tag ersetzt die vorige wie im Browser.
+const shown = [];
+let failShow = null;
+const bar = new Map();
+self.registration = {
+  showNotification: async (title, o) => {
+    if (failShow?.(title)) throw new Error("showNotification abgelehnt");
+    shown.push({ title, ...o });
+    bar.set(o.tag, { title, silent: !!o.silent, tag: o.tag });
+  },
+  getNotifications: async ({ tag } = {}) => (bar.has(tag) ? [bar.get(tag)] : []),
+};
+const posted = [];
+self.clients = { matchAll: async () => [{ postMessage: (m) => posted.push(m) }] };
+
+const KEYS = ["lastPushOk", "lastTodayOk", "pushLog", "operator", "pushFailed", "notified"];
+const reset = async () => {
+  shown.length = 0; posted.length = 0; bar.clear(); failShow = null;
+  for (const k of KEYS) await kvDel(k);
+};
+const view = (n) => ({ title: n.title, tag: n.tag, silent: n.silent, renotify: n.renotify });
+const steps = async () => ((await kvGet("pushLog")) || []).map((e) => e.s);
+
+// Erfundene Prüfungen: zeigen ihr Ergebnis über notify wie checkAndNotify / todayAndNotify.
+const calls = [];
+// bell reichen sie an notify weiter wie die echten; sport zeigt dazu eine Fach-Erinnerung.
+const deps = (over = {}) => ({
+  check: async (isTest, signal, log, bell) => { calls.push(["check", isTest]); return notify("Alles erledigt", "bis Fr", { silent: !isTest, signal, bell }); },
+  today: async (signal, log, bell) => { calls.push(["today"]); return notify("Heute gibt's", "Nudeln", { tag: "hs-today", signal, bell }); },
+  subjects: async (isTest) => { calls.push(["subjects", isTest]); },
+  ms: 1000,
+  ...over,
+});
+const sport = async (isTest, bell) => { calls.push(["subjects", isTest]); await notify("Morgen Sport", "", { tag: "hs-sdui", bell }); };
+
+await test("Vertrag: PUSH_KINDS steht als eine Zeile in push.js", async () => {
+  const src = await (await fetch("../push.js")).text();
+  const m = src.match(/^export const PUSH_KINDS = (\[.*\]);$/m);
+  eq(JSON.parse(m?.[1] || "null"), ["check", "today", "test", "today-test", "alarm"]);
+  eq(PUSH_KINDS, ["check", "today", "test", "today-test", "alarm"]);
+});
+
+await test("Erinnerung: Platzhalter laut zuerst, „alles bestellt“ ersetzt ihn still mit gleichem Tag", async () => {
+  await reset(); calls.length = 0;
+  await handlePush({ t: "check", sent: 1790000000 }, deps({ subjects: sport }));
+  eq(shown.map(view), [
+    { title: "Essen bestellt?", tag: "hs-check", silent: false, renotify: true },
+    { title: "Alles erledigt", tag: "hs-check", silent: true, renotify: false },
+    { title: "Morgen Sport", tag: "hs-sdui", silent: true, renotify: false },
+  ]);
+  eq(calls, [["check", false], ["subjects", false]]);
+  eq((await kvGet("lastPushOk"))?.ok, false, "Platzhalter zählt als angekommen (die echte Prüfung setzt ok)");
+});
+
+await test("Erinnerung: offener Tag ersetzt den lauten Platzhalter still (ein Ton je Weckruf), Fach-Erinnerung auch still", async () => {
+  await reset();
+  await handlePush({ t: "check" }, deps({ subjects: sport, check: async (t, signal, log, bell) => notify("Essen bestellen für Mia", "Mi offen", { signal, bell }) }));
+  eq(shown.map(view), [
+    { title: "Essen bestellt?", tag: "hs-check", silent: false, renotify: true },
+    { title: "Essen bestellen für Mia", tag: "hs-check", silent: true, renotify: false },
+    { title: "Morgen Sport", tag: "hs-sdui", silent: true, renotify: false },
+  ]);
+});
+
+await test("Erinnerung: Platzhalter nicht erschienen → offener Tag klingelt, Fach-Erinnerung danach still", async () => {
+  await reset();
+  failShow = (title) => title === "Essen bestellt?";
+  await handlePush({ t: "check" }, deps({ subjects: sport, check: async (t, signal, log, bell) => notify("Essen bestellen für Mia", "Mi offen", { signal, bell }) }));
+  eq(shown.map(view), [
+    { title: "Essen bestellen für Mia", tag: "hs-check", silent: false, renotify: true },
+    { title: "Morgen Sport", tag: "hs-sdui", silent: true, renotify: false },
+  ]);
+});
+
+await test("Erinnerung: Prüfung scheitert (auch iOS-Schlüssel) → Ersatzmeldung ersetzt den lauten Platzhalter still, ohne ihn laut", async () => {
+  for (const err of [new Error("Netz weg"), new KeyUnreadableError()]) {
+    await reset();
+    await handlePush({ t: "check" }, deps({ check: async () => { throw err; } }));
+    const last = shown.find((n) => n.tag === "hs-check" && n.title !== "Essen bestellt?");
+    eq([shown[0].silent, last.silent, last.renotify], [false, true, false], last.title);
+    eq((await kvGet("lastPushOk"))?.ok, false, "Ersatzmeldung kam an");
+    await reset();
+    failShow = (title) => title === "Essen bestellt?";
+    await handlePush({ t: "check" }, deps({ check: async () => { throw err; } }));
+    eq([shown[0].tag, shown[0].silent, shown[0].renotify], ["hs-check", false, true], "ohne Platzhalter laut");
+  }
+});
+
+await test("Erinnerung: Frist läuft ab → Ersatzmeldung, Protokoll rx ph ibs fail shown, keine späte Meldung", async () => {
+  await reset();
+  let sig = null;
+  await handlePush({ t: "check" }, deps({
+    ms: 30,
+    check: async (t, signal) => { sig = signal; await sleep(120); return notify("spät", "", { signal }); },
+  }));
+  await sleep(150);
+  eq([shown.map((n) => n.title), sig?.aborted], [["Essen bestellt?", "Prüfung fehlgeschlagen"], true]);
+  eq(await steps(), ["rx", "ph", "ibs", "fail", "shown"]);
+  eq((await kvGet("lastPushOk"))?.ok, false);
+});
+
+await test("Protokoll: Einträge {t, k, s, d?, on?, sent?}, sent vom Server, d mit „(still)“", async () => {
+  await reset();
+  await handlePush({ t: "check", sent: 1790000000 }, deps());
+  const log = await kvGet("pushLog");
+  eq(log.map((e) => [e.k, e.s]), [["check", "rx"], ["check", "ph"], ["check", "ibs"], ["check", "shown"]]);
+  eq([log[0].sent, typeof log[0].on, typeof log[0].t, log[1].d, log[3].d], [1790000000, "boolean", "number", "Essen bestellt?", "Alles erledigt (still)"]);
+  eq(log.slice(1).some((e) => "sent" in e), false, "sent nur bei rx");
+});
+
+await test("Protokoll: höchstens 60 Einträge, neueste zuletzt", async () => {
+  await reset();
+  await kvSet("pushLog", Array.from({ length: 59 }, (_, i) => ({ t: i, k: "check", s: "rx" })));
+  await handlePush({ t: "check" }, deps());
+  const log = await kvGet("pushLog");
+  eq([log.length, log[0].t, log.at(-1).s], [60, 3, "shown"]);
+});
+
+await test("Protokoll: Fehler je Kind landen als fail", async () => {
+  await reset();
+  await handlePush({ t: "check" }, deps({
+    check: async (t, signal, log) => { log.fail(new Error("Keine Verbindung zum Bestellsystem")); return notify("Bestellsystem gerade nicht erreichbar", "", { signal }); },
+  }));
+  const log = await kvGet("pushLog");
+  const f = log.find((e) => e.s === "fail");
+  eq([f?.d, typeof f?.on], ["Keine Verbindung zum Bestellsystem", "boolean"]);
+});
+
+await test("Morgenmeldung: Platzhalter still, Ergebnis klingelt (hs-today), lastTodayOk gesetzt", async () => {
+  await reset(); calls.length = 0;
+  await handlePush({ t: "today" }, deps());
+  eq(shown.map(view), [
+    { title: "Schulessen heute", tag: "hs-today", silent: true, renotify: false },
+    { title: "Heute gibt's", tag: "hs-today", silent: false, renotify: true },
+  ]);
+  eq(calls, [["today"]], "kein Stundenplan, keine Erinnerung");
+  eq([(await kvGet("lastTodayOk"))?.silent, await kvGet("lastPushOk")], [false, undefined]);
+});
+
+await test("Morgenmeldung: iOS-Schlüssel nicht lesbar → Ersatzmeldung still", async () => {
+  await reset();
+  await handlePush({ t: "today" }, deps({ today: async () => { throw new KeyUnreadableError(); } }));
+  eq([shown.length, shown.at(-1).tag, shown.at(-1).silent], [2, "hs-today", true]);
+});
+
+await test("Test: wie echt, Ergebnis laut, Bestätigung an die Seite, lastPushOk bleibt unberührt", async () => {
+  await reset(); calls.length = 0;
+  await handlePush({ t: "test" }, deps());
+  eq(shown.map(view).slice(0, 2), [
+    { title: "Essen bestellt?", tag: "hs-check", silent: false, renotify: true },
+    { title: "Alles erledigt", tag: "hs-check", silent: true, renotify: false },
+  ], "der Platzhalter hat schon geklingelt");
+  eq([posted, calls, await kvGet("lastPushOk")], [[{ testShown: "Alles erledigt" }], [["check", true], ["subjects", true]], undefined]);
+  // Auch eine Ersatzmeldung im Test schreibt nichts.
+  await reset();
+  await handlePush({ t: "test" }, deps({ check: async () => { throw new Error("x"); } }));
+  eq(await kvGet("lastPushOk"), undefined, "Ersatzmeldung im Test");
+});
+
+await test("Morgen-Test: hs-today, Bestätigung, kein lastTodayOk", async () => {
+  await reset();
+  await handlePush({ t: "today-test" }, deps());
+  eq([shown.map((n) => n.tag), posted, await kvGet("lastTodayOk")], [["hs-today", "hs-today"], [{ testShown: "Heute gibt's" }], undefined]);
+});
+
+await test("Alarm: fremder Text nur auf Betreiber-Geräten, auf 200 Zeichen gekürzt", async () => {
+  await reset(); calls.length = 0;
+  await handlePush({ t: "alarm", m: "x".repeat(500) }, deps());
+  eq([shown.length, shown[0].title, shown[0].body.includes("x"), shown[0].silent, shown[0].tag], [1, "sunshine: Hinweis", false, true, "hs-info"]);
+  await reset();
+  await kvSet("operator", true);
+  await handlePush({ t: "alarm", m: "x".repeat(500) }, deps());
+  eq([shown.length, shown[0].title, shown[0].body.length, shown[0].silent, shown[0].data.url], [1, "Selbstprüfung: Abweichung", 200, false, "/api/health"]);
+  await reset();
+  await kvSet("operator", "true");
+  await handlePush({ t: "alarm", m: "<b>Text</b>" }, deps());
+  eq(shown[0].title, "sunshine: Hinweis", "nur true zählt");
+  eq(calls, [], "keine Prüfung");
+});
+
+await test("Unbekannte Art: neutrale Meldung, keine Prüfung; ohne Art: Erinnerung", async () => {
+  await reset(); calls.length = 0;
+  await handlePush({ t: "neu" }, deps());
+  eq([shown.length, shown[0]?.title, shown[0]?.tag, calls], [1, "sunshine: Hinweis", "hs-info", []]);
+  for (const data of [null, {}, { t: 5 }]) {
+    await reset(); calls.length = 0;
+    await handlePush(data, deps());
+    eq([shown[0]?.title, calls[0]], ["Essen bestellt?", ["check", false]], JSON.stringify(data));
+  }
+});
+
+{
+  const unsubscribed = [];
+  self.registration.pushManager = { getSubscription: async () => ({ unsubscribe: async () => { unsubscribed.push(1); return true; } }) };
+  const fetched = [];
+  const fakeFetch = async (url, o) => { fetched.push([o?.method, url, o?.headers?.Authorization]); return new Response("{}"); };
+  await test("Alte Adresse: Hinweis auf sunshine-order.de, Abo beim Server und im Browser abgemeldet, keine Prüfung", async () => {
+    await reset(); calls.length = 0; unsubscribed.length = 0; fetched.length = 0;
+    await secretSet("push", { id: "abc", secret: "s3", time: "18:00" });
+    await kvSet("operator", true);
+    await handlePush({ t: "check" }, deps({ host: "sunshine.thomschke.info", fetch: fakeFetch }));
+    eq([shown.length, shown[0].title, shown[0].data.url, shown[0].tag], [1, "sunshine ist umgezogen", "https://sunshine-order.de/", "hs-info"]);
+    eq([calls, fetched, unsubscribed.length], [[], [["DELETE", "/api/subscriptions/abc", "Bearer s3"]], 1]);
+    eq([await secretGet("push"), await kvGet("operator")], [undefined, undefined], "Abo und Betreiber-Kennzeichen gelöscht");
+    eq(await steps(), ["rx", "shown", "unsub"]);
+  });
+  await test("Alte Adresse: nur bei genau diesem Rechnernamen", async () => {
+    for (const host of ["sunshine-order.de", "localhost", "127.0.0.1", "x.sunshine.thomschke.info", "sunshine.thomschke.info.evil"]) {
+      await reset(); calls.length = 0; unsubscribed.length = 0; fetched.length = 0;
+      await handlePush({ t: "check" }, deps({ host, fetch: fakeFetch }));
+      eq([shown[0]?.title, calls[0], fetched, unsubscribed.length], ["Essen bestellt?", ["check", false], [], 0], host);
+    }
+  });
+  delete self.registration.pushManager;
+}
+
+await test("Jede Art zeigt eine Meldung", async () => {
+  for (const t of [...PUSH_KINDS, "irgendwas"]) {
+    await reset();
+    await handlePush({ t }, deps());
+    if (!shown.length) throw new Error(`${t}: keine Meldung`);
+  }
+});
+
+await test("Platzhalter scheitert: Prüfung läuft trotzdem, Fehler im Protokoll", async () => {
+  await reset();
+  failShow = (title) => title === "Essen bestellt?";
+  await handlePush({ t: "check" }, deps());
+  eq([shown.map((n) => n.title), await steps()], [["Alles erledigt"], ["rx", "fail", "ibs", "shown"]]);
+});
+
+await test("Ersatzmeldung scheitert: steht im Protokoll statt verschluckt", async () => {
+  await reset();
+  failShow = (title) => title === "Prüfung fehlgeschlagen";
+  await handlePush({ t: "check" }, deps({ check: async () => { throw new Error("kaputt"); } }));
+  const fails = ((await kvGet("pushLog")) || []).filter((e) => e.s === "fail").map((e) => e.d);
+  eq(fails, ["kaputt", "showNotification abgelehnt"]);
+});
+
+await test("Frist: kein unbehandelter Abbruch, wenn fn selbst scheitert oder abbricht", async () => {
+  rejections.length = 0;
+  await reset();
+  await withDeadline(async () => { throw new Error("früh"); }, "t", { ms: 1000 });
+  await withDeadline(async (signal) => { await sleep(50); signal.throwIfAborted(); }, "t", { ms: 10 });
+  await sleep(50);
+  eq(rejections, []);
+});
+
+await test("pushLogger ohne Wartezeit: Reihenfolge bleibt", async () => {
+  await reset();
+  const log = pushLogger("check");
+  for (const s of ["rx", "ph", "ibs", "shown"]) log(s);
+  await log.flush();
+  eq(await steps(), ["rx", "ph", "ibs", "shown"]);
+});
+
+await test("renewPush: is_admin setzt operator; PUT ok liefert dasselbe Objekt", async () => {
+  const { renewPush } = await import("../push.js");
+  await reset(); await kvDel("wasOperator");
+  const push = { id: "a", secret: "s", time: "16:10" };
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+  let r = await renewPush(push, {}, { fetch: async () => json({ ok: true, is_admin: true }) });
+  eq([r === push, await kvGet("operator"), await kvGet("wasOperator")], [true, true, true]);
+  r = await renewPush(push, {}, { fetch: async () => json({ ok: true }) });
+  eq([r === push, await kvGet("operator")], [true, true], "Feld fehlt: unverändert");
+  r = await renewPush(push, {}, { fetch: async () => new Response(null, { status: 204 }) });
+  eq(r === push, true, "leere Antwort");
+  const replies = [new Response("", { status: 404 }), json({ id: "b", secret: "t", is_admin: false })];
+  r = await renewPush(push, {}, { fetch: async () => replies.shift(), weekdays: [1] });
+  eq([r, await kvGet("operator"), await kvGet("wasOperator")], [{ ...push, id: "b", secret: "t", is_admin: false }, false, true]);
+  await kvDel("wasOperator");
+});
+
+await reset();
+const failed = results.filter((r) => r.startsWith("FAIL")).length;
+document.getElementById("out").textContent = `${results.join("\n")}\n\n${failed ? `${failed} FEHLGESCHLAGEN` : "ALLE OK"}`;
+</script>

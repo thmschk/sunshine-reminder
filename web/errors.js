@@ -32,8 +32,8 @@ const LATER = "Ob bestellt ist, prüft die App beim nächsten Mal. Zum sofortige
 
 /**
  * Meldung, wenn ein Weckruf ein Konto nicht prüfen konnte: {title, body, transient}.
- * transient: Netz- oder Pausenfehler, der von selbst vorbeigehen kann (sw.js meldet
- * ihn erst laut, wenn schon der vorige Weckruf scheiterte). rejected: der Login
+ * transient: Netz- oder Pausenfehler, der von selbst vorbeigehen kann (die Morgenmeldung
+ * klingelt erst, wenn schon der vorige Weckruf scheiterte; die Erinnerung immer). rejected: der Login
  * selbst wurde abgelehnt (falsche Zugangsdaten).
  */
 export function pushFailure(e, { rejected = false } = {}) {

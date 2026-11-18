@@ -63,6 +63,20 @@ try {
   probeOk = true;
   check("Probe glückt: Pause endet", (await probeResume()) === true && !(await paused()));
 
+  // 1g. Service Worker ohne Probe (2 min) verkürzt eine längere laufende Pause nicht, die Stufe bleibt.
+  await reset();
+  await kvSet("ibsSilent", { at: Date.now() - 60000, step: 1 });
+  await kvSet("ibsPause", { until: Date.now() + 30 * 60 * 1000, reason: "keine Antwort beim Anmelden", at: Date.now() - 60000, net: null });
+  reachability.probe = async () => { probes++; return null; };
+  await guardHooks.failed({ path: "/Login/Login", status: 0, network: true });
+  check("ohne Probe: laufende 30-Minuten-Pause bleibt", (await minutesLeft()) === 30 && (await kvGet("ibsSilent"))?.step === 1, `${await minutesLeft()} min`);
+  await kvSet("ibsPause", { until: Date.now() + 60000, reason: "x", at: Date.now(), net: null });
+  await guardHooks.failed({ path: "/Login/Login", status: 0, network: true });
+  check("ohne Probe: kürzere Pause wird auf 2 Minuten verlängert", (await minutesLeft()) === 2, `${await minutesLeft()} min`);
+  await guardHooks.failed({ path: "/Weekplan", status: 429, network: false });
+  check("429 danach: 60 Minuten", (await minutesLeft()) === 60, `${await minutesLeft()} min`);
+  reachability.probe = async () => { probes++; return probeOk; };
+
   // 1f. Weckruf: eine Pause, die länger als pauseMaxAgeMs läuft, hält ihn nicht auf.
   await reset();
   try { await c.login("1", "x"); } catch { /* */ }
