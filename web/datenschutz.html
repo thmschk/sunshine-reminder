@@ -43,8 +43,8 @@
         <li><b>Protokoll der Weckrufe:</b> Zu jedem Weckruf schreibt der Server eine Zeile in sein Systemprotokoll:
           die ersten sechs Zeichen der Kennung deines Abos, die Art (Erinnerung, Morgenmeldung, Test), Antwortcode
           und Dauer beim Push-Dienst und dessen Kennung der Nachricht, nicht aber die Push-Adresse oder deine
-          IP-Adresse. Eine feste Löschfrist gibt es dafür derzeit nicht: ältere Einträge werden überschrieben, sobald
-          das Protokoll seine Größengrenze erreicht.</li>
+          IP-Adresse. Diese Einträge werden nach 30 Tagen gelöscht (früher, falls das Protokoll seine
+          Größengrenze erreicht).</li>
         <li><b>Statistik:</b> Aus den Abos zählt der Server täglich nur Summen (etwa Anzahl der Geräte und
           Push-Dienst); sie stehen öffentlich unter <a href="stats">/stats</a>.</li>
         <li><b>Stundenplan aus Sdui (freiwillig):</b> Sdui sperrt direkte Zugriffe von fremden Webseiten.

@@ -56,18 +56,12 @@ Caddy schreibt keine Zugriffs- und keine Fehlerprotokolle einzelner Anfragen
 Der Push-Dienst schreibt ins Journal des Servers (`logging: driver: journald` in `server/compose.yaml`,
 `journalctl -t sunshine-push`), je Weckruf eine Zeile mit gekürzter Abo-id, Art, HTTP-Status, Dauer und
 Kennung beim Push-Dienst (nie Endpoint oder IP). Der journald-Treiber von Docker rotiert nicht selbst;
-es gilt die Grenze von journald (Standard: Größe, keine Frist).
+die Aufbewahrung regelt `/etc/systemd/journald.conf.d/retention.conf` (`MaxRetentionSec=30day`,
+`SystemMaxUse=500M`, gilt für das ganze Journal des Servers). Wer die Frist ändert, passt
+`web/datenschutz.html` und das README („Was der Server sieht“) mit an.
 
-**To-do (Server):**
-
-- [ ] Aufbewahrung festlegen: `journalctl --disk-usage` und `/etc/systemd/journald.conf` ansehen; Vorschlag
-      `/etc/systemd/journald.conf.d/retention.conf` mit `[Journal]`, `MaxRetentionSec=30day` (und z. B.
-      `SystemMaxUse=500M`), dann `systemctl restart systemd-journald`. Gilt für das ganze Journal des Servers.
-      Danach in `web/datenschutz.html` und im README („Was der Server sieht“) „keine feste Frist“ durch die
-      Frist ersetzen.
-- [ ] Caddy-Fristen gegen langsame Clients prüfen: steht der globale Block `servers { timeouts { … } }`
-      (siehe [Server neu aufsetzen](#server-neu-aufsetzen)) wirklich im `/srv/caddy/Caddyfile`?
-      `ssh privat 'grep -A6 timeouts /srv/caddy/Caddyfile'`.
+Die Fristen gegen langsame Clients (`servers { timeouts { … } }`) stehen im globalen Block von
+`/srv/caddy/Caddyfile`, siehe [Server neu aufsetzen](#server-neu-aufsetzen).
 
 ## Aufspielen
 
@@ -242,9 +236,9 @@ Der Neubau des Push-Dienstes führt die Tests aus (Test-Stage im Dockerfile); sc
 Basis-Image, scheitert der Bau und der alte Container läuft weiter.
 Von Hand: `ssh privat update-docker-images.sh`.
 
-**To-do (Skript liegt nicht im Repo):** `update-docker-images.sh` soll für den sunshine-Stack dieselbe
-Sperre nehmen wie `deploy.sh`, damit Image-Update und Deploy nie gleichzeitig `/srv/sunshine` anfassen,
-etwa `exec 9>/srv/sunshine/.deploy.lock; flock -w 600 9` vor dem Neubau (warten statt abbrechen).
+`update-docker-images.sh` (liegt nicht im Repo) nimmt für den sunshine-Stack dieselbe Sperre wie
+`deploy.sh` (`/srv/sunshine/.deploy.lock`, wartet bis 10 min), damit Image-Update und Deploy nie
+gleichzeitig `/srv/sunshine` anfassen.
 
 ## Datensicherung
 
@@ -292,6 +286,8 @@ Server liegt und muss bei einem Neuaufbau von Hand (oder aus dem Hetzner-Backup)
           }
       }
       ```
+- [ ] `/etc/systemd/journald.conf.d/retention.conf` mit `[Journal]`, `MaxRetentionSec=30day`,
+      `SystemMaxUse=500M`, dann `systemctl restart systemd-journald`
 - [ ] `/usr/local/sbin/update-docker-images.sh` (mit der Sperre `/srv/sunshine/.deploy.lock`, siehe
       [Container-Images](#container-images)) und `/etc/cron.d/docker-images` (sonntags 05:00)
 - [ ] `/srv/sunshine/.env` mit `ADMIN_KEY` (siehe [Betreiber-Alarme](#betreiber-alarme)), `HEARTBEAT_URL`,
