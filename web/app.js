@@ -300,7 +300,7 @@ function landingHtml(msg, retry, prefill, direct) {
             <button type="button" class="land-tiles-only" data-scroll="anmelden">Jetzt anmelden</button>
             <button type="button" class="land-outline" data-scroll="ablauf">So funktioniert es</button>
           </div>
-          <ul class="land-checks"><li>Daten bleiben auf deinem Handy</li><li>Keine Werbung</li><li>Kostenlos</li></ul>
+          <ul class="land-checks"><li>Daten bleiben auf deinem Handy</li><li>Keine Werbung</li><li>Kostenlos</li><li>Satt</li></ul>
         </div>
         ${landingCard(loginForm(msg, retry, prefill), direct)}
       </div>
