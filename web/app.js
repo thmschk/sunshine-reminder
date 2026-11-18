@@ -209,16 +209,18 @@ function loginForm(msg, retry, prefill) {
     <p class="small muted">Die Zugangsdaten bleiben verschlüsselt auf diesem Gerät und gehen nur an IBS5.</p>`;
 }
 
-/** Installieren unter der Anmeldung (Android): Knopf, solange Chrome ihn anbietet, sonst der Weg übers Menü. */
+/**
+ * Installieren unter der Anmeldung (Android): ein Knopf. Bietet Chrome das Installieren an
+ * (beforeinstallprompt), öffnet er den Systemdialog, sonst klappt er die Schritte übers Menü auf.
+ */
 function landInstall() {
   return `<div id="land-install" class="land-install">
-    <b>Als App installieren</b>${installPrompt
-      ? `<span class="small muted">Eigenes Symbol, öffnet sich wie eine App.</span><button id="b-install" type="button">Installieren</button>`
-      : `<ol class="tip-steps">
-          <li><span>In Chrome oben rechts auf <b>⋮</b> tippen</span></li>
-          <li><span><b>App installieren</b> wählen</span></li>
-          <li><span>Künftig über das neue Symbol öffnen</span></li>
-        </ol>`}
+    <button id="b-land-install" type="button" aria-expanded="false" aria-controls="land-install-steps">Als App installieren</button>
+    <ol class="tip-steps" id="land-install-steps" hidden>
+      <li><span>In Chrome oben rechts auf <b>⋮</b> tippen</span></li>
+      <li><span><b>App installieren</b> wählen</span></li>
+      <li><span>Künftig über das neue Symbol öffnen</span></li>
+    </ol>
   </div>`;
 }
 
@@ -463,7 +465,7 @@ addEventListener("beforeinstallprompt", (ev) => {
 });
 addEventListener("appinstalled", () => {
   installPrompt = null;
-  for (const el of document.querySelectorAll(".tip")) el.remove();
+  for (const el of document.querySelectorAll(".tip, #land-install")) el.remove();
 });
 
 /** …/?installieren (z. B. als QR-Code): Karte zuerst und hervorgehoben, auch angemeldet. */
@@ -497,6 +499,21 @@ function installTip() {
 }
 
 function wireInstallTip() {
+  const land = document.getElementById("b-land-install");
+  if (land) land.onclick = async () => {
+    const prompt = installPrompt;
+    if (prompt) {
+      installPrompt = null;
+      prompt.prompt();
+      const choice = await prompt.userChoice.catch(() => null);
+      if (choice?.outcome === "accepted") return;
+    }
+    // Kein Dialog von Chrome (schon installiert, kürzlich abgelehnt, anderer Browser): Schritte zeigen.
+    const steps = document.getElementById("land-install-steps");
+    const open = steps.hidden;
+    steps.hidden = !open;
+    land.setAttribute("aria-expanded", open);
+  };
   const button = document.getElementById("b-install");
   if (!button) return;
   button.onclick = async () => {
