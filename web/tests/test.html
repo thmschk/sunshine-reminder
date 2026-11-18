@@ -6,7 +6,7 @@
 <script type="module">
 import {
   parseWeekplan, OrderState, isoWeek, targetDates, placeOrders, CartResponse, Profile, De, todayBerlin, collect,
-  parseOrderHistory, parseCart, cartOthers, submitCartAsSeen, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, longestGap, weekdayNo, clampDaysAhead,
+  parseOrderHistory, parseCart, cartOthers, submitCartAsSeen, addDays, DayStatus, IbsAuthError, DEFAULT_CHECK, nextWeekday, weekdayNo, clampDaysAhead,
   ParserError, MenuEntry, lastCall, forgetDays, pacing as Pacing,
 } from "../ibs.js";
 
@@ -141,9 +141,6 @@ await test("Zieltage: Weckruf nur montags prüft bis zum nächsten Montag", () =
   eq(targetDates("2026-10-05", cfg), ["2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12"]);
   eq(nextWeekday("2026-10-09", [1, 3]), "2026-10-12", "Fr → Mo");
   eq(nextWeekday("2026-10-05", [1, 3]), "2026-10-07", "Mo → Mi");
-});
-await test("Längste Lücke zwischen Weckruf-Tagen", () => {
-  eq([longestGap([1, 2, 3, 4, 5]), longestGap([1, 4]), longestGap([1]), longestGap([3, 1])], [3, 4, 7, 5]);
 });
 await test("Datum und Profil", () => {
   eq(De.long("2026-08-27"), "Donnerstag, 27.08.2026");
@@ -325,7 +322,8 @@ const row = (date, state, ageMin) => ({ date, at: Date.now() - ageMin * 60000, d
       row(addDays(t, 15), OrderState.ORDERED, 7 * 60), // ab nächster Woche, abgelaufen
     ]);
     const fake = { customerNo: "1000", dayView: true, dayStore: store, async dayplan(d) { asked.push(d); return emptyDay; } };
-    const days = await collect(fake, [near, far, addDays(t, 15), farther]);
+    // Nur der Zwischenspeicher: kein Tag gilt als Schultag, ein leerer bleibt „kein Angebot“ (siehe parser.html).
+    const days = await collect(fake, [near, far, addDays(t, 15), farther], { schoolDay: () => false });
     eq(asked.sort(), [near, addDays(t, 15)].sort(), "nur die abgelaufenen Tage");
     eq(days.map((d) => d.state), [OrderState.NO_OFFER, OrderState.NOT_ORDERED, OrderState.NO_OFFER, OrderState.DEADLINE_PASSED]);
     eq(store.rows.find((r) => r.date === near).day.state, OrderState.NO_OFFER, "gespeichert");
@@ -748,9 +746,19 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     const r = await login([net(), new Response(JSON.stringify({ token: "t", name1: "" }))]);
     eq([r.err?.message ?? null, r.calls, r.pauseMin, r.budget, r.ms >= 45], [null, 2, 0, 4, true], `${Math.round(r.ms)} ms`);
   });
-  await test("Netzfehler auch beim zweiten Versuch: Pause (10 Minuten)", async () => {
-    const r = await login([net(), net()]);
-    eq([r.calls, r.err?.network, r.pauseMin, r.budget], [2, true, 10, 4]);
+  await test("Netzfehler auch beim zweiten Versuch: Pause (10 Minuten), ohne Probe (Service Worker) nur 2", async () => {
+    const { reachability } = await import("../guard.js");
+    const probe = reachability.probe;
+    try {
+      reachability.probe = async () => false;
+      const r = await login([net(), net()]);
+      eq([r.calls, r.err?.network, r.pauseMin, r.budget], [2, true, 10, 4]);
+      reachability.probe = async () => null;
+      const r2 = await login([net(), net()]);
+      eq([r2.calls, r2.err?.network, r2.pauseMin, (await kvGet("ibsSilent")) ?? null], [2, true, 2, null], "ohne Probe");
+    } finally {
+      reachability.probe = probe;
+    }
   });
   await test("Zeitüberschreitung: kein zweiter Versuch", async () => {
     const r = await login([new DOMException("timeout", "TimeoutError")]);
@@ -785,7 +793,7 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     await markFailures([c]);
     eq(composeToday([c]).quiet, true, "nach Erfolg");
   });
-  await test("Erinnerung: Netzfehler erst beim zweiten Mal laut, je Kind", async () => {
+  await test("Netzfehler: composeFailure erst beim zweiten Mal laut (Morgenregel), die Erinnerung mehrerer Kinder gleich", async () => {
     await kvDel("pushFailed");
     const a = kid(netErr());
     await markFailures([a]);
@@ -794,14 +802,14 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
     const [b, other] = [kid(netErr()), kid(netErr(), "2", "Ben")];
     await markFailures([b, other]);
     eq([composeFailure(b).quiet, composeFailure(other).quiet], [false, true]);
-    // Mehrere Kinder: Ben zum ersten Mal gescheitert, Mia ok → still; Ben erneut → laut.
+    // Mehrere Kinder: die Erinnerung klingelt, sobald eines nicht prüfbar war, auch beim ersten Mal.
     const ok = { customerNo: "1", firstName: "Mia", due: [], days: [], checked: [] };
     const ben = kid(netErr(), "2", "Ben");
     await markFailures([ok, ben]);
     eq(ben.repeated, true, "Ben zum zweiten Mal");
     const ben1 = { ...ben, repeated: false };
     const all1 = composeAll([ok, ben1], todayBerlin());
-    eq([all1.quiet, ringsLoud(all1, [ok, ben1], new Set(), todayBerlin(), [1, 2, 3, 4, 5]), plain({ title: "", body: all1.body })], [true, false, true], all1.body);
+    eq([all1.quiet, ringsLoud(all1, [ok, ben1], new Set(), todayBerlin(), [1, 2, 3, 4, 5]), plain({ title: "", body: all1.body })], [false, true, true], all1.body);
     const all2 = composeAll([ok, ben], todayBerlin());
     eq([all2.quiet, ringsLoud(all2, [ok, ben], new Set(), todayBerlin(), [1, 2, 3, 4, 5])], [false, true]);
   });
@@ -846,7 +854,19 @@ await test("Sitzung: zwei Kundennummern hintereinander, Token je Konto", async (
 // Verpasste Weckrufe (Warnung „Erinnerung schweigt“).
 {
   const { missedSlots } = await import("../push.js");
-  const at = (d, hm = "00:00") => new Date(`${d}T${hm}:00`).getTime();
+  // Uhrzeiten in Berlin (Winterzeit), gleich welche Zeitzone der Testrechner hat.
+  const at = (d, hm = "00:00", off = "+01:00") => new Date(`${d}T${hm}:00${off}`).getTime();
+  await test("Verpasste Weckrufe: der Weckruf des letzten Erfolgs zählt nicht mit", () => {
+    // Erinnerung 17:00 kam Do 17:05 an; Fr 17:31 fehlt erst einer.
+    eq(missedSlots(at("2026-10-29", "17:05"), "17:00", [1, 2, 3, 4, 5], at("2026-10-30", "17:31")), 1);
+    // Server minimal zu früh (Uhren): 16:58 gehört zum Weckruf von 17:00.
+    eq(missedSlots(at("2026-10-29", "16:58"), "17:00", [1, 2, 3, 4, 5], at("2026-10-29", "17:40")), 0);
+  });
+  await test("Verpasste Weckrufe: Uhrzeit in Berlin, auch über die Zeitumstellung", () => {
+    // Fr 27.03. 16:12 (MEZ) zuletzt, Erinnerung 16:10: Mo 30.03. ist Sommerzeit, 16:40 MESZ = 14:40 UTC.
+    eq(missedSlots(at("2026-03-27", "16:12"), "16:10", [1, 2, 3, 4, 5], at("2026-03-30", "14:41", "Z")), 1);
+    eq(missedSlots(at("2026-03-27", "16:12"), "16:10", [1, 2, 3, 4, 5], at("2026-03-30", "14:39", "Z")), 0);
+  });
   await test("Verpasste Weckrufe: Wochenende zählt nicht, Spielraum 30 min", () => {
     // Do 29.10. 17:32 zuletzt, Erinnerung 17:00 Mo–Fr: Fr 30.10. 17:30 fehlt, Mo 02.11. früh noch nichts weiter.
     eq(missedSlots(at("2026-10-29", "17:32"), "17:00", [1, 2, 3, 4, 5], at("2026-11-02", "07:41")), 1);
@@ -1155,7 +1175,10 @@ await test("Bestellen: Abbruch nach liegender Umbestellung legt nur die neue Lin
 
 // Nur den Warenkorb abschicken, ohne Auswahl.
 const seen = [{ date: "2026-11-09", name: "Hörnchennudeln", kind: "Neubestellung" }, { date: "2026-11-10", name: "Linsen", kind: "Abbestellung" }];
-const dayAfter = (ordered) => async (ds) => ds.map((d) => ({ date: d, entries: ordered.includes(d) ? [{ isOrdered: true }] : [] }));
+// Abbestellt zählt nur an einem gelesenen Tag (Gerichte da, keins bestellt), nicht an einem leeren.
+const dayAfter = (ordered) => async (ds) => ds.map((d) => (ordered.includes(d)
+  ? { date: d, state: OrderState.ORDERED, entries: [{ isOrdered: true }] }
+  : { date: d, state: OrderState.NOT_ORDERED, entries: [{ isOrdered: false }] }));
 await test("Nur Warenkorb: wie gesehen → abgeschickt und nachgeprüft", async () => {
   const c = new FakeClient({ extraInCart: 2 });
   c.page = seen;
@@ -1646,7 +1669,7 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
     const realFetch = window.fetch;
     const gap = { ...pacing };
     Object.assign(pacing, { gapMs: 0, jitterMs: 0 });
-    const keys = ["accounts", "activeAccount", "ibsDayView", "lastPushOk", "pushFailed", "notified", "ibsBudget", "ibsSilent", "ibsPause",
+    const keys = ["accounts", "activeAccount", "ibsDayView", "lastPushOk", "pushFailed", "notified", "ibsBudget", "ibsSilent", "ibsPause", "pushLog",
       ...["1000", "2000"].flatMap((n) => [`ibsSession:${n}`, `dayCache:${n}`])];
     for (const k of keys) await kvDel(k);
     // Nie ans echte IBS5: alles unter ibs.* beantwortet diese Attrappe.
@@ -1658,7 +1681,10 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
         return new Response(JSON.stringify(no === "2000" ? { errorMessage: "Kundennummer oder Passwort falsch." } : { token: "t", name1: "Muster, Mia" }));
       }
       if (url.includes("/Account/Orderhistory")) return new Response('<table id="order-history-table"><tbody></tbody></table>');
-      return new Response('<li class="plan" id="dayplan"></li>');
+      // Jeder Tag bestellt: ein leerer Schultag nahe voraus wäre „unklar“ und überdeckte das nicht prüfbare Kind.
+      const d = /date=(\d{4}-\d{2}-\d{2})/.exec(url)?.[1] || "";
+      return new Response(`<li class="plan" id="dayplan"><button class="menuplan-checkbox" data-order-status="2" data-quantity-ordered="1"
+        data-quantity-in-shopping-cart="" data-name="Nudeln" id="menu_quantity_mobile-${d}_16_827"></button></li>`);
     };
     try {
       await saveAccounts([{ customerNo: "1000", password: "a", name: "" }, { customerNo: "2000", password: "b", name: "" }]);
@@ -1672,9 +1698,11 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
         self.dispatchEvent(ev);
         await done;
         const last = await kvGet("lastPushOk");
+        // Erst der Platzhalter (klingelt), dann das Ergebnis mit demselben Tag: ersetzt ihn still, der Ton kam schon.
         const check = shown.filter((n) => n.tag === "hs-check");
-        eq([check.length, /Kd\. 2000/.test(check[0]?.title), last?.ok, Date.now() - (last?.at || 0) < 60000], [1, true, false, true],
-          `Runde ${round}: ${check[0]?.title}`);
+        eq([check.length, check[0]?.title, check[0]?.silent, /Kd\. 2000/.test(check[1]?.title), check[1]?.silent, check[1]?.renotify, last?.ok,
+          Date.now() - (last?.at || 0) < 60000],
+        [2, "Essen bestellt?", false, true, true, false, false, true], `Runde ${round}: ${check[1]?.title}`);
         eq(Object.keys((await kvGet("pushFailed")) || {}), ["2000"], "pushFailed nennt das Kind");
       }
     } finally {

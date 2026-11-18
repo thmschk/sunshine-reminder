@@ -8,7 +8,7 @@
 <header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
-const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "errtext", "uifix", "groups", "pushoffer", "pushofferno", "footmore"];
+const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "pushheal", "pushperm", "pushrace", "errtext", "uifix", "groups", "pushoffer", "pushofferno", "footmore"];
 const mode = new URLSearchParams(location.search).get("mode");
 const $out = document.getElementById("out");
 const summary = (lines) => `${lines.join("\n")}\n\n${lines.some((l) => l.startsWith("FAIL")) ? "FEHLGESCHLAGEN" : "ALLE OK"}`;
@@ -42,6 +42,7 @@ if (!mode) {
   window.confirm = () => true;
   const { kvClear, kvGet, kvSet, secretGet, secretSet } = await import("../idb.js");
   const { saveAccounts } = await import("../accounts.js");
+  const { addDays, todayBerlin, weekdayNo } = await import("../ibs.js");
   await kvClear();
   const until = (cond) => new Promise((r) => { let n = 0; (function tick() { if (cond() || ++n > 200000) r(); else window.setTimeout(tick); })(); });
   const ticks = (n) => new Promise((r) => { (function tick() { if (--n <= 0) r(); else window.setTimeout(tick); })(); });
@@ -72,6 +73,12 @@ if (!mode) {
   const cartPage = () => `<div id="shopping-cart"><ul>${hooks.cart.map(([d, n]) => `<li><div class="menu-mobile">
     <div class="basket-status"><span class="date">${d}</span><span class="title">Neubestellung</span></div>
     <div class="menu-details-mobile"><p><span>${n}</span></p></div></div></li>`).join("")}</ul></div>`;
+  // Warenkorb-Tage: Mo und Di der übernächsten Woche (8–14 Tage voraus). Der erste wählbare Tag der
+  // Bestellansicht liegt immer davor; wäre er ein Warenkorb-Tag, zählte der Eintrag zur eigenen Auswahl.
+  const cartMon = addDays(todayBerlin(), 7 + ((8 - weekdayNo(todayBerlin())) % 7 || 7));
+  const cartTue = addDays(cartMon, 1);
+  const de = (wd, iso) => `${wd} ${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
+  const CART = [[de("Mo", cartMon), "Hörnchennudeln(BIO), Gemüse-Bolognese"], [de("Di", cartTue), "Linseneintopf"]];
   const posted = [];
   window.fetch = async (url, init = {}) => {
     url = String(url);
@@ -309,7 +316,7 @@ if (!mode) {
     // Anderes im Warenkorb: Hinweis in der Ansicht, Liste in der Rückfrage, Verwerfen vor dem ersten Schritt.
     await account();
     hooks.status = 0;
-    hooks.cart = [["Mo 09.11.2026", "Hörnchennudeln(BIO), Gemüse-Bolognese"], ["Di 10.11.2026", "Linseneintopf"]];
+    hooks.cart = CART;
     const posts = [];
     hooks.ibs = (url, init) => { if (init.method === "POST" && !url.includes("/Login/")) posts.push(url.replace(/^.*\/ibs5/, "")); return null; };
     await import("../app.js");
@@ -317,13 +324,14 @@ if (!mode) {
     $("#b-order-now").click();
     await until(() => $(".cart-note") && orderLoaded());
     const note = $(".cart-note")?.textContent || "";
-    check(/2 Einträge/.test(note) && /Mo 09\.11\.\s*Neubestellung\s*Hörnchennudeln/.test(note), `Hinweis: ${note.replace(/\s+/g, " ").slice(0, 90)}`);
+    const chip = `Mo ${cartMon.slice(8, 10)}\\.${cartMon.slice(5, 7)}\\.`;
+    check(/2 Einträge/.test(note) && new RegExp(`${chip}\\s*Neubestellung\\s*Hörnchennudeln`).test(note), `Hinweis: ${note.replace(/\s+/g, " ").slice(0, 90)}`);
     const radio = $('#f-order input[type=radio][value="827"]');
     radio.checked = true;
     radio.dispatchEvent(new Event("change", { bubbles: true }));
     $("#b-submit").click();
     await until(() => $('dialog [data-v="discard"]'));
-    check(document.querySelectorAll("dialog .entries li").length === 2, "Rückfrage listet beide Einträge");
+    check(document.querySelectorAll("dialog .entries li").length === 2, `Rückfrage listet beide Einträge (gewählt: ${radio.closest("fieldset")?.id})`);
     check(!!$('dialog [data-v="all"]') && !$('dialog [data-v="mine"]'), "Knöpfe: Verwerfen, Alles abschicken");
     $('dialog [data-v=""]').click();
     await until(() => !$("dialog") && !$("#b-submit").disabled);
@@ -398,7 +406,7 @@ if (!mode) {
     // Nur der Warenkorb, ohne Auswahl unten: Knöpfe in der Karte, Rückfrage, Ergebnis.
     await account();
     hooks.status = 0;
-    hooks.cart = [["Mo 09.11.2026", "Hörnchennudeln(BIO), Gemüse-Bolognese"], ["Di 10.11.2026", "Linseneintopf"]];
+    hooks.cart = CART;
     const posts = [];
     hooks.ibs = (url, init) => {
       if (init.method !== "POST" || url.includes("/Login/")) return null;

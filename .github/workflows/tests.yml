@@ -1,0 +1,60 @@
+# Server- und Web-Tests bei jedem Push und Pull Request auf main (docs/betrieb.md, Abschnitt Tests).
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  server:
+    name: Server (unittest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Abhängigkeiten (mit Hashes)
+        run: pip install --require-hashes -r server/push/requirements.txt
+      - name: Tests
+        working-directory: server/push
+        run: python -m unittest -v test_app
+
+  web:
+    name: Web (Playwright)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Mitgeliefertes Chromium von Playwright; lokal ist Standard das installierte Chrome (channel chrome).
+      WEBTESTS_CHANNEL: chromium
+      PLAYWRIGHT_VERSION: "1.65.2"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Playwright und Chromium
+        run: |
+          pip install "playwright==${PLAYWRIGHT_VERSION}"
+          python -m playwright install --with-deps chromium
+      - name: Tests
+        run: python -I tools/webtests.py
