@@ -6,6 +6,7 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "related_applications": [{ "platform": "webapp", "url": "https://sunshine-order.de/manifest.webmanifest" }],
   "background_color": "#FAF8F3",
   "theme_color": "#FAF8F3",
   "icons": [

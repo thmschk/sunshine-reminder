@@ -386,6 +386,7 @@ function showSetup(message = "", prefill = {}, retry = null, { adding = false, d
   wireInstallTip();
   // Zur Anmeldung: Eingabemarke gleich ins Feld, sofern das Formular sichtbar ist (iPhone in Safari: erst installieren).
   if (!adding) wireLandingTiles(!!(message || retry));
+  if (!adding) markInstalled();
   for (const b of document.querySelectorAll("[data-scroll]")) {
     b.onclick = () => {
       document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: smoothScroll(), block: "start", inline: "start" });
@@ -498,16 +499,37 @@ function installTip() {
     </div>`;
 }
 
+/**
+ * Systemdialog „App installieren?“, sofern Chrome ihn angeboten hat. Jedes Ereignis taugt nur
+ * für einen Aufruf; scheitert prompt() (etwa schon verbraucht), kommt null statt endlosem Warten.
+ */
+async function askInstall() {
+  const prompt = installPrompt;
+  installPrompt = null;
+  if (!prompt) return null;
+  try {
+    await prompt.prompt();
+    return (await prompt.userChoice)?.outcome ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Schon als App installiert (Chrome auf Android, über related_applications im Manifest)?
+ * Dann statt des Knopfs nur der Hinweis aufs Symbol: installieren ließe sich nichts mehr.
+ */
+async function markInstalled() {
+  const apps = await navigator.getInstalledRelatedApps?.().catch(() => null);
+  if (!apps?.some((a) => a.platform === "webapp")) return;
+  const land = document.getElementById("land-install");
+  if (land) land.innerHTML = `<p class="small muted">Die App ist auf diesem Handy schon installiert: künftig über das Symbol <b>sunshine order</b> öffnen.</p>`;
+}
+
 function wireInstallTip() {
   const land = document.getElementById("b-land-install");
   if (land) land.onclick = async () => {
-    const prompt = installPrompt;
-    if (prompt) {
-      installPrompt = null;
-      prompt.prompt();
-      const choice = await prompt.userChoice.catch(() => null);
-      if (choice?.outcome === "accepted") return;
-    }
+    if ((await askInstall()) === "accepted") return;
     // Kein Dialog von Chrome (schon installiert, kürzlich abgelehnt, anderer Browser): Schritte zeigen.
     const steps = document.getElementById("land-install-steps");
     const open = steps.hidden;
@@ -517,12 +539,7 @@ function wireInstallTip() {
   const button = document.getElementById("b-install");
   if (!button) return;
   button.onclick = async () => {
-    const prompt = installPrompt;
-    installPrompt = null;
-    if (!prompt) return refreshInstallTip();
-    prompt.prompt();
-    const choice = await prompt.userChoice.catch(() => null);
-    if (choice?.outcome !== "accepted") refreshInstallTip();
+    if ((await askInstall()) !== "accepted") refreshInstallTip();
   };
 }
 
@@ -530,7 +547,7 @@ function wireInstallTip() {
 function refreshInstallTip() {
   for (const el of document.querySelectorAll(".tip")) el.outerHTML = installTip();
   const land = document.getElementById("land-install");
-  if (land) land.outerHTML = landInstall();
+  if (land) { land.outerHTML = landInstall(); markInstalled(); }
   wireInstallTip();
 }
 
