@@ -818,7 +818,8 @@ async function renderHome(my, creds, days, { staleAt = null } = {}) {
   const t = new Intl.DateTimeFormat("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" })
     .format(new Date(staleAt || Date.now()));
   const lastToday = store.push ? await kvGet("lastTodayOk").catch(() => null) : null;
-  const pushLog = store.push ? await kvGet("pushLog").catch(() => null) : null;
+  // Das technische Protokoll der Weckrufe nur auf dem Betreiber-Gerät.
+  const pushLog = store.push && store.operator === true ? await kvGet("pushLog").catch(() => null) : null;
   if (my !== viewSeq) return;
   const notes = [
     store.push && store.lastPushOk ? `Erinnerung zuletzt ${esc(when(store.lastPushOk.at))}` : "",
