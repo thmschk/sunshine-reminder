@@ -18,7 +18,7 @@ let probes = 0;
 let probeOk = false;
 reachability.probe = async () => { probes++; return probeOk; };
 let calls = 0;
-const reset = async () => { calls = 0; probes = 0; probeOk = false; await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilent"); };
+const reset = async () => { calls = 0; probes = 0; probeOk = false; await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilent"); await kvDel("ibsGrace"); };
 const setNet = (type) => Object.defineProperty(navigator, "connection", { value: type ? { type } : undefined, configurable: true });
 const minutesLeft = async () => Math.round(((await paused())?.until - Date.now()) / 60000);
 
@@ -215,9 +215,21 @@ try {
   let e4d = null;
   try { await unmetered(c4d, () => c4d.weekplan(2026, 41)); } catch (e) { e4d = e; }
   check("ohne Bremse: Anfrage geht raus und zählt", !e4d && calls === 1 && (await kvGet("ibsBudget")).length === 152, e4d?.message);
+  // Danach eine Freimenge fürs Nachladen (60 Plätze = 30 Abfragen), gezählt wird weiter; dann bremst es wieder.
+  const gap = { ...pacing };
+  Object.assign(pacing, { gapMs: 0, jitterMs: 0 });
+  let passed = 0;
+  e4d = null;
+  for (let i = 0; i < 31 && !e4d; i++) {
+    try { await c4d.weekplan(2026, 41); passed++; } catch (e) { e4d = e; }
+  }
+  check("danach Freimenge fürs Nachladen", passed === 30 && calls === 31 && (await kvGet("ibsBudget")).length === 212, `${passed} durch`);
+  check("… und dann bremst es wieder", e4d instanceof IbsBudgetError);
+  await kvSet("ibsGrace", { until: Date.now() - 1, left: 60 });
   e4d = null;
   try { await c4d.weekplan(2026, 41); } catch (e) { e4d = e; }
-  check("danach bremst es wieder", e4d instanceof IbsBudgetError && calls === 1);
+  check("abgelaufene Freimenge gilt nicht", e4d instanceof IbsBudgetError && calls === 31);
+  Object.assign(pacing, gap);
 
   // 5. Eingeschleustes HTML im Gerichtsnamen landet nur als Text auf der Seite.
   await reset();
@@ -234,6 +246,6 @@ try {
   lines.push("FAIL Ausnahme: " + e);
 }
 window.fetch = realFetch;
-await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilent");
+await resume(); await kvDel("ibsBudget"); await kvDel("ibsSilent"); await kvDel("ibsGrace");
 document.getElementById("out").textContent = lines.join("\n") + (lines.some((l) => l.startsWith("FAIL")) ? "\n\nFEHLGESCHLAGEN" : "\n\nALLE OK");
 </script>

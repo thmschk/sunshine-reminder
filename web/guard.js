@@ -12,8 +12,9 @@
 // nur wo der Browser das verrät), oder wenn die Probe während der Pause glückt
 // (probeResume). Dazu eine Obergrenze je Stunde und Gerät, die nur bremst, bis
 // wieder Platz im Stundenfenster ist; gezählt wird, was bei IBS5 ankommt (jede
-// Abfrage samt CORS-Vorabfrage doppelt). Seite und Service Worker teilen den
-// Zustand über IndexedDB.
+// Abfrage samt CORS-Vorabfrage doppelt). Nach einer Bestellung darf das Nachladen
+// eine kleine Freimenge über die Obergrenze hinaus nutzen (GRACE_*). Seite und
+// Service Worker teilen den Zustand über IndexedDB.
 
 import { BASE_URL, IbsError } from "./ibs.js";
 import { kvDel, kvGet, kvSet, kvUpdate } from "./idb.js";
@@ -31,6 +32,12 @@ const SILENT_SAME_MS = 5 * 60 * 1000;
  */
 const SILENT_UNPROBED_MS = 2 * 60 * 1000;
 const HOUR_CAP = 150;
+/**
+ * Nach einer Bestellung (unmetered): so lange und so viele Plätze über HOUR_CAP hinaus,
+ * damit Bestellansicht und Übersicht danach nachladen können, statt bis zu einer Stunde zu warten.
+ */
+const GRACE_MS = 10 * 60 * 1000;
+const GRACE_UNITS = 60;
 
 /**
  * Lädt eine Datei von IBS5 als Bild: true, wenn sie kommt (Verbindung nicht
@@ -138,15 +145,23 @@ export async function budgetFor(units) {
   if (until) throw new IbsBudgetError(until);
 }
 
-/** fn ohne Stundenbremse für client (nach budgetFor); gezählt wird weiter, eine Pause gilt weiter. */
+/**
+ * fn ohne Stundenbremse für client (nach budgetFor); gezählt wird weiter, eine Pause gilt weiter.
+ * Danach gilt die Freimenge fürs Nachladen (GRACE_MS, GRACE_UNITS).
+ */
 export async function unmetered(client, fn) {
   client.unmetered = true;
   try {
     return await fn();
   } finally {
     client.unmetered = false;
+    await kvSet("ibsGrace", { until: Date.now() + GRACE_MS, left: GRACE_UNITS }).catch(() => {});
   }
 }
+
+/** weight Plätze aus der Freimenge nach einer Bestellung nehmen; true, wenn sie reichten. */
+const takeGrace = (weight, now) => kvUpdate("ibsGrace", (g) => (g && g.until > now && g.left >= weight
+  ? { value: { ...g, left: g.left - weight }, result: true } : { result: false })).catch(() => false);
 
 /**
  * Hooks für IbsClient: vor jeder Anfrage Pause und Stundenbudget prüfen, nach
@@ -158,14 +173,16 @@ export const guardHooks = {
     if (p) throw new IbsPausedError(p.until, p.reason);
     const now = Date.now();
     // In einer Transaktion: Seite und Service Worker zählen gleichzeitig, keiner darf den anderen überschreiben.
-    const full = await kvUpdate("ibsBudget", (list) => {
+    const count = (over) => kvUpdate("ibsBudget", (list) => {
       // Volles Kontingent ist keine Sperre: nur warten, bis genug aus der Stunde gefallen ist.
-      const until = free ? null : fullUntil(list || [], weight, now);
+      const until = over ? null : fullUntil(list || [], weight, now);
       if (until) return { result: until };
       const recent = (list || []).filter((t) => now - t < 3600 * 1000);
       for (let i = 0; i < weight; i++) recent.push(now);
       return { value: recent };
     }).catch(() => null); // ohne IndexedDB (privater Modus) nicht zählen statt gar nicht fragen
+    let full = await count(free);
+    if (full && (await takeGrace(weight, now))) full = await count(true);
     if (full) throw new IbsBudgetError(full);
   },
   async failed({ path, status, network }) {

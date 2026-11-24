@@ -314,7 +314,9 @@ nicht). Die Web-Version fragt deshalb sparsam:
   (CORS-Vorabfragen mitgezählt). Ist das Kontingent voll, sagt die App, dass sie
   selbst bremst, nicht IBS5. Eine Bestellung prüft vorher, ob ihre Anfragen noch
   in die Stunde passen, und läuft dann ohne Bremse durch, damit der Warenkorb nie
-  halb gefüllt liegen bleibt.
+  halb gefüllt liegen bleibt. Danach darf das Nachladen zehn Minuten lang bis zu
+  60 Anfragen über die Grenze hinaus stellen, damit der neue Stand gleich sichtbar
+  wird.
 * Kommt ein 429, ruht die App eine Stunde und sagt das, statt die Sperre durch
   Wiederholungen zu verlängern. Kommt beim Anmelden gar keine Antwort (so sieht
   die Sperre im Browser aus, aber auch ein Aussetzer), lädt die Seite das Logo

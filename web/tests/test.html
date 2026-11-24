@@ -1669,7 +1669,7 @@ await test("Abbruch: eine überholte Abfrage fragt keinen weiteren Tag ab", asyn
     const realFetch = window.fetch;
     const gap = { ...pacing };
     Object.assign(pacing, { gapMs: 0, jitterMs: 0 });
-    const keys = ["accounts", "activeAccount", "ibsDayView", "lastPushOk", "pushFailed", "notified", "ibsBudget", "ibsSilent", "ibsPause", "pushLog",
+    const keys = ["accounts", "activeAccount", "ibsDayView", "lastPushOk", "pushFailed", "notified", "ibsBudget", "ibsSilent", "ibsPause", "ibsGrace", "pushLog",
       ...["1000", "2000"].flatMap((n) => [`ibsSession:${n}`, `dayCache:${n}`])];
     for (const k of keys) await kvDel(k);
     // Nie ans echte IBS5: alles unter ibs.* beantwortet diese Attrappe.
