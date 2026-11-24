@@ -1,13 +1,31 @@
 // Ablauf einer Bestellung ohne Oberfläche: Warenkorb ansehen, Rückfrage, Budget,
 // placeOrders bzw. Warenkorb abschicken oder verwerfen. Die Bestellansicht (app.js)
 // gibt Anmeldung, Rückfrage und Fortschritt als Callbacks herein und zeigt das Ergebnis.
-import { De, cartOthers, changeKind, collect, placeOrders, submitCartAsSeen } from "./ibs.js";
+import { De, cartOthers, changeKind, collect, isoWeek, placeOrders, submitCartAsSeen } from "./ibs.js";
 import { budgetFor, unmetered } from "./guard.js";
 
-// Anfragen einer Bestellung höchstens, CORS-Vorabfragen mitgezählt: je Tag Vorab-Laden,
-// Leeren, Hinzufügen und Nachladen, dazu Warenkorb-Zahl, Abschicken, Bestellhistorie
-// und vielleicht ein Login. Meist sind es weniger (placeOrders).
-export const orderCost = (changes) => 8 * changes.length + 8;
+/**
+ * Plätze im Stundenbudget, die eine Bestellung braucht (placeOrders), je Anfrage zwei
+ * (CORS-Vorabfrage). Je Tag Hinzufügen; Leeren samt Zahl nur, wo es nötig ist (der ganze
+ * Warenkorb, wenn mehr darin liegt als die mitgeschickten fremden Einträge, sonst Tage mit
+ * eigenem Eintrag darin); Vorab-Laden und Nachladen der Um- und Abbestellungen je Tag, mit
+ * Wochenplan je Woche. Dazu Warenkorb-Zahl, Abschicken, Bestellhistorie und Reserve für
+ * Login und Formatprobe. Die Schätzung entscheidet nur, ob die Bestellung starten darf (siehe
+ * submitOrder); die Anfragen selbst laufen ohne Bremse.
+ *
+ * cart: {total} aus cartOthers (null: unbekannt), days: geladene Tage, dayView: IBS5 liefert
+ * nur Tagesansichten (unbekannt: ja).
+ */
+export function orderCost(changes, { cart = null, othersInCart = 0, discard = false, days = [], dayView = true } = {}) {
+  const loads = (dates) => 2 * (dayView ? dates.length : new Set(dates.map((d) => isoWeek(d).join())).size);
+  const total = discard ? 0 : cart?.total ?? null;
+  const clearAll = total == null || total > othersInCart;
+  const ownInCart = (date) => !discard && days.some((d) => d.date === date && d.entries.some((e) => e.quantityInCart !== ""));
+  const clears = changes.filter((c) => clearAll || ownInCart(c.date)).length;
+  const dates = changes.map((c) => c.date);
+  const notOrders = changes.filter((c) => changeKind(c) !== "ORDER").map((c) => c.date);
+  return 2 * changes.length + 4 * clears + loads(dates) + loads(notOrders) + 10 + (discard ? DISCARD_COST : 0);
+}
 /** Vor dem Bestellen gilt ein geladener Tag so lange als aktuell: die Bestellansicht hat ihn meist gerade geladen. */
 export const ORDER_PRELOAD_MAX_AGE_MS = 2 * 60 * 1000;
 /** Anfragen, um den Warenkorb zu verwerfen (Verwerfen, danach die Zahl). */
@@ -42,7 +60,11 @@ export async function submitOrder(changes, {
   days, withClient, ask, onBusy = () => {}, schoolDay, budget = budgetFor, load = collect,
 }) {
   onBusy(true);
-  const cart = await withClient((c) => cartOthers(c, changes.map((x) => x.date))).catch((e) => ({ error: e }));
+  let dayView = true;
+  const cart = await withClient((c) => {
+    dayView = c.dayView !== false;
+    return cartOthers(c, changes.map((x) => x.date));
+  }).catch((e) => ({ error: e }));
   onBusy(false);
   if (cart.error) return { kind: "aborted", reason: cart.error.message, step: "cart" };
   const choice = await ask(changes, cart);
@@ -54,7 +76,7 @@ export async function submitOrder(changes, {
   const previouslyInCart = discard ? [] : days.flatMap((d) => d.entries.filter((e) => e.quantityInCart !== "" && e.selectable));
   const othersInCart = choice === "all" ? cart.others.length : 0;
   // Mit halb gefülltem Warenkorb darf die Stundenbremse nicht greifen: vorher prüfen, ob alles passt.
-  const outcome = await budget(orderCost(changes) + (discard ? DISCARD_COST : 0))
+  const outcome = await budget(orderCost(changes, { cart, othersInCart, discard, days, dayView }))
     .then(() => withClient((c) => unmetered(c, () =>
       placeOrders(c, changes, { previouslyInCart, othersInCart, discard, ...loaders(c, schoolDay, load) }))))
     .catch((e) => ({ kind: "aborted", reason: e.message }));

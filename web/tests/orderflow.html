@@ -127,8 +127,28 @@ await test("Budget: Kosten je Änderung, Verwerfen kostet extra", async () => {
   await submitOrder(order12, flow(new FakeClient(), { load: loader({}, { "2026-10-12": { 827: 1 } }), budget }).opts);
   const c = new FakeClient({ page: [{ date: "2026-10-20", name: "Linsen", kind: "Neubestellung" }] });
   const r = await submitOrder(order12, flow(c, { choice: "discard", load: loader({}, { "2026-10-12": { 827: 1 } }), budget }).opts);
-  eq(units, [orderCost(order12), orderCost(order12) + 4]);
+  // Leerer Warenkorb: Hinzufügen 2, Vorab-Laden 2, fest 10; Verwerfen 4 dazu, danach kein Leeren.
+  eq(units, [14, 18]);
   eq([r.kind, r.othersInCart, c.calls.includes("discard")], ["done", 0, true], r.reason);
+});
+
+await test("Budget: vier Wochen passen in die Stunde, Leeren nur wo nötig", async () => {
+  // 20 Schultage ab Mo 05.10.2026 (KW 41–44), alles Neubestellungen.
+  const mondays = ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"];
+  const dates = mondays.flatMap((m) => [0, 1, 2, 3, 4].map((i) => new Date(Date.parse(m) + i * 864e5).toISOString().slice(0, 10)));
+  const target = line("2026-10-12", "827");
+  const four = dates.map((date) => ({ date, current: null, target: new MenuEntry({ ...target, date }) }));
+  const empty = { total: 0, others: [] };
+  eq(orderCost(four, { cart: empty, dayView: true }), 90, "Tagesansicht");
+  eq(orderCost(four, { cart: empty, dayView: false }), 58, "Wochenplan");
+  eq(orderCost(four, { cart: { total: 1, others: [] }, dayView: true }), 170, "fremder Inhalt: jeder Tag wird geleert");
+  eq(orderCost(four, { cart: { total: 1, others: [{}] }, othersInCart: 1, dayView: true }), 90, "fremder Eintrag geht mit ab: kein Leeren");
+  const days = [new DayStatus(dates[0], OrderState.IN_CART, [new MenuEntry({ ...target, date: dates[0], quantityInCart: "1" })])];
+  eq(orderCost(four, { cart: { total: 1, others: [] }, othersInCart: 0, days, dayView: true }), 170, "eigener Eintrag zählt im Warenkorb mit");
+  eq(orderCost(four, { discard: true, days, dayView: true }), 94, "nach Verwerfen kein Leeren");
+  // Umbestellung: Nachladen per Tagesansicht statt Historie.
+  const sw = [{ date: "2026-10-12", current: line("2026-10-12", "828"), target: line("2026-10-12", "827") }];
+  eq(orderCost(sw, { cart: empty }), 16, "Umbestellung lädt nach");
 });
 
 await test("Budget erschöpft: abgebrochen, bevor der Warenkorb angefasst wird", async () => {
