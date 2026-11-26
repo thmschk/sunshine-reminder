@@ -5,7 +5,7 @@
      Fälle nacheinander je in einem Rahmen (eine Seite teilt IndexedDB, deshalb nicht gleichzeitig). -->
 <link rel="stylesheet" href="../style.css">
 <body><pre id="out">läuft</pre>
-<header><h1>t</h1><a id="btn-web" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
+<header><h1>t</h1><a id="btn-web" hidden></a><a id="btn-stats" hidden></a><button id="btn-reload" hidden></button><button id="btn-add" hidden></button><button id="btn-settings" hidden></button></header>
 <main id="app"></main><footer id="footer" hidden></footer>
 <script type="module">
 const MODES = ["sdui", "retry", "save", "remove", "weekdays", "sduiback", "orderback", "orderweeks", "orderbudget", "ordercart", "orderdone", "orderlost", "cartsend", "cartdiscard", "a11y", "pushkey", "pushkeysame", "pushheal", "pushperm", "pushrace", "errtext", "uifix", "groups", "pushoffer", "pushofferno", "footmore", "footmoreop"];
@@ -450,7 +450,7 @@ if (!mode) {
     // Die Kopfzeile hier ist nur Attrappe: die echte steht in index.html (fetch ist umgebogen, daher XHR).
     const index = await new Promise((r) => { const x = new XMLHttpRequest(); x.onload = () => r(x.responseXML); x.open("GET", "../index.html"); x.responseType = "document"; x.send(); });
     const icons = [...index.querySelectorAll("header .icon")];
-    check(icons.length === 4 && icons.every((e) => e.getAttribute("aria-label")), "Kopfzeilen-Symbole mit aria-label");
+    check(icons.length === 5 && icons.every((e) => e.getAttribute("aria-label")), "Kopfzeilen-Symbole mit aria-label");
     const small = [...document.querySelectorAll("header .icon:not([hidden]), .day-btn, #b-order-now, #b-all")]
       .filter((e) => e.getBoundingClientRect().height < 44);
     check(!small.length, `Tippflächen ≥ 44 px (${small.map((e) => e.id || e.className).join(", ")})`);
@@ -775,6 +775,7 @@ if (!mode) {
     await import("../app.js");
     await until(() => homeLoaded() && $("#b-foot-more"));
     check(/Erinnerung: rx→shown · 2 s · still/.test($("#foot-more").textContent), `Betreiber: ${$("#foot-more").textContent.trim()}`);
+    check($("#btn-stats").hidden === false, "Betreiber: Statistik in der Kopfzeile");
   } else if (mode === "footmore") {
     // Fußzeile: Belege von Erinnerung und Morgenmeldung erst nach „Meldungen ▸“.
     await account();
@@ -786,6 +787,7 @@ if (!mode) {
     await until(() => homeLoaded() && $("#b-foot-more"));
     const more = $("#foot-more");
     check(!/rx/.test(more.textContent), "ohne Betreiber kein Protokoll der Weckrufe");
+    check($("#btn-stats").hidden === true, "ohne Betreiber keine Statistik in der Kopfzeile");
     check(!$("#push-offer"), "mit Erinnerung kein Angebot");
     check(more?.hidden === true && /Meldungen ▸/.test($("#b-foot-more").textContent), "zugeklappt: nur „Meldungen ▸“");
     $("#b-foot-more").click();

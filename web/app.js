@@ -81,6 +81,7 @@ const $reload = document.getElementById("btn-reload");
 const $settings = document.getElementById("btn-settings");
 const $web = document.getElementById("btn-web");
 const $add = document.getElementById("btn-add");
+const $stats = document.getElementById("btn-stats");
 const $footer = document.getElementById("footer");
 
 const $header = document.querySelector("header");
@@ -89,6 +90,8 @@ const $header = document.querySelector("header");
 function chrome(visible) {
   $header.hidden = !visible;
   $reload.hidden = $settings.hidden = $web.hidden = $add.hidden = !visible;
+  // Statistik nur auf dem Betreiber-Gerät; /stats selbst ist öffentlich.
+  $stats.hidden = !visible || store.operator !== true;
   if (!visible) $footer.hidden = true;
 }
 
