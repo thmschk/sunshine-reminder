@@ -7,7 +7,6 @@ Sie läuft im Browser auf iPhone und Android; für die Erinnerung weckt ein
 kleiner Server das Gerät, ohne die IBS5-Zugangsdaten zu kennen.
 
 **Adresse: <https://sunshine-order.de>** · [Datenschutz](https://sunshine-order.de/datenschutz.html)
-(die frühere Adresse <https://sunshine.thomschke.info> läuft weiter)
 
 > **Die Android-App ist eingestellt.** Es gab bis Oktober 2026 eine eigene
 > Android-App. Sie wird nicht mehr weiterentwickelt, ihr Code liegt in der

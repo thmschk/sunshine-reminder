@@ -181,7 +181,7 @@ alarm_limit = RateLimit(1, 3600)  # Betreiber-Alarme außerhalb der Selbstprüfu
 SDUI_LOGIN_KEYS = {"identifier", "password", "slink"}
 SLINK_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 # Seiten, deren Browser den Sdui-Relay benutzen dürfen.
-ALLOWED_ORIGINS = ("https://sunshine-order.de", "https://sunshine.thomschke.info")
+ALLOWED_ORIGINS = ("https://sunshine-order.de",)
 
 
 def net_key(ip: str, v4_prefix: int = 24) -> str:

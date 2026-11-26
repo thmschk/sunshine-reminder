@@ -6,7 +6,7 @@ import {
   AlarmText, DEFAULT_CHECK, De, clampDaysAhead, IbsAuthError, IbsClient, OrderState, addDays, collect, evaluate, lastCall, nextWeekday,
   targetDates, todayBerlin,
 } from "./ibs.js";
-import { KeyUnreadableError, kvDel, kvGet, kvSet, kvUpdate, secretGet, secretSet } from "./idb.js";
+import { KeyUnreadableError, kvGet, kvSet, kvUpdate, secretGet, secretSet } from "./idb.js";
 import { b64ToBytes } from "./base64.js";
 import { dayStore, loadAccounts, renameAccount } from "./accounts.js";
 import * as Sdui from "./sdui.js";
@@ -19,7 +19,7 @@ import { PUSH_KINDS, renewPush } from "./push.js";
 
 export { renewPush };
 
-const VERSION = "v86";
+const VERSION = "v87";
 /** Eine Pause (guard.js), die schon so lange läuft, hält einen Weckruf nicht mehr auf: sonst fiele die Erinnerung aus. */
 const PUSH_PAUSE_MAX_AGE_MS = 20 * 60 * 1000;
 const PUSH_MAX_DAYS = 5;
@@ -86,9 +86,6 @@ self.addEventListener("push", (ev) => {
 });
 
 const CHECK_TAG = "hs-check";
-/** Alte Adresse vor dem Umzug: dort weckt nichts mehr, das Abo meldet sich ab (siehe movedNotice). */
-const OLD_HOST = "sunshine.thomschke.info";
-const MOVED_TO = "https://sunshine-order.de/";
 const TODAY_TAG = "hs-today";
 const INFO_TAG = "hs-info";
 
@@ -141,18 +138,15 @@ export const newBell = () => ({ rang: false });
 /**
  * Ein Weckruf, data wie vom Server ({t, m?, sent?}). deps ersetzen in Tests die Prüfungen:
  * check(isTest, signal, log, bell), today(signal, log, bell), subjects(isTest, bell), ms (Frist),
- * host (Rechnername statt self.location.hostname), fetch (für die Abmeldung, movedNotice).
  * Reihenfolge: Platzhalter mit dem Tag des Ergebnisses, dann die Prüfung, deren Meldung
  * den Platzhalter ersetzt — laut, wenn sie etwas zu tun gibt und noch nichts geklingelt hat.
  */
 export async function handlePush(data, deps = {}) {
   const { check = checkAndNotify, today = todayAndNotify, subjects = subjectReminder, ms = PUSH_DEADLINE_MS } = deps;
-  const host = deps.host ?? self.location?.hostname;
   const kind = data && typeof data.t === "string" ? data.t : "check";
   const log = pushLogger(kind);
   log("rx", null, { on: online(), sent: Number.isFinite(data?.sent) ? data.sent : undefined });
   try {
-    if (host === OLD_HOST) return await movedNotice(log, deps.fetch ?? fetch);
     if (kind === "alarm") return await alarmNotice(data?.m, log);
     if (!PUSH_KINDS.includes(kind)) {
       // Neuere Art vom Server, die dieser Service Worker nicht kennt: keine Anfrage an IBS5.
@@ -202,27 +196,6 @@ async function shownOrFail(log, show) {
   try {
     const n = await show();
     log("shown", n.title + (n.silent ? " (still)" : ""));
-  } catch (e) {
-    log.fail(e);
-  }
-}
-
-/**
- * Weckruf an die alte Adresse (OLD_HOST): keine Prüfung mehr, sondern der Hinweis auf
- * die neue (Antippen öffnet sie), dann das Abo beim Server und im Browser abmelden wie
- * pushDisable (push-client.js). Ein zweites Abo auf demselben IBS5-Konto weckte doppelt.
- */
-async function movedNotice(log, f) {
-  await shownOrFail(log, () => notify("sunshine ist umgezogen", "Bitte sunshine-order.de öffnen.", { url: MOVED_TO, tag: INFO_TAG }));
-  try {
-    const p = await secretGet("push").catch(() => null);
-    await kvDel("push");
-    await kvDel("operator");
-    if (p?.id) {
-      await f(`/api/subscriptions/${p.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${p.secret}` } })
-        .then((r) => log(r.ok ? "unsub" : "fail", r.ok ? null : `Abmelden: HTTP ${r.status}`));
-    }
-    await (await self.registration.pushManager?.getSubscription())?.unsubscribe();
   } catch (e) {
     log.fail(e);
   }

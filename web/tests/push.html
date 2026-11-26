@@ -210,31 +210,6 @@ await test("Unbekannte Art: neutrale Meldung, keine Prüfung; ohne Art: Erinneru
   }
 });
 
-{
-  const unsubscribed = [];
-  self.registration.pushManager = { getSubscription: async () => ({ unsubscribe: async () => { unsubscribed.push(1); return true; } }) };
-  const fetched = [];
-  const fakeFetch = async (url, o) => { fetched.push([o?.method, url, o?.headers?.Authorization]); return new Response("{}"); };
-  await test("Alte Adresse: Hinweis auf sunshine-order.de, Abo beim Server und im Browser abgemeldet, keine Prüfung", async () => {
-    await reset(); calls.length = 0; unsubscribed.length = 0; fetched.length = 0;
-    await secretSet("push", { id: "abc", secret: "s3", time: "18:00" });
-    await kvSet("operator", true);
-    await handlePush({ t: "check" }, deps({ host: "sunshine.thomschke.info", fetch: fakeFetch }));
-    eq([shown.length, shown[0].title, shown[0].data.url, shown[0].tag], [1, "sunshine ist umgezogen", "https://sunshine-order.de/", "hs-info"]);
-    eq([calls, fetched, unsubscribed.length], [[], [["DELETE", "/api/subscriptions/abc", "Bearer s3"]], 1]);
-    eq([await secretGet("push"), await kvGet("operator")], [undefined, undefined], "Abo und Betreiber-Kennzeichen gelöscht");
-    eq(await steps(), ["rx", "shown", "unsub"]);
-  });
-  await test("Alte Adresse: nur bei genau diesem Rechnernamen", async () => {
-    for (const host of ["sunshine-order.de", "localhost", "127.0.0.1", "x.sunshine.thomschke.info", "sunshine.thomschke.info.evil"]) {
-      await reset(); calls.length = 0; unsubscribed.length = 0; fetched.length = 0;
-      await handlePush({ t: "check" }, deps({ host, fetch: fakeFetch }));
-      eq([shown[0]?.title, calls[0], fetched, unsubscribed.length], ["Essen bestellt?", ["check", false], [], 0], host);
-    }
-  });
-  delete self.registration.pushManager;
-}
-
 await test("Jede Art zeigt eine Meldung", async () => {
   for (const t of [...PUSH_KINDS, "irgendwas"]) {
     await reset();

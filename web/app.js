@@ -36,9 +36,6 @@ const DAY_LIST_LENGTH = 5;
 // 17:00 statt Mittag: verteilt die Abfragen weg von der Zeit, zu der die meisten ohnehin nachsehen.
 const DEFAULT_PUSH_TIME = "17:00";
 const DEFAULT_MORNING_TIME = "07:00";
-/** Frühere Adresse der App: dort keine Erinnerung mehr, nur noch der Hinweis auf den Umzug. */
-const MOVED_TO = "https://sunshine-order.de/";
-const movedHere = location.hostname === "sunshine.thomschke.info";
 // Zugangsdaten (verschlüsselt, siehe idb.js) und Einstellungen liegen nur in diesem Browser, in
 // IndexedDB, damit auch der Service Worker sie beim Weckruf lesen kann. Beim Start einmal in den
 // Speicher geladen; vorher genutztes localStorage wird übernommen.
@@ -929,13 +926,13 @@ function pushStale() {
 }
 
 /**
- * Angemeldet, aber ohne Erinnerung (z. B. in Safari angemeldet, „Nicht erlauben“, nach dem Umzug):
+ * Angemeldet, aber ohne Erinnerung (z. B. in Safari angemeldet, „Nicht erlauben“):
  * einmal anbieten, bis eingeschaltet oder „Nein danke“. Nur wo Push geht, auf dem iPhone also nur
- * in der installierten App; nicht unter der alten Adresse, die abgemeldet werden soll.
+ * in der installierten App.
  */
 async function pushOfferDue() {
   if (store.push || !pushSupported || (isIos && !standalone) || !loadCreds()) return false;
-  if (Notification.permission === "denied" || movedHere) return false;
+  if (Notification.permission === "denied") return false;
   return !(await kvGet("pushOfferDismissed").catch(() => false));
 }
 
@@ -2087,7 +2084,6 @@ function pushBoxHtml(message = "") {
       ? "Auf dem iPhone nur, wenn die Seite über Teilen → „Zum Home-Bildschirm“ installiert ist und von dort geöffnet wird."
       : "Dieser Browser kann keine Erinnerungen empfangen." }) + daysAheadRow();
   }
-  if (movedHere) return srow("bell", "Erinnerung", { value: "umgezogen", hint: "Erinnerungen gibt es nur noch unter sunshine-order.de." }) + daysAheadRow();
   const on = !!store.push;
   const time = on ? store.push.time : DEFAULT_PUSH_TIME;
   // Uhrzeit und Tage gehören zur Erinnerung: bei ausgeschalteter gedimmt und gesperrt.
@@ -2247,7 +2243,6 @@ initPushClient({ store, swReady, blockedText });
 
 /** Erinnerung einschalten (push-client.js), wenn dieses Gerät dafür taugt. */
 async function pushEnable(time) {
-  if (movedHere) throw new Error("Erinnerungen gibt es nur noch unter sunshine-order.de.");
   if (!loadCreds()) throw new Error("Für die Erinnerung müssen die Zugangsdaten auf diesem Gerät gespeichert sein.");
   return enablePush(time);
 }
@@ -2322,22 +2317,6 @@ navigator.serviceWorker?.addEventListener("message", (ev) => {
 
 // Antippen der Erinnerung öffnet ./?order=<Tag>[&k=<Kundennummer>] → direkt in die Bestellansicht.
 await loadStore();
-// Umzug: unter der alten Adresse ohne Konto gleich weiter, mit Konto einmal je Gerät das Popup.
-// Anmeldung und Erinnerung hängen an der Adresse, deshalb abmelden statt umleiten. Die Erinnerung
-// meldet sich hier bei jedem Öffnen ab: ein zweites Abo auf demselben IBS5-Konto weckte doppelt.
-// Vor dem Weiterleiten auf die Abmeldung warten (höchstens 3 s), sonst bricht die Navigation sie ab.
-const unsubscribed = movedHere && Promise.race([pushDisable().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
-if (movedHere && !store.accounts.length) unsubscribed.then(() => location.replace(MOVED_TO));
-else if (movedHere && !(await kvGet("movedShown").catch(() => false))) {
-  kvSet("movedShown", true).catch(() => {});
-  askDialog("Die App ist umgezogen!", `
-    <p>Erinnerungen kommen nur noch unter der neuen Adresse, hier sind sie abgemeldet.</p>
-    <p>Bitte hier die Zugangsdaten löschen und die App vom Startbildschirm entfernen.</p>
-    <p>Dann unter <b>sunshine-order.de</b> loslegen: auf dem iPhone zuerst über <b>Teilen → Zum Home-Bildschirm</b>
-      installieren und dort anmelden. Die Erinnerung ist beim Anmelden angehakt, bitte „Erlauben“ tippen.</p>`,
-  "Abmelden und alles löschen", { danger: true, cancelLabel: "Später" })
-    .then((ok) => ok && logoutAll(MOVED_TO));
-}
 const orderDate = new URLSearchParams(location.search).get("order");
 const orderKid = new URLSearchParams(location.search).get("k");
 if (orderKid && store.accounts.some((a) => a.customerNo === orderKid)) selectAccount(orderKid);

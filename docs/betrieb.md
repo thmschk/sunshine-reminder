@@ -11,7 +11,7 @@ steht im README unter „Architektur“.
         │                                 └────────────────────────▶ /srv/sunshine  Web-Dateien + Push-Dienst (Docker)
         └──────── server/deploy.sh (ssh: Commit von main) ─────────▶ (lädt und spielt auf)
 
-  Browser/Handy ──HTTPS──▶ sunshine-order.de / sunshine.thomschke.info ──▶ Caddy
+  Browser/Handy ──HTTPS──▶ sunshine-order.de ──▶ Caddy
        │                                                                      ├─ statische Seite  /srv/sunshine/web
        │                                                                      └─ /api/*  ──▶  Push-Dienst 127.0.0.1:18080
        └──direkt──▶ IBS5 (Speiseplan, Bestellen)
@@ -23,7 +23,7 @@ steht im README unter „Architektur“.
 |---|---|
 | Server | Hetzner Cloud CPX12 „privat“, eigenes privates Hetzner-Projekt, Debian 13 |
 | Firewall | Hetzner-Firewall: eingehend nur TCP 22, 80, 443 und ICMP |
-| Domain | `sunshine-order.de` (Hauptadresse, `www.` leitet dorthin um) und `sunshine.thomschke.info` (frühere Adresse, bei Variomedia), beide gleichwertig in Betrieb, je A- und AAAA-Eintrag auf den Server |
+| Domain | `sunshine-order.de` (Hauptadresse, `www.` leitet dorthin um), je A- und AAAA-Eintrag auf den Server. Die frühere Adresse `sunshine.thomschke.info` ist seit 26.11.2026 abgeschaltet |
 | Zugang | `ssh privat` (Eintrag in `~/.ssh/config`), nur per Schlüssel, Passwort-Login aus |
 | Updates | `unattended-upgrades` für Debian und Docker CE |
 
@@ -270,7 +270,7 @@ Server liegt und muss bei einem Neuaufbau von Hand (oder aus dem Hetzner-Backup)
 - [ ] Debian 13, Pakete `docker-ce` mit Compose-Plugin, `sqlite3`, `rsync`, `curl`, `python3`,
       `unattended-upgrades`; Docker-CE-Quelle in den unattended-upgrades eintragen
 - [ ] SSH nur per Schlüssel, Hetzner-Firewall (eingehend TCP 22, 80, 443, ICMP), Hetzner-Backup einschalten
-- [ ] DNS: A und AAAA von `sunshine-order.de`, `www.sunshine-order.de` und `sunshine.thomschke.info` (Variomedia) auf die neue Adresse
+- [ ] DNS: A und AAAA von `sunshine-order.de` und `www.sunshine-order.de` auf die neue Adresse
 - [ ] `/srv/caddy/compose.yaml` (`caddy:2`, `network_mode: host`, `restart: unless-stopped`, Volume
       genau als Zeile `      - ./sites:/etc/caddy/sites:ro`; den Mount von `/srv/sunshine/web` ergänzt
       `deploy.sh` dahinter) und `/srv/caddy/Caddyfile` mit `log default { exclude http.log.error }`, dem

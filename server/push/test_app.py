@@ -837,7 +837,7 @@ class SduiRelay(HttpServer):
     def test_fremde_seite_403(self):
         with self.sdui_antwortet(401) as op:
             for h in ({"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"}, {"Origin": "https://evil.example"},
-                      {"Origin": "null"}):
+                      {"Origin": "https://sunshine.thomschke.info"}, {"Origin": "null"}):
                 with self.subTest(h=h):
                     self.assertEqual(self.login(h)[0], 403)
                     self.assertEqual(self.api("GET", "/api/sdui/users/self", None, h)[0], 403)
@@ -846,7 +846,6 @@ class SduiRelay(HttpServer):
     def test_eigene_seite_und_ohne_header(self):
         with self.sdui_antwortet(401):
             self.assertEqual(self.login({"Sec-Fetch-Site": "same-origin", "Origin": "https://sunshine-order.de"})[0], 401)
-            self.assertEqual(self.login({"Origin": "https://sunshine.thomschke.info"})[0], 401)
             self.assertEqual(self.login()[0], 401)
 
     def test_login_nur_als_json(self):
